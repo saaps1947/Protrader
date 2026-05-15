@@ -581,8 +581,8 @@ var SD = {
     {sym:"FINNIFTY", name:"Fin Nifty",  px:0,chg:0,pct:0,h:0,l:0,o:0,atm:26500,pcr:0,mp:0,iv:0,exp:""}
   ],
   com:[
-    {sym:"CRUDEOIL",name:"Crude Oil",px:0,chg:0,pct:0,h:0,l:0,o:0},
-    {sym:"GOLD",    name:"Gold MCX", px:0,chg:0,pct:0,h:0,l:0,o:0}
+    {sym:"CRUDEOIL",name:"Crude Oil MCX",px:0,chg:0,pct:0,h:0,l:0,o:0,atm:0,step:50,optEx:"MCX",note:"MCX Options (₹/bbl)"},
+    {sym:"GOLD",    name:"Gold MCX",     px:0,chg:0,pct:0,h:0,l:0,o:0,atm:0,step:100,optEx:"MCX",note:"MCX Options (₹/10g)"}
   ],
   stk:[
     {sym:"RELIANCE",name:"Reliance",  px:0,chg:0,pct:0,h:0,l:0,o:0,atm:1280,pcr:0,mp:0,iv:0,exp:""},
@@ -653,15 +653,31 @@ function fetchFromServer(){
         sc.iv=sd.oi.iv||0;sc.cW=sd.oi.ce_wall||0;sc.pW=sd.oi.pe_wall||0;
       }
     });
-    // Update ATM based on current price
-    SD.idx.forEach(function(s){
-      if(s.px>0){var step=s.px>10000?100:50;s.atm=Math.round(s.px/step)*step;}
+    // Update ATM for all instruments based on current price
+    allS().forEach(function(s){
+      if(s.px>0){
+        var step=s.step||(s.px>10000?100:s.px>1000?50:s.px>100?10:5);
+        s.atm=Math.round(s.px/step)*step;
+        s.step=step;
+      }
     });
     updateHero();updTicker();updateOI(CS);showTech(CS);
     var t=istTime();
     setStatus("live","Server · "+t);
     var isMCX=CS.sym==="CRUDEOIL"||CS.sym==="GOLD";
-    document.getElementById("dataSrc").textContent="PRO Trader Server · "+t+(isMCX?" · MCX prices in USD (×84 for ₹)":"");
+    document.getElementById("dataSrc").textContent="PRO Trader Server · "+t+(isMCX?" · MCX approx ₹ (USD×84)":"");
+    // Convert USD commodity prices to approximate INR for MCX
+    var usdInr=84; // approximate
+    var crude=SD.com.filter(function(s){return s.sym==="CRUDEOIL";})[0];
+    if(crude&&crude.px>0&&crude.px<500){// Yahoo gives USD ~60-100
+      crude.px=Math.round(crude.px*usdInr);crude.chg=Math.round(crude.chg*usdInr);
+      var cStep=50;crude.atm=Math.round(crude.px/cStep)*cStep;crude.step=cStep;
+    }
+    var gold=SD.com.filter(function(s){return s.sym==="GOLD";})[0];
+    if(gold&&gold.px>0&&gold.px<5000){// Yahoo gives USD/oz ~2000-3000
+      gold.px=Math.round(gold.px*usdInr/31.1*10);gold.chg=Math.round(gold.chg*usdInr/31.1*10);
+      var gStep=100;gold.atm=Math.round(gold.px/gStep)*gStep;gold.step=gStep;
+    }
     // Fetch OI for current instrument
     if(CS.sym in {"NIFTY":1,"BANKNIFTY":1,"FINNIFTY":1}){
       fetchOI(CS.sym);
@@ -787,7 +803,7 @@ function buildTicker(){
   for(var p=0;p<2;p++){all.forEach(function(s){var up=s.chg>=0;h+="<div class='tki'><span class='tki-n'>"+s.sym+"</span><span class='tki-p "+(up?"up":"dn")+"' "+(p===0?"id='tp-"+s.sym+"'":"")+">"+( s.px?s.px.toLocaleString("en-IN"):"–")+"</span><span class='tki-c "+(up?"upb":"dnb")+"'>"+(s.pct?(up?"+":"")+s.pct.toFixed(2)+"%":"–")+"</span></div>";})}
   document.getElementById("tkWrap").innerHTML=h;
 }
-function updTicker(){allS().forEach(function(s){var el=document.getElementById("tp-"+s.sym);if(el){var isMCX=s.sym==="CRUDEOIL"||s.sym==="GOLD";el.textContent=s.px?(isMCX?"$":"")+s.px.toLocaleString("en-IN"):"–";el.className="tki-p "+(s.chg>=0?"up":"dn");}});}
+function updTicker(){allS().forEach(function(s){var el=document.getElementById("tp-"+s.sym);if(el){el.textContent=s.px?s.px.toLocaleString("en-IN"):"–";el.className="tki-p "+(s.chg>=0?"up":"dn");}});}
 
 function updateOI(s){
   var strip=document.getElementById("oiStrip");
@@ -904,13 +920,21 @@ function runScan(manual){
       (tech.length?" ["+tech.join(",")+" ]":"");
   }).join("\n");
   var mkt=isOpen()?"OPEN":"CLOSED";
-  var prompt="Tier-1 options strategist. Date:"+new Date().toDateString()+" Market:"+mkt+" VIX:"+VIX+"\n\n"+lines+
-    "\n\nStrategy mix: OI walls + SMA crossovers + PCR extremes + IV vs VIX.\n"+
-    "Golden Cross = bullish confirmation. Death Cross = bearish confirmation.\n"+
-    "PCR>1.2 + price above SMA20 = strong buy. PCR<0.8 + price below SMA20 = strong sell.\n"+
-    "Near Max Pain + high IV = Iron Condor/theta play.\n"+
-    "Return ONLY JSON array, min confidence 78%, quality over quantity:\n"+
-    '[{"sym":"NIFTY","bias":"BULLISH","trade":"Buy 24500 CE","strategy":"Golden Cross + OI","why":"SMA20 crossed above SMA50 + PCR 1.2 bullish","confidence":85,"entry":"24474","sl":"24300","target1":"24600","target2":"24750","rr":"1:2","urgency":"HIGH","isBTST":false,"btstNote":""}]';
+  var prompt="You are a professional Indian F&O options trader. Date:"+new Date().toDateString()+" Market:"+mkt+" VIX:"+VIX+"\n\n"+
+    "LIVE DATA:\n"+lines+"\n\n"+
+    "SIGNAL FRAMEWORK (use all 3 layers for each signal):\n"+
+    "LAYER 1 OI: PCR>1.4=extreme bearish(reversal bull), PCR<0.6=extreme bullish(reversal bear). "+
+    "PCR 1.1-1.4=bullish, 0.7-0.9=bearish. Change in OI: put writing↑=support=bullish, call writing↑=resistance=bearish. "+
+    "CE wall=resistance, PE wall=support. Price below Max Pain=gravitates up, above=gravitates down.\n"+
+    "LAYER 2 TECHNICALS: Golden Cross(SMA20>SMA50 crossover)=strongest buy. Death Cross=strongest sell. "+
+    "RSI 30-50 with price above SMA20=bullish. RSI 50-70 below SMA20=bearish. "+
+    "RSI<32=oversold bounce. RSI>68=overbought reversal. Breakout=buy CE, Breakdown=buy PE.\n"+
+    "LAYER 3 CONTEXT: IV/VIX>1.3=sell premium(Iron Condor). IV/VIX<0.9=buy options cheap. "+
+    "Near expiry + near Max Pain=theta play. BTST when market closed with strong close.\n"+
+    "RULES: Min 2 confirmations across layers. Buy options only(CE/PE). ATM or 1 strike OTM. "+
+    "Crude Oil options exist on MCX. Quality>quantity.\n"+
+    "Return ONLY JSON array:\n"+
+    '[{"sym":"NIFTY","bias":"BULLISH","trade":"Buy 24500 CE","strategy":"Death Cross + Call Writing","why":"Layer1:PCR 1.2+Call OI rising | Layer2:Below SMA20+RSI 58 | Layer3:IV cheap","confidence":86,"entry":"23643","sl":"23500","target1":"23800","target2":"24000","rr":"1:2","urgency":"HIGH","isBTST":false,"btstNote":""}]';
   fetch("https://api.anthropic.com/v1/messages",{
     method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,messages:[{role:"user",content:prompt}]})
@@ -932,36 +956,201 @@ function runScan(manual){
 }
 
 function localSigs(){
+  /* ══════════════════════════════════════════════════════════
+     PROFESSIONAL SIGNAL ENGINE
+     Framework: 3-confirmation minimum
+     Layer 1: OI (PCR + Change in OI + CE/PE walls)
+     Layer 2: Technicals (EMA crossover + RSI + SMA position)
+     Layer 3: Context (Max Pain + IV vs VIX + Expiry proximity)
+     Timeframes: 5min candles (intraday) + daily bias
+  ══════════════════════════════════════════════════════════ */
   var out=[];
-  tradeable().forEach(function(s){
-    if(!s.px||s.px===0)return; // skip if no live data yet
-    var pcr=s.pcr||0.9,iv=s.iv||14,px=s.px,atm=s.atm||Math.round(px/100)*100,step=px>10000?100:50,mp=s.mp||px;
-    var boUp=s.breakout,boDn=s.breakdown;
-    var golden=s.crossover==="GOLDEN_CROSS",death=s.crossover==="DEATH_CROSS";
-    // SMA-based signals from real server data
-    var aboveSma20=s.sma20&&px>s.sma20,belowSma20=s.sma20&&px<s.sma20;
-    var aboveSma50=s.sma50&&px>s.sma50,belowSma50=s.sma50&&px<s.sma50;
-    var smaStack=aboveSma20&&aboveSma50; // price above both = strong bull
-    var smaWeakStack=belowSma20&&belowSma50; // price below both = strong bear
-    var bull=(pcr>1.05&&s.pct>0.1)||(smaStack&&s.pct>0),bear=(pcr<0.95&&s.pct<-0.1)||(smaWeakStack&&s.pct<0);
-    var rsiOB=s.rsi&&s.rsi>68,rsiOS=s.rsi&&s.rsi<32;
-    var btst=s.pct>0.8&&pcr>0.9&&!isOpen();
+  var mktClosed=!isOpen();
+
+  allS().forEach(function(s){
+    if(!s.px||s.px===0)return;
+
+    var px=s.px, atm=s.atm||Math.round(px/(s.step||100))*(s.step||100);
+    var step=s.step||(px>10000?100:px>1000?50:px>100?10:5);
+
+    // ── LAYER 1: OI Data ──
+    var pcr=s.pcr||0;
+    var ceOI=s.cOI||0, peOI=s.pOI||0;
+    var ceChg=s.cC||0, peChg=s.pC||0;
+    var ceWall=s.cW||0, peWall=s.pW||0;
+    var mp=s.mp||0;
+    var iv=s.iv||0;
+
+    // OI interpretation
+    // Long buildup: OI rising + price rising = bulls adding = bullish
+    // Short covering: OI falling + price rising = bears exiting = bullish
+    // Short buildup: OI rising + price falling = bears adding = bearish
+    var putWriting=peChg>0&&peChg>ceChg;   // puts being written = support = bullish
+    var callWriting=ceChg>0&&ceChg>peChg;  // calls being written = resistance = bearish
+    var pcrExtremeBull=pcr>0&&pcr<0.7;     // extreme low PCR = too many calls = reversal to bull
+    var pcrExtremeBear=pcr>1.4;            // extreme high PCR = too many puts = reversal to bear
+    var pcrBull=pcr>0&&pcr>=1.1&&pcr<=1.4; // normal bullish PCR
+    var pcrBear=pcr>0&&pcr>=0.7&&pcr<0.9;  // normal bearish PCR
+
+    // Max Pain analysis
+    var mpDist=mp>0?((px-mp)/mp*100):0; // +ve = above MP, -ve = below MP
+    var aboveMp=mpDist>0.5;   // price above max pain = pull down expected
+    var belowMp=mpDist<-0.5;  // price below max pain = pull up expected
+
+    // CE/PE wall proximity
+    var nearCeWall=ceWall>0&&Math.abs(px-ceWall)/px<0.008; // within 0.8% of CE wall
+    var nearPeWall=peWall>0&&Math.abs(px-peWall)/px<0.008;
+
+    // ── LAYER 2: Technicals ──
+    var sma20=s.sma20||0, sma50=s.sma50||0, rsi=s.rsi||50;
+    var aboveSma20=sma20>0&&px>sma20;
+    var aboveSma50=sma50>0&&px>sma50;
+    var golden=s.crossover==="GOLDEN_CROSS";
+    var death=s.crossover==="DEATH_CROSS";
+    var trendBull=s.trend==="BULLISH";  // SMA20>SMA50
+    var trendBear=s.trend==="BEARISH";  // SMA20<SMA50
+    var rsiBull=rsi>0&&rsi>=35&&rsi<=55&&aboveSma20; // RSI in bullish zone
+    var rsiBear=rsi>0&&rsi>=45&&rsi<=65&&!aboveSma20; // RSI in bearish zone
+    var rsiOS=rsi>0&&rsi<32;  // oversold
+    var rsiOB=rsi>0&&rsi>68;  // overbought
+    var breakout=s.breakout||false;
+    var breakdown=s.breakdown||false;
+
+    // ── LAYER 3: IV Context ──
+    var ivVsVix=iv>0&&VIX>0?iv/VIX:1;
+    var ivHigh=ivVsVix>1.3;   // IV much higher than VIX = expensive, sell premium
+    var ivLow=ivVsVix<0.9;    // IV lower than VIX = cheap, buy options
+    var ivNormal=!ivHigh&&!ivLow;
+
+    // ── SCORE ENGINE — count confirmations ──
+    // Each confirmation adds points. Need min 2 to generate signal.
+
+    var bullScore=0, bearScore=0, neutralScore=0;
+    var bullReasons=[], bearReasons=[], neutReasons=[];
+
+    // OI confirmations
+    if(putWriting){bullScore+=2;bullReasons.push("Put writing ↑ ("+((peChg/1e6).toFixed(1))+"M new puts = support)");}
+    if(callWriting){bearScore+=2;bearReasons.push("Call writing ↑ ("+((ceChg/1e6).toFixed(1))+"M new calls = resistance)");}
+    if(pcrBull){bullScore+=1;bullReasons.push("PCR "+pcr+" bullish");}
+    if(pcrBear){bearScore+=1;bearReasons.push("PCR "+pcr+" bearish");}
+    if(pcrExtremeBull&&s.pct>0){bullScore+=3;bullReasons.push("PCR "+pcr+" extreme low → reversal up expected");}
+    if(pcrExtremeBear&&s.pct<0){bearScore+=3;bearReasons.push("PCR "+pcr+" extreme high → reversal down expected");}
+    if(belowMp){bullScore+=1;bullReasons.push("Below Max Pain ₹"+mp+" → gravitates up");}
+    if(aboveMp){bearScore+=1;bearReasons.push("Above Max Pain ₹"+mp+" → gravitates down");}
+    if(nearPeWall){bullScore+=2;bullReasons.push("At PE wall ₹"+peWall+" = strong support");}
+    if(nearCeWall){bearScore+=2;bearReasons.push("At CE wall ₹"+ceWall+" = strong resistance");}
+
+    // Technical confirmations
+    if(golden){bullScore+=4;bullReasons.push("🔥 Golden Cross (SMA20 crossed above SMA50)");}
+    if(death){bearScore+=4;bearReasons.push("🔥 Death Cross (SMA20 crossed below SMA50)");}
+    if(breakout&&aboveSma20){bullScore+=3;bullReasons.push("Day high breakout + above SMA20");}
+    if(breakdown&&!aboveSma20){bearScore+=3;bearReasons.push("Day low breakdown + below SMA20");}
+    if(trendBull&&aboveSma50){bullScore+=1;bullReasons.push("SMA trend bullish, price above SMA50 "+sma50);}
+    if(trendBear&&!aboveSma50){bearScore+=1;bearReasons.push("SMA trend bearish, price below SMA50 "+sma50);}
+    if(rsiOS&&aboveSma20){bullScore+=2;bullReasons.push("RSI "+rsi+" oversold + holding above SMA20");}
+    if(rsiOB&&!aboveSma20){bearScore+=2;bearReasons.push("RSI "+rsi+" overbought + below SMA20");}
+    if(rsiBull){bullScore+=1;bullReasons.push("RSI "+rsi+" in bullish momentum zone");}
+    if(rsiBear){bearScore+=1;bearReasons.push("RSI "+rsi+" in bearish momentum zone");}
+    if(aboveSma20&&aboveSma50){bullScore+=1;bullReasons.push("Price above both SMA20("+sma20+") & SMA50("+sma50+")");}
+    if(!aboveSma20&&!aboveSma50){bearScore+=1;bearReasons.push("Price below both SMA20("+sma20+") & SMA50("+sma50+")");}
+
+    // IV context
+    if(ivHigh){neutralScore+=3;neutReasons.push("IV("+iv+"%) >> VIX("+VIX+") — sell premium");}
+    if(ivLow&&bullScore>bearScore){bullScore+=1;bullReasons.push("IV cheap vs VIX — good to buy CE");}
+    if(ivLow&&bearScore>bullScore){bearScore+=1;bearReasons.push("IV cheap vs VIX — good to buy PE");}
+
+    // BTST bonus when closed
+    if(mktClosed&&s.pct>0.6){bullScore+=1;bullReasons.push("Strong close +"+s.pct.toFixed(1)+"% — BTST potential");}
+    if(mktClosed&&s.pct<-0.6){bearScore+=1;bearReasons.push("Weak close "+s.pct.toFixed(1)+"% — gap-down risk");}
+
+    // ── GENERATE SIGNAL ──
     var sig=null;
-    // Priority: crossover signals (highest quality)
-    if(golden)sig={sym:s.sym,bias:"BULLISH",trade:"Buy "+(atm+step)+" CE",strategy:"Golden Cross",why:"SMA20 crossed above SMA50 — trend change confirmed. Strongest buy signal.",confidence:86,entry:""+px,sl:""+(px-Math.round(px*.005)),target1:""+(atm+step*2),target2:""+(atm+step*3),rr:"1:2",urgency:"HIGH",isBTST:false,btstNote:""};
-    else if(death)sig={sym:s.sym,bias:"BEARISH",trade:"Buy "+(atm-step)+" PE",strategy:"Death Cross",why:"SMA20 crossed below SMA50 — trend reversal confirmed. Strong sell signal.",confidence:86,entry:""+px,sl:""+(px+Math.round(px*.005)),target1:""+(atm-step*2),target2:""+(atm-step*3),rr:"1:2",urgency:"HIGH",isBTST:false,btstNote:""};
-    else if(boUp&&bull)sig={sym:s.sym,bias:"BULLISH",trade:"Buy "+atm+" CE",strategy:"Breakout + PCR",why:"Day high breakout with PCR "+pcr+" bullish. Dual confirmation.",confidence:83,entry:""+px,sl:""+(px-Math.round(px*.004)),target1:""+(atm+step),target2:""+(atm+step*2),rr:"1:1.5",urgency:"HIGH",isBTST:false,btstNote:""};
-    else if(boDn&&bear)sig={sym:s.sym,bias:"BEARISH",trade:"Buy "+atm+" PE",strategy:"Breakdown + PCR",why:"Day low breakdown with PCR "+pcr+" bearish. Dual confirmation.",confidence:83,entry:""+px,sl:""+(px+Math.round(px*.004)),target1:""+(atm-step),target2:""+(atm-step*2),rr:"1:1.5",urgency:"HIGH",isBTST:false,btstNote:""};
-    else if(iv>16&&Math.abs(px-mp)<px*.003)sig={sym:s.sym,bias:"NEUTRAL",trade:"Iron Condor ATM",strategy:"Max Pain + IV",why:"IV "+iv+"% elevated + near Max Pain ₹"+mp+". Sell premium both sides.",confidence:82,entry:"ATM±"+step,sl:"Break of OI walls",target1:"50% premium decay",target2:"Full theta",rr:"1:2",urgency:"MEDIUM",isBTST:false,btstNote:""};
-    else if(bull)sig={sym:s.sym,bias:"BULLISH",trade:"Bull Call Spread "+atm+"/"+(atm+step),strategy:"PCR Bullish",why:"PCR "+pcr+" + above SMA20. Buy dips.",confidence:78,entry:""+px,sl:""+(px-Math.round(px*.007)),target1:""+(atm+step*2),target2:""+(atm+step*3),rr:"1:2.5",urgency:"MEDIUM",isBTST:false,btstNote:""};
-    else if(btst)sig={sym:s.sym,bias:"BULLISH",trade:"BTST: Buy "+(atm+step)+" CE",strategy:"BTST",why:"Strong close +"+s.pct.toFixed(1)+"% with bullish OI. Gap-up potential.",confidence:79,entry:""+px,sl:""+(px-Math.round(px*.006)),target1:""+(atm+step*2),target2:""+(atm+step*3),rr:"1:2",urgency:"MEDIUM",isBTST:true,btstNote:"Hold overnight. Exit at open if gap-up. SL at yesterday's close."};
-    // RSI signals (from real server data)
-    if(!sig&&rsiOS&&aboveSma20)sig={sym:s.sym,bias:"BULLISH",trade:"Buy "+atm+" CE",strategy:"RSI Oversold + Above SMA20",why:"RSI "+s.rsi+" oversold + price above SMA20 "+s.sma20+". Reversal setup.",confidence:81,entry:""+px,sl:""+(px-Math.round(px*.005)),target1:""+(atm+step),target2:""+(atm+step*2),rr:"1:2",urgency:"MEDIUM",isBTST:false,btstNote:""};
-    else if(!sig&&rsiOB&&belowSma20)sig={sym:s.sym,bias:"BEARISH",trade:"Buy "+atm+" PE",strategy:"RSI Overbought + Below SMA20",why:"RSI "+s.rsi+" overbought + price below SMA20 "+s.sma20+". Reversal setup.",confidence:81,entry:""+px,sl:""+(px+Math.round(px*.005)),target1:""+(atm-step),target2:""+(atm-step*2),rr:"1:2",urgency:"MEDIUM",isBTST:false,btstNote:""};
+    var totalScore=Math.max(bullScore,bearScore,neutralScore);
+
+    // Need minimum 2 points to generate a signal
+    if(bullScore>=2&&bullScore>bearScore&&bullScore>neutralScore){
+      var conf=Math.min(92,68+bullScore*3);
+      var urg=bullScore>=5?"HIGH":bullScore>=3?"MEDIUM":"LOW";
+      var tradeType=mktClosed?"BTST: Buy "+(atm+step)+" CE":"Buy "+(atm+step)+" CE";
+      var strat=golden?"Golden Cross + OI":breakout?"Breakout + OI Confirm":pcrExtremeBull?"PCR Extreme Reversal":putWriting?"OI Long Buildup":"Multi-factor Bullish";
+      var isBtst=mktClosed&&bullScore>=2;
+      sig={
+        sym:s.sym,bias:"BULLISH",trade:tradeType,strategy:strat,
+        why:bullReasons.slice(0,3).join(" | "),
+        confidence:conf,
+        entry:""+px,
+        sl:""+(px-Math.round(px*0.005)),
+        target1:""+(atm+step*2),
+        target2:""+(atm+step*3),
+        rr:"1:2",urgency:urg,
+        isBTST:isBtst,
+        btstNote:isBtst?"Hold overnight. Exit if gap-up at open ≥0.3%. SL: today's close ₹"+px:"",
+        _score:bullScore,_reasons:bullReasons
+      };
+    } else if(bearScore>=2&&bearScore>bullScore&&bearScore>neutralScore){
+      var conf2=Math.min(92,68+bearScore*3);
+      var urg2=bearScore>=5?"HIGH":bearScore>=3?"MEDIUM":"LOW";
+      var strat2=death?"Death Cross + OI":breakdown?"Breakdown + OI Confirm":pcrExtremeBear?"PCR Extreme Reversal":callWriting?"OI Short Buildup":"Multi-factor Bearish";
+      sig={
+        sym:s.sym,bias:"BEARISH",trade:"Buy "+atm+" PE",strategy:strat2,
+        why:bearReasons.slice(0,3).join(" | "),
+        confidence:conf2,
+        entry:""+px,
+        sl:""+(px+Math.round(px*0.005)),
+        target1:""+(atm-step*2),
+        target2:""+(atm-step*3),
+        rr:"1:2",urgency:urg2,
+        isBTST:false,btstNote:"",
+        _score:bearScore,_reasons:bearReasons
+      };
+    } else if(neutralScore>=3&&ivHigh){
+      var conf3=Math.min(88,68+neutralScore*2);
+      sig={
+        sym:s.sym,bias:"NEUTRAL",trade:"Iron Condor — Sell "+(atm+step)+"CE + "+(atm-step)+"PE",
+        strategy:"IV Elevated — Sell Premium",
+        why:neutReasons.slice(0,2).join(" | ")+(mp?" | Near Max Pain ₹"+mp:""),
+        confidence:conf3,
+        entry:"Net credit received",
+        sl:"Break of CE wall ₹"+ceWall+" or PE wall ₹"+peWall,
+        target1:"50% premium decay",target2:"Full theta",
+        rr:"1:2",urgency:"MEDIUM",
+        isBTST:false,btstNote:"",
+        _score:neutralScore,_reasons:neutReasons
+      };
+    } else if(bullScore>0||bearScore>0){
+      // Insufficient confirmations — show as WATCH signal
+      var dominant=bullScore>=bearScore?"BULLISH":"BEARISH";
+      var dScore=dominant==="BULLISH"?bullScore:bearScore;
+      var dReasons=dominant==="BULLISH"?bullReasons:bearReasons;
+      if(dScore>=1&&(sma20>0||pcr>0)){
+        sig={
+          sym:s.sym,bias:dominant,
+          trade:dominant==="BULLISH"?"Watch: "+atm+" CE on confirmation":"Watch: "+atm+" PE on confirmation",
+          strategy:"Watch — Building Confluence",
+          why:"Partial signals ("+dScore+" of 3 needed). "+dReasons.slice(0,2).join(" | "),
+          confidence:65+dScore,
+          entry:""+px,sl:"Key level",target1:"TBD",target2:"TBD",
+          rr:"Wait for entry",urgency:"LOW",
+          isBTST:false,btstNote:"",
+          _score:dScore,_reasons:dReasons
+        };
+      }
+    }
+
     if(sig)out.push(sig);
+  });
+
+  // Sort: HIGH urgency first, then by score
+  out.sort(function(a,b){
+    if(a.urgency==="HIGH"&&b.urgency!=="HIGH")return -1;
+    if(b.urgency==="HIGH"&&a.urgency!=="HIGH")return 1;
+    if(a.isBTST&&!b.isBTST)return -1;
+    if(b.isBTST&&!a.isBTST)return 1;
+    return (b._score||0)-(a._score||0);
   });
   return out;
 }
+
 
 function processScan(sigs){
   var prev={};allSigs.forEach(function(s){prev[s.sym]=s;});
