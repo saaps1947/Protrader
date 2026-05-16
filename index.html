@@ -593,6 +593,7 @@ function allS(){return SD.idx.concat(SD.com).concat(SD.stk);}
 function tradeable(){return allS().filter(function(s){return s.atm;});}
 
 var CS = SD.idx[0];
+var SMC_DATA = {}; // stores SMC analysis per symbol
 var VIX = 17.5;
 var AT = {active:false,capital:50000,maxTrades:3,conf:82,dir:"both",inst:"AUTO",trades:0,timer:null};
 var allSigs=[],bias="ALL",sfFilt="ALL",scanFilt="all",scanning=false,pendingTrade=null;
@@ -682,6 +683,8 @@ function fetchFromServer(){
     if(CS.sym in {"NIFTY":1,"BANKNIFTY":1,"FINNIFTY":1}){
       fetchOI(CS.sym);
     }
+    // Fetch SMC data for current instrument
+    fetchSMC(CS.sym);
     // Trigger AI scan if no signals yet (first load)
     if(allSigs.length===0){
       setTimeout(function(){try{runScan(false);}catch(e){}},1000);
@@ -720,6 +723,82 @@ function fetchOI(sym){
   }).catch(function(){});
 }
 
+function fetchSMC(sym){
+  if(!SERVER_URL)return;
+  fetch(SERVER_URL+"/smc/"+sym,{signal:AbortSignal.timeout(20000)})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(!d||!d.ok||!d.smc)return;
+    SMC_DATA[sym]=d.smc;
+    var s=allS().filter(function(x){return x.sym===sym;})[0];
+    if(s){
+      s.smc=d.smc;
+      s.fvg=d.smc.fvg||[];
+      s.ob=d.smc.ob||[];
+      s.sweep=d.smc.sweep||[];
+      s.liquidity=d.smc.liquidity||[];
+      s.mktStructure=d.smc.structure||"UNKNOWN";
+    }
+    showSMCStrip(sym);
+  }).catch(function(){});
+}
+
+function showSMCStrip(sym){
+  var s=allS().filter(function(x){return x.sym===sym;})[0];
+  if(!s||!s.smc)return;
+  var smc=s.smc;
+  var strip=document.getElementById("techStrip");
+  if(!strip)return;
+  var pills=strip.innerHTML; // keep existing tech pills
+
+  // Add SMC pills
+  var smcPills="";
+
+  // Market Structure
+  var msCol=smc.structure==="BULLISH"?"var(--g)":smc.structure==="BEARISH"?"var(--r)":"var(--y)";
+  if(smc.structure&&smc.structure!=="UNKNOWN"){
+    smcPills+='<span class="tech-pill" style="background:rgba(255,255,255,.05);color:'+msCol+'">Structure: '+smc.structure+'</span>';
+  }
+
+  // Liquidity Sweeps (highest priority)
+  if(smc.sweep&&smc.sweep.length){
+    smc.sweep.forEach(function(sw){
+      var col=sw.type==="BEAR_SWEEP"?"var(--g)":"var(--r)";
+      var ico=sw.type==="BEAR_SWEEP"?"🐂":"🐻";
+      smcPills+='<span class="tech-pill" style="background:rgba(255,165,0,.12);color:var(--y);border:1px solid rgba(255,165,0,.25)">'+ico+' Liq Sweep ₹'+sw.level+'</span>';
+    });
+  }
+
+  // Active Order Blocks near price
+  if(smc.ob&&smc.ob.length&&s.px){
+    smc.ob.forEach(function(ob){
+      var dist=Math.abs(s.px-ob.mid)/s.px*100;
+      if(dist<1.5){ // within 1.5% of price
+        var col=ob.type==="BULLISH"?"var(--g)":"var(--r)";
+        var ico=ob.type==="BULLISH"?"🟢":"🔴";
+        smcPills+='<span class="tech-pill" style="background:rgba(59,130,246,.1);color:var(--b);border:1px solid rgba(59,130,246,.2)">'+ico+' OB '+ob.type.slice(0,4)+' ₹'+ob.mid+'</span>';
+      }
+    });
+  }
+
+  // Unfilled FVGs near price
+  if(smc.fvg&&smc.fvg.length&&s.px){
+    smc.fvg.slice(-3).forEach(function(fvg){
+      var dist=Math.abs(s.px-fvg.mid)/s.px*100;
+      if(dist<2){ // within 2% of price
+        var col=fvg.type==="BULLISH"?"var(--g)":"var(--r)";
+        smcPills+='<span class="tech-pill" style="background:rgba(139,92,246,.1);color:var(--p);border:1px solid rgba(139,92,246,.2)">FVG '+fvg.type.slice(0,4)+' ₹'+fvg.bottom+'-'+fvg.top+'</span>';
+      }
+    });
+  }
+
+  if(smcPills){
+    strip.style.display="flex";
+    // Add divider then SMC pills
+    strip.innerHTML=pills+'<span class="tech-pill" style="background:none;color:var(--m);font-size:.5rem;padding:2px 4px">|SMC|</span>'+smcPills;
+  }
+}
+
 function startPolling(){
   // Fetch immediately
   fetchFromServer();
@@ -731,6 +810,10 @@ function startPolling(){
   setInterval(function(){
     if(isOpen()&&CS.sym&&SERVER_URL)fetchOI(CS.sym);
   },60000);
+  // SMC updates every 5 minutes (15min candles don't change that fast)
+  setInterval(function(){
+    if(CS.sym&&SERVER_URL)fetchSMC(CS.sym);
+  },300000);
 }
 
 function setStatus(state,msg){
@@ -931,6 +1014,10 @@ function runScan(manual){
     "RSI<32=oversold bounce. RSI>68=overbought reversal. Breakout=buy CE, Breakdown=buy PE.\n"+
     "LAYER 3 CONTEXT: IV/VIX>1.3=sell premium(Iron Condor). IV/VIX<0.9=buy options cheap. "+
     "Near expiry + near Max Pain=theta play. BTST when market closed with strong close.\n"+
+    "LAYER 4 SMC: Fair Value Gap (FVG) = price imbalance zone, acts as magnet. "+
+    "Order Block (OB) = last opposing candle before strong institutional move, high prob reversal zone. "+
+    "Liquidity Sweep = price sweeps equal highs/lows to grab stop orders then reverses — HIGHEST probability. "+
+    "If sweep detected: trade the reversal. FVG + OB confluence = strong entry zone.\n"+
     "RULES: Min 2 confirmations across layers. Buy options only(CE/PE). ATM or 1 strike OTM. "+
     "Crude Oil options exist on MCX. Quality>quantity.\n"+
     "Return ONLY JSON array:\n"+
@@ -1054,7 +1141,61 @@ function localSigs(){
     if(aboveSma20&&aboveSma50){bullScore+=1;bullReasons.push("Price above both SMA20("+sma20+") & SMA50("+sma50+")");}
     if(!aboveSma20&&!aboveSma50){bearScore+=1;bearReasons.push("Price below both SMA20("+sma20+") & SMA50("+sma50+")");}
 
-    // IV context
+    // ── SMC LAYER ──
+    var smc=s.smc||{};
+    var fvgs=smc.fvg||[];
+    var obs=smc.ob||[];
+    var sweeps=smc.sweep||[];
+    var mktStr=smc.structure||"UNKNOWN";
+
+    // Liquidity sweep = HIGH probability reversal setup
+    sweeps.forEach(function(sw){
+      if(sw.type==="BEAR_SWEEP"){
+        // Swept sell-side lows = stop hunt = BULLISH reversal
+        bullScore+=4;
+        bullReasons.push("🐂 Liquidity sweep: bears trapped at ₹"+sw.level+" → reversal up");
+      } else if(sw.type==="BULL_SWEEP"){
+        // Swept buy-side highs = stop hunt = BEARISH reversal
+        bearScore+=4;
+        bearReasons.push("🐻 Liquidity sweep: bulls trapped at ₹"+sw.level+" → reversal down");
+      }
+    });
+
+    // Order Block confluence (near price = high probability)
+    obs.forEach(function(ob){
+      if(!px)return;
+      var dist=Math.abs(px-ob.mid)/px*100;
+      if(dist<1.0){ // within 1% = in the zone
+        if(ob.type==="BULLISH"&&s.pct>=0){
+          bullScore+=3;
+          bullReasons.push("🟢 Bullish OB ₹"+ob.bottom+"-"+ob.top+" (strength: "+ob.strength+"x)");
+        } else if(ob.type==="BEARISH"&&s.pct<=0){
+          bearScore+=3;
+          bearReasons.push("🔴 Bearish OB ₹"+ob.bottom+"-"+ob.top+" (strength: "+ob.strength+"x)");
+        }
+      }
+    });
+
+    // Fair Value Gap — price near unfilled FVG = magnet + entry
+    fvgs.forEach(function(fvg){
+      if(!px||fvg.filled)return;
+      var dist=Math.abs(px-fvg.mid)/px*100;
+      if(dist<1.5){
+        if(fvg.type==="BULLISH"&&px<=fvg.top){
+          bullScore+=2;
+          bullReasons.push("📊 Bullish FVG ₹"+fvg.bottom+"-"+fvg.top+" — price in imbalance zone");
+        } else if(fvg.type==="BEARISH"&&px>=fvg.bottom){
+          bearScore+=2;
+          bearReasons.push("📊 Bearish FVG ₹"+fvg.bottom+"-"+fvg.top+" — price in imbalance zone");
+        }
+      }
+    });
+
+    // Market structure alignment
+    if(mktStr==="BULLISH"){bullScore+=1;bullReasons.push("Market structure: HH+HL (bullish)");}
+    if(mktStr==="BEARISH"){bearScore+=1;bearReasons.push("Market structure: LH+LL (bearish)");}
+
+    // ── IV context
     if(ivHigh){neutralScore+=3;neutReasons.push("IV("+iv+"%) >> VIX("+VIX+") — sell premium");}
     if(ivLow&&bullScore>bearScore){bullScore+=1;bullReasons.push("IV cheap vs VIX — good to buy CE");}
     if(ivLow&&bearScore>bullScore){bearScore+=1;bearReasons.push("IV cheap vs VIX — good to buy PE");}
