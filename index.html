@@ -314,6 +314,9 @@ body{background:var(--bg);color:var(--t);font-family:var(--fh);min-height:100dvh
 .mkt-closed{background:rgba(100,116,139,.1);color:var(--m);font-size:.58rem;font-weight:700;padding:2px 7px;border-radius:5px;}
 @media(min-width:768px){.stats{grid-template-columns:repeat(4,1fr);}.sec{padding: 0 8px 110px;}}
 @media(min-width:1024px){.sec{padding: 0 8px 110px;}.bnav{display:none;}}
+.smc-pill{display:inline-block;padding:2px 8px;border-radius:6px;font-size:.6rem;font-weight:700;margin-right:4px;white-space:nowrap;}
+.smc-div{display:inline-block;padding:2px 6px;font-size:.58rem;color:var(--m);margin-right:2px;}
+#smcStrip::-webkit-scrollbar{display:none}
 </style>
 </head>
 <body>
@@ -529,6 +532,9 @@ body{background:var(--bg);color:var(--t);font-family:var(--fh);min-height:100dvh
   <div class="stat sr"><div class="sl">VIX</div><div class="sv" id="sVix">24.74</div><div class="ss">India VIX</div></div>
 </div>
 
+<!-- SMC / TECH STRIP -->
+<div id="smcStrip" style="display:none;overflow-x:auto;white-space:nowrap;padding:5px 10px 6px;background:var(--card);border-top:1px solid var(--border);border-bottom:1px solid var(--border);scrollbar-width:none;-ms-overflow-style:none;"></div>
+
 <!-- BIAS FILTER -->
 <div class="bias-strip">
   <button class="bias-btn on" id="bias-ALL" onclick="setBias(this,'ALL')"><span class="bias-arrow">◉</span><span class="bias-lbl">All</span></button>
@@ -564,13 +570,12 @@ body{background:var(--bg);color:var(--t);font-family:var(--fh);min-height:100dvh
 
 <!-- SCANNER -->
 <div class="sec" id="sec-scan">
-  <div class="filt">
-    <button class="fb on" onclick="setFilt(this,'all')">All</button>
-    <button class="fb" onclick="setFilt(this,'breakout')">Breakout</button>
-    <button class="fb" onclick="setFilt(this,'sma')">SMA Cross</button>
-    <button class="fb" onclick="setFilt(this,'scalp')">Scalp</button>
-    <button class="fb" onclick="setFilt(this,'swing')">Swing</button>
-    <button class="fb" onclick="setFilt(this,'hf')">HF Strategy</button>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+    <div>
+      <div style="font-size:.85rem;font-weight:800">Market Overview</div>
+      <div style="font-size:.62rem;color:var(--m);margin-top:2px">All instruments · tap to switch</div>
+    </div>
+    <button style="padding:5px 12px;border-radius:7px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.2);color:var(--b);font-size:.7rem;font-weight:700;cursor:pointer" onclick="renderScanner()">⟳ Refresh</button>
   </div>
   <div id="scanList"></div>
 </div>
@@ -656,7 +661,7 @@ var JOURNAL=[{sym:"NIFTY",strat:"Iron Condor",date:"17 Mar",pnl:8400,lesson:"Max
 var refreshCd=180,refreshTmr=null,lastSetups=[];
 var KITE={apiKey:"",accessToken:"",apiSecret:"",connected:false};
 
-function bnGo(el,id){document.querySelectorAll(".bn").forEach(function(b){b.classList.remove("on");});el.classList.add("on");document.querySelectorAll(".sec").forEach(function(s){s.classList.remove("on");});document.getElementById("sec-"+id).classList.add("on");window.scrollTo(0,0);if(id==="scan")renderScanner();if(id==="jour")renderJournal();if(id==="auto"){updRules();updEdge();}}
+function bnGo(el,id){document.querySelectorAll(".bn").forEach(function(b){b.classList.remove("on");});el.classList.add("on");document.querySelectorAll(".sec").forEach(function(s){s.classList.remove("on");});document.getElementById("sec-"+id).classList.add("on");window.scrollTo(0,0);if(CS&&CS.sym){fetchSMC(CS.sym);setTimeout(function(){showSMCStrip(CS.sym);},500);}if(id==="scan")renderScanner();if(id==="jour")renderJournal();if(id==="auto"){updRules();updEdge();}}
 function gotoAuto(){bnGo(document.querySelector(".bn[onclick*=\"'auto'\"]"),"auto");}
 function setFilt(btn,f){document.querySelectorAll(".fb").forEach(function(b){b.classList.remove("on");});btn.classList.add("on");scanFilt=f;renderScanner();}
 function setBias(btn,bias){biasFilter=bias;document.querySelectorAll(".bias-btn").forEach(function(b){b.classList.remove("on");});btn.classList.add("on");renderSigFeed();renderScanner();}
@@ -1194,7 +1199,153 @@ window.onload=function(){
   try{initDateDisplay();}catch(e){}
   setTimeout(function(){try{runScan(false);}catch(e){}},1500);
   setInterval(function(){try{runScan(false);}catch(e){}},180000);
+  if(CS)fetchSMC(CS.sym);
 };
+
+// ═══ SMC DATA ═══
+var SMC_CACHE={};
+
+function fetchSMC(sym){
+  var serverUrl=localStorage.getItem("pt_server")||"";
+  if(!serverUrl)return;
+  fetch(serverUrl+"/smc/"+sym)
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(!d||!d.ok||!d.smc)return;
+    SMC_CACHE[sym]=d.smc;
+    // Also store on instrument object
+    var s=allScripts().filter(function(x){return x.sym===sym;})[0];
+    if(s){s.smc=d.smc;}
+    if(CS&&CS.sym===sym)showSMCStrip(sym);
+  }).catch(function(){});
+}
+
+function showSMCStrip(sym){
+  var strip=document.getElementById("smcStrip");
+  if(!strip)return;
+  var s=allScripts().filter(function(x){return x.sym===sym;})[0];
+  var smc=s&&s.smc?s.smc:SMC_CACHE[sym];
+  var parts=[];
+  
+  // SMA from instrument data
+  if(s&&s.sma20)parts.push("<span class='smc-pill' style='background:rgba(255,255,255,.05);color:var(--m)'>SMA20: <b style='color:var(--t)'>"+s.sma20+"</b></span>");
+  if(s&&s.sma50)parts.push("<span class='smc-pill' style='background:rgba(255,255,255,.05);color:var(--m)'>SMA50: <b style='color:var(--t)'>"+s.sma50+"</b></span>");
+  
+  if(smc){
+    // Divider
+    parts.push("<span class='smc-div'>|SMC|</span>");
+    
+    // Market Structure
+    if(smc.structure&&smc.structure!=="UNKNOWN"){
+      var sc=smc.structure==="BULLISH"?"var(--g)":smc.structure==="BEARISH"?"var(--r)":"var(--y)";
+      var sbg=smc.structure==="BULLISH"?"rgba(34,197,94,.12)":smc.structure==="BEARISH"?"rgba(239,68,68,.12)":"rgba(245,158,11,.12)";
+      parts.push("<span class='smc-pill' style='background:"+sbg+";color:"+sc+"'>Structure: "+smc.structure+"</span>");
+    }
+    
+    // Liquidity Sweeps
+    if(smc.sweep&&smc.sweep.length){
+      smc.sweep.forEach(function(sw){
+        var sc=sw.type==="BEAR_SWEEP"?"var(--g)":"var(--r)";
+        var ico=sw.type==="BEAR_SWEEP"?"🐂":"🐻";
+        parts.push("<span class='smc-pill' style='background:rgba(255,165,0,.12);color:var(--y);border:1px solid rgba(255,165,0,.2)'>"+ico+" Liq Sweep ₹"+sw.level+"</span>");
+      });
+    }
+    
+    // Order Blocks near price
+    if(smc.ob&&smc.ob.length&&s&&s.px){
+      smc.ob.forEach(function(ob){
+        if(Math.abs(s.px-ob.mid)/s.px>0.015)return;
+        var oc=ob.type==="BULLISH"?"var(--g)":"var(--r)";
+        var obg=ob.type==="BULLISH"?"rgba(34,197,94,.1)":"rgba(239,68,68,.1)";
+        parts.push("<span class='smc-pill' style='background:"+obg+";color:"+oc+";border:1px solid "+(ob.type==="BULLISH"?"rgba(34,197,94,.25)":"rgba(239,68,68,.25)")+">OB "+ob.type.slice(0,4)+" ₹"+ob.mid+"</span>");
+      });
+    }
+    
+    // FVGs near price
+    if(smc.fvg&&smc.fvg.length&&s&&s.px){
+      smc.fvg.slice(-3).forEach(function(fvg){
+        if(fvg.filled||Math.abs(s.px-fvg.mid)/s.px>0.02)return;
+        var fc=fvg.type==="BULLISH"?"var(--g)":"var(--r)";
+        parts.push("<span class='smc-pill' style='background:rgba(139,92,246,.1);color:var(--p);border:1px solid rgba(139,92,246,.2)'>FVG "+fvg.type.slice(0,4)+" ₹"+fvg.bottom+"-"+fvg.top+"</span>");
+      });
+    }
+  }
+  
+  if(parts.length>0){
+    strip.style.display="block";
+    strip.innerHTML=parts.join("");
+  } else {
+    strip.style.display="none";
+  }
+}
+
+// ═══ SCANNER - Market Overview ═══
+function renderScanner(){
+  var el=document.getElementById("scanList");
+  if(!el)return;
+  var syms=["NIFTY","BANKNIFTY","SENSEX","FINNIFTY","CRUDEOIL","GOLD","RELIANCE","HDFCBANK","INFY","TCS"];
+  var h="";
+  var hasAny=false;
+  syms.forEach(function(inst){
+    var s=allScripts().filter(function(x){return x.sym===inst;})[0];
+    if(!s||!s.px)return;
+    hasAny=true;
+    var px=s.px,chg=s.chg||0,pct=s.pct||0,up=chg>=0;
+    var pcr=s.pcr||0,sma20=s.sma20||0,sma50=s.sma50||0;
+    // Signal score
+    var score=0;
+    if(pcr>1.1||(pcr>0&&pcr<0.9))score++;
+    if(s.crossover==="GOLDEN_CROSS"||s.crossover==="DEATH_CROSS")score+=2;
+    if(s.breakout||s.breakdown)score+=2;
+    var smc=s.smc||SMC_CACHE[inst]||{};
+    if(smc.sweep&&smc.sweep.length)score+=2;
+    if(smc.ob&&smc.ob.length)score++;
+    var sigStr=score>=4?"🔥 STRONG":score>=2?"⚡ MODERATE":"📊 WATCH";
+    var sigCol=score>=4?"var(--g)":score>=2?"var(--y)":"var(--m)";
+    // SMA position
+    var smaPos="–",smaPosCol="var(--m)";
+    if(sma20&&px){
+      if(px>sma20&&px>sma50){smaPos="↑ Above SMA20 & 50";smaPosCol="var(--g)";}
+      else if(px<sma20&&px<sma50){smaPos="↓ Below SMA20 & 50";smaPosCol="var(--r)";}
+      else if(px>sma20){smaPos="↑ Above SMA20";smaPosCol="var(--g)";}
+      else{smaPos="↓ Below SMA20";smaPosCol="var(--r)";}
+    }
+    var crossTxt=s.crossover==="GOLDEN_CROSS"?"☀ Golden Cross":s.crossover==="DEATH_CROSS"?"💀 Death Cross":s.trend||"–";
+    var crossCol=s.crossover==="GOLDEN_CROSS"?"var(--g)":s.crossover==="DEATH_CROSS"?"var(--r)":s.trend==="BULLISH"?"var(--g)":s.trend==="BEARISH"?"var(--r)":"var(--m)";
+    // SMC summary
+    var smcTxt="";
+    if(smc.sweep&&smc.sweep.length)smcTxt+="Liq Sweep ₹"+smc.sweep[0].level+" ";
+    if(smc.structure&&smc.structure!=="UNKNOWN")smcTxt+="| "+smc.structure+" structure";
+    
+    var isCurrent=CS&&CS.sym===inst;
+    h+="<div style=\'background:var(--card);border:1px solid "+(isCurrent?"var(--b)":"var(--border)")+";border-radius:12px;padding:11px;margin-bottom:8px;cursor:pointer\' onclick=\'switchToSig(this.dataset.sym)\' data-sym=\'"+inst+"\'>";
+    h+="<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:7px'><div><span style='font-size:.9rem;font-weight:800'>"+inst+"</span></div><span style='font-size:.68rem;font-weight:700;color:"+sigCol+"'>"+sigStr+"</span></div>";
+    h+="<div style='display:flex;align-items:center;gap:8px;margin-bottom:8px'><span style='font-size:1rem;font-weight:700;color:"+(up?"var(--g)":"var(--r)")+"'>₹"+px.toLocaleString("en-IN")+"</span><span style='font-size:.68rem;padding:2px 7px;border-radius:5px;background:"+(up?"rgba(34,197,94,.1)":"rgba(239,68,68,.1)")+";color:"+(up?"var(--g)":"var(--r)")+";font-weight:700'>"+(up?"+":"")+pct.toFixed(2)+"%</span></div>";
+    h+="<div style='display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px'>";
+    h+="<div style='background:rgba(255,255,255,.03);border-radius:7px;padding:6px'><div style='font-size:.5rem;color:var(--m);text-transform:uppercase'>SMA Position</div><div style='font-size:.68rem;font-weight:700;color:"+smaPosCol+";margin-top:2px'>"+smaPos+"</div></div>";
+    h+="<div style='background:rgba(255,255,255,.03);border-radius:7px;padding:6px'><div style='font-size:.5rem;color:var(--m);text-transform:uppercase'>Trend</div><div style='font-size:.68rem;font-weight:700;color:"+crossCol+";margin-top:2px'>"+crossTxt+"</div></div>";
+    h+="<div style='background:rgba(255,255,255,.03);border-radius:7px;padding:6px'><div style='font-size:.5rem;color:var(--m);text-transform:uppercase'>PCR</div><div style='font-size:.68rem;font-weight:700;color:"+(pcr>1.1?"var(--g)":pcr>0&&pcr<0.9?"var(--r)":"var(--m)")+";margin-top:2px'>"+(pcr?"PCR "+pcr:"–")+"</div></div>";
+    h+="<div style='background:rgba(255,255,255,.03);border-radius:7px;padding:6px'><div style='font-size:.5rem;color:var(--m);text-transform:uppercase'>SMC</div><div style='font-size:.62rem;font-weight:700;color:var(--p);margin-top:2px'>"+(smcTxt||"–")+"</div></div>";
+    h+="</div>";
+    h+="<div style='font-size:.58rem;color:var(--m);text-align:right'>Tap → view signals</div></div>";
+  });
+  if(!hasAny)el.innerHTML="<div style='text-align:center;padding:30px;color:var(--m)'><div style='font-size:1.5rem;margin-bottom:8px'>📡</div><div style='font-size:.8rem;font-weight:600'>No data yet</div><div style='font-size:.7rem;margin-top:4px'>Server connects every 30 seconds</div></div>";
+  else el.innerHTML=h;
+}
+
+function switchToSig(sym){
+  document.querySelectorAll(".bn").forEach(function(b){b.classList.remove("on");});
+  document.querySelectorAll(".bn")[0].classList.add("on");
+  document.querySelectorAll(".sec").forEach(function(s){s.classList.remove("on");});
+  document.getElementById("sec-sig").classList.add("on");
+  sigFilter=sym;
+  document.querySelectorAll(".sf-btn").forEach(function(b){b.classList.remove("on");});
+  var t=document.getElementById("sf-"+sym);
+  if(t)t.classList.add("on");
+  renderSigFeed();
+  window.scrollTo(0,0);
+}
+
 </script>
 </body>
 </html>
