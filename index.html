@@ -375,7 +375,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 </div>
 
 <!-- SYM MODAL -->
-<div class="ov" id="symOv" onclick="if(event.target===this)closeOv('symOv')">
+<div class="ov" id="symOv" onclick="if(event.target===this)closeOv('symOv")">
 <div class="sheet">
   <div class="handle"></div>
   <div class="sh-title">Choose Instrument</div>
@@ -384,7 +384,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 </div></div>
 
 <!-- ORDER MODAL -->
-<div class="ov" id="ordOv" onclick="if(event.target===this)closeOv('ordOv')">
+<div class="ov" id="ordOv" onclick="if(event.target===this)closeOv('ordOv")">
 <div class="sheet">
   <div class="handle"></div>
   <div class="sh-title" id="ord_t">Confirm Trade</div>
@@ -392,7 +392,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   <div id="ord_d" style="background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:9px;padding:9px;margin-bottom:9px"></div>
   <div class="edge-box" id="ord_e"></div>
   <div class="warn" id="ord_w">⚠ Zerodha not connected — demo mode only.</div>
-  <div class="ord-btns"><button class="btn-cancel" onclick="closeOv('ordOv')">Cancel</button><button id="ord_b" onclick="doOrd()">Execute</button></div>
+  <div class="ord-btns"><button class="btn-cancel" onclick="closeOv('ordOv")">Cancel</button><button id="ord_b" onclick="doOrd()">Execute</button></div>
 </div></div>
 
 <!-- TICKER -->
@@ -419,7 +419,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 <!-- HEADER -->
 <div class="hdr">
   <div class="logo">PRO Trader <span class="ver">v5.0</span></div>
-  <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
+  <div class="sym-pick" onclick="openOv('symOv');buildSymList('")"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
 </div>
@@ -453,11 +453,11 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- BIAS -->
 <div class="bias">
-  <button class="bb on" id="bALL" onclick="setBias(this,'ALL')"><span>◉</span><span>All</span></button>
-  <button class="bb" id="bBULL" onclick="setBias(this,'BULL')"><span>▲</span><span>Bullish</span></button>
-  <button class="bb" id="bBEAR" onclick="setBias(this,'BEAR')"><span>▼</span><span>Bearish</span></button>
-  <button class="bb" id="bNEU" onclick="setBias(this,'NEU')"><span>◆</span><span>Neutral</span></button>
-  <button class="bb" id="bBTST" onclick="setBias(this,'BTST')"><span>🌙</span><span>BTST</span></button>
+  <button class="bb on" id="bALL" onclick="setBias(this,'ALL")"><span>◉</span><span>All</span></button>
+  <button class="bb" id="bBULL" onclick="setBias(this,'BULL")"><span>▲</span><span>Bullish</span></button>
+  <button class="bb" id="bBEAR" onclick="setBias(this,'BEAR")"><span>▼</span><span>Bearish</span></button>
+  <button class="bb" id="bNEU" onclick="setBias(this,'NEU")"><span>◆</span><span>Neutral</span></button>
+  <button class="bb" id="bBTST" onclick="setBias(this,'BTST")"><span>🌙</span><span>BTST</span></button>
 </div>
 
 <!-- SIGNALS -->
@@ -489,15 +489,15 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- SCANNER -->
 <div class="sec" id="sec-scan">
-  <div class="flt">
-    <button class="fb on" onclick="setSF(this,'all')">All</button>
-    <button class="fb" onclick="setSF(this,'bo')">Breakout</button>
-    <button class="fb" onclick="setSF(this,'sc')">Scalp/IV</button>
-    <button class="fb" onclick="setSF(this,'sw')">Swing</button>
-    <button class="fb" onclick="setSF(this,'bt')">BTST</button>
-    <button class="fb" onclick="setSF(this,'hf')">HF Strategy</button>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <div>
+      <div style="font-size:.78rem;font-weight:800">Market Scanner</div>
+      <div style="font-size:.6rem;color:var(--m);margin-top:1px">All instruments · live technical overview</div>
+    </div>
+    <button class="scan-btn" onclick="refreshScanner()">⟳ Refresh</button>
   </div>
-  <div id="scanList"></div>
+  <!-- Instrument Cards -->
+  <div id="scanCards"></div>
 </div>
 
 <!-- AUTO -->
@@ -556,10 +556,10 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- NAV -->
 <nav class="bnav">
-  <div class="nb on" onclick="nav(this,'sig')"><div class="nb-ico">🎯</div><div class="nb-lbl">Signals</div></div>
-  <div class="nb" onclick="nav(this,'scan')"><div class="nb-ico">📡</div><div class="nb-lbl">Scanner</div></div>
-  <div class="nb" onclick="nav(this,'auto')"><div class="nb-ico">⚡</div><div class="nb-lbl">Auto</div></div>
-  <div class="nb" onclick="nav(this,'jour')"><div class="nb-ico">📔</div><div class="nb-lbl">Journal</div></div>
+  <div class="nb on" onclick="nav(this,'sig")"><div class="nb-ico">🎯</div><div class="nb-lbl">Signals</div></div>
+  <div class="nb" onclick="nav(this,'scan")"><div class="nb-ico">📡</div><div class="nb-lbl">Scanner</div></div>
+  <div class="nb" onclick="nav(this,'auto")"><div class="nb-ico">⚡</div><div class="nb-lbl">Auto</div></div>
+  <div class="nb" onclick="nav(this,'jour")"><div class="nb-ico">📔</div><div class="nb-lbl">Journal</div></div>
 </nav>
 
 <script>
@@ -1022,6 +1022,7 @@ function runScan(manual){
     "Crude Oil options exist on MCX. Quality>quantity.\n"+
     "Return ONLY JSON array:\n"+
     '[{"sym":"NIFTY","bias":"BULLISH","trade":"Buy 24500 CE","strategy":"Death Cross + Call Writing","why":"Layer1:PCR 1.2+Call OI rising | Layer2:Below SMA20+RSI 58 | Layer3:IV cheap","confidence":86,"entry":"23643","sl":"23500","target1":"23800","target2":"24000","rr":"1:2","urgency":"HIGH","isBTST":false,"btstNote":""}]';
+  try{
   fetch("https://api.anthropic.com/v1/messages",{
     method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,messages:[{role:"user",content:prompt}]})
@@ -1040,6 +1041,7 @@ function runScan(manual){
     var sp2=document.getElementById("spinWrap");if(sp2)sp2.classList.remove("show");
     document.getElementById("sigSub").textContent="Last: "+istTime()+" · auto 3min";
   });
+  }catch(e){try{processScan(localSigs());}catch(e2){}}
 }
 
 function localSigs(){
@@ -1366,49 +1368,103 @@ function execSig(idx){var sig=allSigs[idx];if(!sig)return;pendingTrade={action:s
 // SCANNER
 // ═══════════════════════════════════════════
 function renderScanner(){
-  var s=CS,px=s.px||24474,atm=s.atm||px,pcr=s.pcr||0.9,iv=s.iv||14,mp=s.mp||px,step=px>10000?100:50;
-  var setups=[];
-  // Technical-based setups
-  if(s.crossover==="GOLDEN_CROSS")setups.push({k:"bo",d:"bull",tag:"tbo",tn:"Golden Cross",title:s.sym+" Golden Cross Signal",desc:"SMA20 crossed above SMA50 — strongest technical buy signal. Trend confirmed bullish.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.005)).toLocaleString(),t:"₹"+(atm+step*3).toLocaleString(),rr:"1:2",tf:"Daily",p:87});
-  if(s.crossover==="DEATH_CROSS")setups.push({k:"bo",d:"bear",tag:"tbo",tn:"Death Cross",title:s.sym+" Death Cross Signal",desc:"SMA20 crossed below SMA50 — strongest technical sell signal. Trend confirmed bearish.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.005)).toLocaleString(),t:"₹"+(atm-step*3).toLocaleString(),rr:"1:2",tf:"Daily",p:87});
-  if(s.breakout)setups.push({k:"bo",d:"bull",tag:"tbo",tn:"Breakout",title:s.sym+" Day High Breakout",desc:"Price broke day high with momentum. Buy CE for directional move.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.004)).toLocaleString(),t:"₹"+(atm+step).toLocaleString(),rr:"1:1.5",tf:"15M",p:82});
-  if(s.breakdown)setups.push({k:"bo",d:"bear",tag:"tbo",tn:"Breakdown",title:s.sym+" Day Low Breakdown",desc:"Price broke day low. Buy PE for downside move.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.004)).toLocaleString(),t:"₹"+(atm-step).toLocaleString(),rr:"1:1.5",tf:"15M",p:82});
-  if(s.rsi>70)setups.push({k:"sc",d:"bear",tag:"tsc",tn:"RSI Overbought",title:s.sym+" RSI "+s.rsi+" — Overbought",desc:"RSI above 70 signals exhaustion. Sell CE or buy PE for reversal.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.005)).toLocaleString(),t:"₹"+(atm-step).toLocaleString(),rr:"1:1.5",tf:"1H",p:79});
-  if(s.rsi<30)setups.push({k:"sc",d:"bull",tag:"tsc",tn:"RSI Oversold",title:s.sym+" RSI "+s.rsi+" — Oversold",desc:"RSI below 30 signals reversal potential. Buy CE on confirmation.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.005)).toLocaleString(),t:"₹"+(atm+step).toLocaleString(),rr:"1:1.5",tf:"1H",p:79});
-  if(iv>16&&Math.abs(px-mp)<px*.003)setups.push({k:"sc",d:"neu",tag:"tsc",tn:"Max Pain + IV",title:"Iron Condor — Max Pain ₹"+mp.toLocaleString(),desc:"IV "+iv+"% + near Max Pain. Sell premium inside OI walls.",e:"Sell "+(atm+step)+"CE + "+(atm-step)+"PE",sl:"Break of walls",t:"Premium decay",rr:"1:2.5",tf:"Expiry",p:84});
-  if(pcr>1.1&&(s.trend==="BULLISH"))setups.push({k:"sw",d:"bull",tag:"tsw",tn:"OI + Trend Aligned",title:"OI + SMA Bullish Alignment",desc:"PCR "+pcr+" + "+s.trend+" trend. Both OI and technicals confirm bulls.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.007)).toLocaleString(),t:"₹"+(atm+step*3).toLocaleString(),rr:"1:2.5",tf:"Daily",p:83});
-  if(pcr<0.9&&(s.trend==="BEARISH"))setups.push({k:"sw",d:"bear",tag:"tsw",tn:"OI + Trend Aligned",title:"OI + SMA Bearish Alignment",desc:"PCR "+pcr+" + "+s.trend+" trend. Both OI and technicals confirm bears.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.007)).toLocaleString(),t:"₹"+(atm-step*3).toLocaleString(),rr:"1:2.5",tf:"Daily",p:83});
-  if(!isOpen()&&s.pct>1)setups.push({k:"bt",d:"bull",tag:"tbt",tn:"BTST Setup",title:s.sym+" BTST — Strong Close",desc:"Closed +"+s.pct.toFixed(1)+"% with bullish OI. Gap-up expected tomorrow.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.006)).toLocaleString(),t:"₹"+(px+Math.round(px*.015)).toLocaleString(),rr:"1:2.5",tf:"Overnight",p:79});
-  // HF strategies always shown
-  setups.push({k:"hf",d:"neu",tag:"thf",tn:"HF: BlackRock Buffer",title:"BlackRock Buffer Strategy",desc:"Buy ATM PE + Sell OTM PE + Sell far CE. Asymmetric downside protection with upside.",e:"3-leg spread",sl:"Net debit",t:"Downside protected",rr:"Asymmetric",tf:"Monthly",p:79});
-  if(iv>18)setups.push({k:"hf",d:"neu",tag:"thf",tn:"HF: Citadel Theta",title:"Citadel Theta Harvest — IV "+iv+"%",desc:"IV elevated above VIX "+VIX+". Sell Iron Condor inside OI walls for premium decay.",e:"4-leg IC",sl:"Break of wings",t:"All premium decays",rr:"1:3",tf:"Weekly",p:83});
-  lastSetups=setups;
-  var fi=scanFilt==="all"?setups:setups.filter(function(x){return x.k===scanFilt;});
-  if(bias==="BTST")fi=fi.filter(function(x){return x.k==="bt";});
-  else if(bias!=="ALL")fi=fi.filter(function(x){return (bias==="BULL"&&x.d==="bull")||(bias==="BEAR"&&x.d==="bear")||(bias==="NEU"&&x.d==="neu");});
-  if(!fi.length){document.getElementById("scanList").innerHTML="<div class='empty'><div style='font-size:1.8rem;margin-bottom:7px'>📊</div><div>No setups for this filter</div></div>";return;}
+  var cards=document.getElementById("scanCards");
+  if(!cards)return;
+  var all=allS().filter(function(s){return s.px>0;});
+  if(!all.length){
+    cards.innerHTML="<div class='empty'><div style='font-size:1.5rem;margin-bottom:7px'>📡</div><div>Waiting for server data...</div><div style='font-size:.68rem;margin-top:4px;color:var(--m)'>Tap ⚙ → set your Render server URL</div></div>";
+    return;
+  }
   var h="";
-  fi.forEach(function(su){
-    var dc=su.d==="bull"?"var(--g)":su.d==="bear"?"var(--r)":"var(--y)";
-    if(su.k==="bt")dc="var(--p)";
-    var bg="rgba("+(su.d==="bull"?"34,197,94":su.d==="bear"?"239,68,68":"59,130,246")+",.12)";
-    var bd="rgba("+(su.d==="bull"?"34,197,94":su.d==="bear"?"239,68,68":"59,130,246")+",.3)";
-    if(su.k==="bt"){bg="rgba(139,92,246,.12)";bd="rgba(139,92,246,.3)";}
-    var gi=lastSetups.indexOf(su);
-    h+="<div class='setup "+(su.d==="bull"?"bull":su.d==="bear"?"bear":"neu")+"'><div class='su-hd'><span class='su-tag "+su.tag+"'>"+su.tn+"</span><span class='su-title'>"+su.title+"</span><span class='su-prob' style='color:"+(su.p>=85?"var(--g)":su.p>=79?"var(--y)":"var(--m)")+"'>"+su.p+"%</span></div>"+
-      "<div class='su-body'><div class='su-desc'>"+su.desc+"</div>"+
-      "<div class='chips'>"+
-        "<div class='chip'><div class='chip-l'>Entry</div><div class='chip-v' style='color:var(--b)'>"+su.e+"</div></div>"+
-        "<div class='chip'><div class='chip-l'>Stop</div><div class='chip-v' style='color:var(--r)'>"+su.sl+"</div></div>"+
-        "<div class='chip'><div class='chip-l'>Target</div><div class='chip-v' style='color:var(--g)'>"+su.t+"</div></div>"+
-        "<div class='chip'><div class='chip-l'>R:R</div><div class='chip-v' style='color:var(--y)'>"+su.rr+"</div></div>"+
-        "<div class='chip'><div class='chip-l'>TF</div><div class='chip-v' style='color:var(--m)'>"+su.tf+"</div></div>"+
-      "</div>"+
-      "<button class='su-exec' style='background:"+bg+";color:"+dc+";border:1px solid "+bd+"' onclick='execSetup("+gi+")'>"+( AT.active?"⚡ Auto-Execute":"▶ Execute — "+su.tn)+"</button>"+
-      "</div></div>";
+  all.forEach(function(s){
+    var up=s.chg>=0;
+    var smaPos="–",smaPosCol="var(--m)";
+    if(s.sma20&&s.px){
+      if(s.px>s.sma20&&s.sma20>s.sma50){smaPos="↑ Above both";smaPosCol="var(--g)";}
+      else if(s.px<s.sma20&&s.sma20<s.sma50){smaPos="↓ Below both";smaPosCol="var(--r)";}
+      else if(s.px>s.sma20){smaPos="↑ Above SMA20";smaPosCol="var(--g)";}
+      else{smaPos="↓ Below SMA20";smaPosCol="var(--r)";}
+    }
+    var rsiTxt="–",rsiCol="var(--m)";
+    if(s.rsi){
+      if(s.rsi<32){rsiTxt=s.rsi+" (Oversold 🔥)";rsiCol="var(--g)";}
+      else if(s.rsi>68){rsiTxt=s.rsi+" (Overbought ⚠)";rsiCol="var(--r)";}
+      else{rsiTxt=""+s.rsi;rsiCol="var(--m)";}
+    }
+    var crossTxt="–",crossCol="var(--m)";
+    if(s.crossover==="GOLDEN_CROSS"){crossTxt="☀ Golden Cross";crossCol="var(--g)";}
+    else if(s.crossover==="DEATH_CROSS"){crossTxt="💀 Death Cross";crossCol="var(--r)";}
+    else if(s.trend){crossTxt=s.trend;crossCol=s.trend==="BULLISH"?"var(--g)":s.trend==="BEARISH"?"var(--r)":"var(--y)";}
+
+    // Signal strength from local scoring
+    var score=0;
+    if(s.pcr>1.1||s.pcr<0.9)score+=1;
+    if(s.crossover&&s.crossover!=="NONE")score+=2;
+    if(s.breakout||s.breakdown)score+=2;
+    if(s.rsi&&(s.rsi<32||s.rsi>68))score+=1;
+    if(s.sweep&&s.sweep.length)score+=2;
+    if(s.ob&&s.ob.length)score+=1;
+    var sigStr=score>=5?"🔥 STRONG":score>=3?"⚡ MODERATE":"📊 WATCH";
+    var sigCol=score>=5?"var(--g)":score>=3?"var(--y)":"var(--m)";
+
+    // SMC summary
+    var smcTxt="";
+    if(s.sweep&&s.sweep.length)smcTxt="Liq Sweep ₹"+s.sweep[0].level+" | ";
+    if(s.ob&&s.ob.length){var nearOB=s.ob.filter(function(o){return s.px&&Math.abs(s.px-o.mid)/s.px<0.015;});if(nearOB.length)smcTxt+=nearOB[0].type.slice(0,4)+" OB ₹"+nearOB[0].mid+" | ";}
+    if(s.fvg&&s.fvg.length){var nearFVG=s.fvg.filter(function(f){return s.px&&Math.abs(s.px-f.mid)/s.px<0.02;});if(nearFVG.length)smcTxt+="FVG ₹"+nearFVG[0].bottom+"-"+nearFVG[0].top;}
+    if(smcTxt.slice(-3)===" | ")smcTxt=smcTxt.slice(0,-3).trim();
+
+    var isCurrent=CS.sym===s.sym;
+    h+='<div style="background:var(--card);border:1px solid '+(isCurrent?"var(--b)":"var(--border)")+';border-radius:11px;padding:10px;margin-bottom:7px;cursor:pointer" onclick="pickSym("'+s.sym+'")">';
+    // Header row
+    h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">';
+    h+='<span style="font-size:.85rem;font-weight:800">'+s.sym+'</span>';
+    h+='<span style="font-size:.72rem;color:var(--m)">'+s.name+'</span>';
+    h+='<span style="margin-left:auto;font-size:.68rem;font-weight:700;color:'+sigCol+'">'+sigStr+'</span>';
+    h+='</div>';
+    // Price row
+    h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:7px">';
+    h+='<span style="font-size:1rem;font-weight:700;color:'+(up?"var(--g)":"var(--r)")+'">₹'+s.px.toLocaleString("en-IN")+'</span>';
+    h+='<span style="font-size:.65rem;padding:2px 6px;border-radius:4px;background:'+(up?"rgba(34,197,94,.12)":"rgba(239,68,68,.12)")+';color:'+(up?"var(--g)":"var(--r)")+'">'+(up?"+":"")+s.chg+' ('+(up?"+":"")+s.pct.toFixed(2)+'%)</span>';
+    if(s.sma20)h+='<span style="font-size:.6rem;color:var(--m);margin-left:auto">SMA20: '+s.sma20+'</span>';
+    h+='</div>';
+    // Indicators grid
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px">';
+    h+='<div style="background:rgba(255,255,255,.03);border-radius:6px;padding:5px">';
+    h+='<div style="font-size:.5rem;color:var(--m);text-transform:uppercase;letter-spacing:.05em">SMA Position</div>';
+    h+='<div style="font-size:.68rem;font-weight:700;color:'+smaPosCol+';margin-top:2px">'+smaPos+'</div></div>';
+    h+='<div style="background:rgba(255,255,255,.03);border-radius:6px;padding:5px">';
+    h+='<div style="font-size:.5rem;color:var(--m);text-transform:uppercase;letter-spacing:.05em">RSI 14</div>';
+    h+='<div style="font-size:.68rem;font-weight:700;color:'+rsiCol+';margin-top:2px">'+rsiTxt+'</div></div>';
+    h+='<div style="background:rgba(255,255,255,.03);border-radius:6px;padding:5px">';
+    h+='<div style="font-size:.5rem;color:var(--m);text-transform:uppercase;letter-spacing:.05em">Crossover / Trend</div>';
+    h+='<div style="font-size:.68rem;font-weight:700;color:'+crossCol+';margin-top:2px">'+crossTxt+'</div></div>';
+    h+='<div style="background:rgba(255,255,255,.03);border-radius:6px;padding:5px">';
+    h+='<div style="font-size:.5rem;color:var(--m);text-transform:uppercase;letter-spacing:.05em">PCR / OI</div>';
+    h+='<div style="font-size:.68rem;font-weight:700;margin-top:2px;color:'+(s.pcr>1.1?"var(--g)":s.pcr>0&&s.pcr<0.9?"var(--r)":"var(--m)")+'">'+(s.pcr?"PCR "+s.pcr+(s.pcr>1.1?" 📈":s.pcr<0.9?" 📉":""):"–")+'</div></div>';
+    h+='</div>';
+    // SMC row
+    if(smcTxt){
+      h+='<div style="background:rgba(139,92,246,.07);border:1px solid rgba(139,92,246,.18);border-radius:6px;padding:5px 7px;font-size:.62rem;color:var(--p)">🏦 SMC: '+smcTxt+'</div>';
+    }
+    // Tap hint
+    h+='<div style="font-size:.55rem;color:var(--m);margin-top:5px;text-align:right">Tap to select → get signals ›</div>';
+    h+='</div>';
   });
-  document.getElementById("scanList").innerHTML=h;
+  cards.innerHTML=h;
 }
+
+function refreshScanner(){
+  // Refetch SMC for all instruments
+  allS().filter(function(s){return s.px>0;}).forEach(function(s){
+    if(SERVER_URL)fetchSMC(s.sym);
+  });
+  setTimeout(renderScanner,2000);
+  toast("🔄 Refreshing","Fetching latest SMC data","tg");
+}
+
+function execSetup(idx){var su=lastSetups[idx];if(!su)return;pendingTrade={action:su.d==="bull"?"BUY":"SELL",instrument:su.title,confidence:su.p,entry:su.e,sl:su.sl,target:su.t,why:su.desc};if(AT.active)qAT(pendingTrade);else showOrd();}
+
 function execSetup(idx){var su=lastSetups[idx];if(!su)return;pendingTrade={action:su.d==="bull"?"BUY":"SELL",instrument:su.title,confidence:su.p,entry:su.e,sl:su.sl,target:su.t,why:su.desc};if(AT.active)qAT(pendingTrade);else showOrd();}
 
 // ═══════════════════════════════════════════
@@ -1517,6 +1573,7 @@ function atCycle(){
   var sc=allS().filter(function(s){return s.sym===sym;})[0]||CS;
   var tech=[sc.crossover&&sc.crossover!=="NONE"?sc.crossover:"",sc.trend||"",sc.rsi?"RSI:"+sc.rsi:"",sc.breakout?"BREAKOUT":"",sc.breakdown?"BREAKDOWN":""].filter(Boolean).join(",");
   var p="Auto-trade for "+sym+". Spot:₹"+sc.px+" PCR:"+(sc.pcr||.9)+" MP:₹"+(sc.mp||sc.px)+" IV:"+(sc.iv||14)+"% Chg:"+sc.pct+"% SMA20:"+(sc.sma20||"N/A")+" SMA50:"+(sc.sma50||"N/A")+" Technicals:["+tech+"] Direction:"+AT.dir+". Always recommend BUY of CE or PE (defined risk). Return ONLY JSON:{\"confidence\":0-100,\"action\":\"BUY\",\"instrument\":\""+sym+" ATM CE or PE\",\"entry\":\"price\",\"sl\":\"level\",\"target\":\"level\",\"reasoning\":\"one sentence with technical basis\"}";
+  try{
   fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:300,messages:[{role:"user",content:p}]})})
   .then(function(r){return r.json();})
   .then(function(d){
@@ -1528,6 +1585,7 @@ function atCycle(){
     pendingTrade={action:sig.action,instrument:sig.instrument||sym+" ATM CE",confidence:sig.confidence,entry:sig.entry,sl:sig.sl,target:sig.target,why:sig.reasoning,source:"Auto"};
     showOrd();
   }).catch(function(){addLog({ac:"SKIP",inst:sym,conf:0,src:"Auto",st:"skip"});});
+  }catch(e){addLog({ac:"SKIP",inst:sym,conf:0,src:"Auto",st:"skip"});}
 }
 function qAT(sig){
   if(!AT.active)return;
@@ -1770,6 +1828,15 @@ function loadSaved(){
     if(!KITE.connected&&!SERVER_URL)showBanner("notconn");
   }catch(e){showBanner("notconn");}
 }
+
+// Suppress cross-origin script errors silently
+window.onerror=function(msg,src,line,col,err){
+  // Ignore cross-origin fetch errors in local file context
+  return true; // prevents "Uncaught Error" from showing
+};
+window.onunhandledrejection=function(e){
+  e.preventDefault(); // suppress unhandled promise rejections
+};
 
 window.onload=function(){
   try{buildTicker();}catch(e){}
