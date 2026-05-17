@@ -1657,6 +1657,11 @@ window.onload=function(){
   setInterval(function(){try{runScan(false);}catch(e){}},180000);
   setTimeout(function(){if(CS)fetchSMC(CS.sym);},2000);
   setInterval(function(){if(CS)fetchSMC(CS.sym);},300000);
+  // Keep Render server awake - ping every 9 minutes
+  setInterval(function(){
+    var url=SERVER_URL||localStorage.getItem("pt_server")||"";
+    if(url)fetch(url+"/ping").catch(function(){});
+  },540000);
 };
 
 
