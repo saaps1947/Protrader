@@ -635,15 +635,15 @@ function fetchFromServer(){
       if(!sc||!sd||!sd.px)return;
       sc.px=sd.px;sc.chg=sd.chg||0;sc.pct=sd.pct||0;
       sc.h=sd.high||sc.h;sc.l=sd.low||sc.l;sc.o=sd.open||sc.o;
-      sc.sma20=sd.sma20;sc.sma50=sd.sma50;
-      if(sd.technicals){
-        sc.trend=sd.technicals.trend;
-        sc.crossover=sd.technicals.crossover;
-        sc.rsi=sd.technicals.rsi14;
-        sc.breakout=sd.technicals.breakout;
-        sc.breakdown=sd.technicals.breakdown;
-        sc.above_sma20=sd.technicals.above_sma20;
-      }
+      // Server returns technicals at TOP LEVEL (not nested)
+      sc.sma20=sd.sma20||0;
+      sc.sma50=sd.sma50||0;
+      sc.rsi=sd.rsi||0;
+      sc.trend=sd.trend||"";
+      sc.crossover=sd.crossover||"NONE";
+      sc.breakout=sd.breakout||false;
+      sc.breakdown=sd.breakdown||false;
+      sc.above_sma20=sd.above_sma20||false;
       // OI data if present
       if(sd.oi){
         sc.cOI=sd.oi.ce_oi||0;sc.pOI=sd.oi.pe_oi||0;
@@ -678,9 +678,7 @@ function fetchFromServer(){
       var gStep=100;gold.atm=Math.round(gold.px/gStep)*gStep;gold.step=gStep;
     }
     // Fetch OI for current instrument
-    if(CS.sym in {"NIFTY":1,"BANKNIFTY":1,"FINNIFTY":1}){
-      fetchOI(CS.sym);
-    }
+    fetchOI(CS.sym); // fetch OI for any instrument
     // Trigger AI scan if no signals yet (first load)
     if(allSigs.length===0){
       setTimeout(function(){try{runScan(false);}catch(e){}},1000);
@@ -1655,7 +1653,9 @@ window.onload=function(){
   // Scan after short delay
   setTimeout(function(){try{runScan(false);}catch(e){}},3000);
   setInterval(function(){try{runScan(false);}catch(e){}},180000);
-  setTimeout(function(){if(CS)fetchSMC(CS.sym);},2000);
+  setTimeout(function(){if(CS){fetchSMC(CS.sym);fetchOI(CS.sym);}},2000);
+  // Fetch OI every 60 seconds during market hours
+  setInterval(function(){if(CS&&SERVER_URL)fetchOI(CS.sym);},60000);
   setInterval(function(){if(CS)fetchSMC(CS.sym);},300000);
   // Keep Render server awake - ping every 9 minutes
   setInterval(function(){
