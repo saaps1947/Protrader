@@ -548,6 +548,18 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- JOURNAL -->
 <div class="sec" id="sec-jour">
+  <!-- Signal Performance Panel -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div>
+        <div style="font-size:.82rem;font-weight:800">📊 Signal Performance</div>
+        <div style="font-size:.6rem;color:var(--m);margin-top:1px">Track accuracy of AI signals</div>
+      </div>
+    </div>
+    <div id="perfPanel"><div style="text-align:center;padding:20px;color:var(--m);font-size:.75rem">No signals tracked yet.<br>Tap Execute on any signal to start tracking.</div></div>
+  </div>
+  <!-- Trade Journal -->
+  <div style="font-size:.82rem;font-weight:800;margin-bottom:8px">📔 Trade Journal</div>
   <div class="j-stats" id="jStats"></div>
   <button class="j-add" onclick="addJ()">+ Log Trade</button>
   <div id="jList"></div>
@@ -1152,9 +1164,30 @@ function localSigs(){
 function processScan(sigs){
   var prev={};allSigs.forEach(function(s){prev[s.sym]=s;});
   sigs.forEach(function(sig){
-    sig._time=istTime();sig._ts=Date.now();
-    sig._isNew=!prev[sig.sym];
-    if(!sig._isNew&&prev[sig.sym]){sig._ts=prev[sig.sym]._ts;sig._time=prev[sig.sym]._time;}
+    var wasNew=!prev[sig.sym];
+    var prevSig=prev[sig.sym];
+    sig._isNew=wasNew;
+    if(wasNew){
+      // Brand new signal - set original timestamp
+      sig._ts=Date.now();
+      sig._time=istTime();
+      sig._originalTs=Date.now();
+      sig._originalTime=istTime();
+      sig._biasHistory=[{bias:sig.bias,time:istTime(),ts:Date.now()}];
+    } else {
+      // Existing signal - preserve original timestamps
+      sig._ts=prevSig._ts;
+      sig._time=prevSig._time;
+      sig._originalTs=prevSig._originalTs||prevSig._ts;
+      sig._originalTime=prevSig._originalTime||prevSig._time;
+      sig._biasHistory=prevSig._biasHistory||[];
+      // Track if bias changed
+      var lastBias=sig._biasHistory.length?sig._biasHistory[sig._biasHistory.length-1].bias:"";
+      if(lastBias&&lastBias!==sig.bias){
+        sig._biasHistory.push({bias:sig.bias,time:istTime(),ts:Date.now()});
+        sig._biasChanged=true;
+      }
+    }
     var idx=-1;for(var i=0;i<allSigs.length;i++){if(allSigs[i].sym===sig.sym){idx=i;break;}}
     if(idx>=0)allSigs[idx]=sig;else allSigs.unshift(sig);
   });
@@ -1222,7 +1255,7 @@ function renderFeed(){
   feed.innerHTML=h;
 }
 function fpx(v){if(!v&&v!==0)return "–";var s=""+v;if(isNaN(parseFloat(s)))return s;return "₹"+parseFloat(s).toLocaleString("en-IN");}
-function execSig(idx){var sig=allSigs[idx];if(!sig)return;pendingTrade={action:sig.bias==="BULLISH"?"BUY":"SELL",instrument:sig.trade,confidence:sig.confidence,entry:sig.entry,sl:sig.sl,target:sig.target1,why:sig.why,_bt:sig.isBTST||false};if(AT.active)qAT(pendingTrade);else showOrd();}
+function execSig(idx){var sig=allSigs[idx];if(!sig)return;logSignalEntry(sig);pendingTrade={action:sig.bias==="BULLISH"?"BUY":"SELL",instrument:sig.trade,confidence:sig.confidence,entry:sig.entry,sl:sig.sl,target:sig.target1,why:sig.why,_bt:sig.isBTST||false};if(AT.active)qAT(pendingTrade);else showOrd();}
 
 // ═══════════════════════════════════════════
 // SCANNER
@@ -1654,6 +1687,7 @@ window.onload=function(){
   setTimeout(function(){try{runScan(false);}catch(e){}},3000);
   setInterval(function(){try{runScan(false);}catch(e){}},180000);
   setTimeout(function(){if(CS){fetchSMC(CS.sym);fetchOI(CS.sym);}},2000);
+  loadSignalLog();renderPerformance();
   // Fetch OI every 60 seconds during market hours
   setInterval(function(){if(CS&&SERVER_URL)fetchOI(CS.sym);},60000);
   setInterval(function(){if(CS)fetchSMC(CS.sym);},300000);
@@ -1770,6 +1804,148 @@ function switchToSig(sym){
   window.scrollTo(0,0);
 }
 
+
+// ══════════════════════════════════════════════
+// SIGNAL PERFORMANCE TRACKER
+// ══════════════════════════════════════════════
+var SIGNAL_LOG = [];
+
+function loadSignalLog(){
+  try{
+    var saved=localStorage.getItem("pt_siglog");
+    if(saved)SIGNAL_LOG=JSON.parse(saved);
+  }catch(e){SIGNAL_LOG=[];}
+}
+
+function saveSignalLog(){
+  try{
+    // Keep last 200 signals
+    if(SIGNAL_LOG.length>200)SIGNAL_LOG=SIGNAL_LOG.slice(-200);
+    localStorage.setItem("pt_siglog",JSON.stringify(SIGNAL_LOG));
+  }catch(e){}
+}
+
+function logSignalEntry(sig){
+  // Called when user taps Execute
+  var entry={
+    id:sig.sym+"_"+Date.now(),
+    sym:sig.sym,
+    bias:sig.bias,
+    trade:sig.trade,
+    strategy:sig.strategy,
+    confidence:sig.confidence,
+    entry:parseFloat(sig.entry)||0,
+    sl:parseFloat(sig.sl)||0,
+    t1:parseFloat(sig.target1||sig.target)||0,
+    t2:parseFloat(sig.target2||sig.target1||sig.target)||0,
+    entryTime:istTime(),
+    entryTs:Date.now(),
+    originalSignalTime:sig._originalTime||sig._time,
+    status:"OPEN",
+    exitPrice:0,
+    exitTime:"",
+    pnl:0,
+    result:"" // T1_HIT, T2_HIT, SL_HIT, MANUAL_EXIT
+  };
+  SIGNAL_LOG.push(entry);
+  saveSignalLog();
+  renderPerformance();
+  toast("📝 Signal Logged","Tracking "+sig.sym+" — "+sig.trade,"tg");
+}
+
+function updateSignalOutcome(id, result, exitPrice){
+  var entry=SIGNAL_LOG.filter(function(x){return x.id===id;})[0];
+  if(!entry)return;
+  entry.status="CLOSED";
+  entry.result=result;
+  entry.exitPrice=exitPrice;
+  entry.exitTime=istTime();
+  // Calculate P&L in points
+  if(entry.bias==="BULLISH"){
+    entry.pnl=Math.round((exitPrice-entry.entry)*100)/100;
+  } else {
+    entry.pnl=Math.round((entry.entry-exitPrice)*100)/100;
+  }
+  saveSignalLog();
+  renderPerformance();
+}
+
+function calcPerformance(){
+  var closed=SIGNAL_LOG.filter(function(x){return x.status==="CLOSED";});
+  var open=SIGNAL_LOG.filter(function(x){return x.status==="OPEN";});
+  var t1hits=closed.filter(function(x){return x.result==="T1_HIT"||x.result==="T2_HIT";}).length;
+  var t2hits=closed.filter(function(x){return x.result==="T2_HIT";}).length;
+  var slhits=closed.filter(function(x){return x.result==="SL_HIT";}).length;
+  var wins=t1hits;
+  var losses=slhits;
+  var total=closed.length;
+  var winRate=total>0?Math.round(wins/total*100):0;
+  var totalPnl=closed.reduce(function(a,x){return a+x.pnl;},0);
+  var avgWin=wins>0?closed.filter(function(x){return x.pnl>0;}).reduce(function(a,x){return a+x.pnl;},0)/wins:0;
+  var avgLoss=losses>0?Math.abs(closed.filter(function(x){return x.pnl<0;}).reduce(function(a,x){return a+x.pnl;},0)/losses):0;
+  var rr=avgLoss>0?Math.round(avgWin/avgLoss*100)/100:0;
+  return {total:total,open:open.length,wins:wins,losses:losses,t1hits:t1hits,t2hits:t2hits,slhits:slhits,winRate:winRate,totalPnl:Math.round(totalPnl*100)/100,avgWin:Math.round(avgWin*100)/100,avgLoss:Math.round(avgLoss*100)/100,rr:rr};
+}
+
+function renderPerformance(){
+  var el=document.getElementById("perfPanel");
+  if(!el)return;
+  var p=calcPerformance();
+  var perfColor=p.winRate>=60?"var(--g)":p.winRate>=40?"var(--y)":"var(--r)";
+  var pnlColor=p.totalPnl>=0?"var(--g)":"var(--r)";
+
+  var statsHtml=
+    "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:10px'>"+
+    "<div style='background:rgba(255,255,255,.03);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.5rem;color:var(--m);text-transform:uppercase'>Win Rate</div><div style='font-size:.95rem;font-weight:800;color:"+perfColor+"'>"+p.winRate+"%</div></div>"+
+    "<div style='background:rgba(255,255,255,.03);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.5rem;color:var(--m);text-transform:uppercase'>Total P&L</div><div style='font-size:.95rem;font-weight:800;color:"+pnlColor+"'>"+(p.totalPnl>=0?"+":"")+p.totalPnl+" pts</div></div>"+
+    "<div style='background:rgba(255,255,255,.03);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.5rem;color:var(--m);text-transform:uppercase'>R:R</div><div style='font-size:.95rem;font-weight:800;color:var(--b)'>1:"+p.rr+"</div></div>"+
+    "<div style='background:rgba(255,255,255,.03);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.5rem;color:var(--m);text-transform:uppercase'>T1 Hit</div><div style='font-size:.95rem;font-weight:800;color:var(--g)'>"+p.t1hits+"</div></div>"+
+    "<div style='background:rgba(255,255,255,.03);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.5rem;color:var(--m);text-transform:uppercase'>T2 Hit</div><div style='font-size:.95rem;font-weight:800;color:var(--g)'>"+p.t2hits+"</div></div>"+
+    "<div style='background:rgba(255,255,255,.03);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.5rem;color:var(--m);text-transform:uppercase'>SL Hit</div><div style='font-size:.95rem;font-weight:800;color:var(--r)'>"+p.slhits+"</div></div>"+
+    "</div>";
+
+  // Signal log table
+  var logHtml="";
+  var recent=SIGNAL_LOG.slice(-15).reverse();
+  recent.forEach(function(x){
+    var statusCol=x.status==="OPEN"?"var(--b)":x.result==="T1_HIT"||x.result==="T2_HIT"?"var(--g)":"var(--r)";
+    var statusTxt=x.status==="OPEN"?"⏳ OPEN":x.result==="T1_HIT"?"✅ T1":x.result==="T2_HIT"?"🎯 T2":"❌ SL";
+    var pnlTxt=x.pnl!==0?(x.pnl>0?"+":"")+x.pnl+" pts":"–";
+    logHtml+=
+      "<div style='display:flex;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.04);flex-wrap:wrap'>"+
+      "<div style='min-width:70px'><div style='font-size:.75rem;font-weight:800'>"+x.sym+"</div><div style='font-size:.55rem;color:var(--m)'>"+x.entryTime+"</div></div>"+
+      "<div style='flex:1'><div style='font-size:.68rem;font-weight:600;color:"+(x.bias==="BULLISH"?"var(--g)":"var(--r)")+"'>"+x.bias.slice(0,4)+" "+x.confidence+"%</div><div style='font-size:.58rem;color:var(--m)'>"+x.strategy+"</div></div>"+
+      "<div style='text-align:right'>";
+    if(x.status==="OPEN"){
+      logHtml+=
+        "<div style='display:flex;gap:3px;margin-bottom:3px'>"+
+        "<button data-id='"+x.id+"' data-r='T1_HIT' data-px='"+x.t1+"' onclick='perfBtn(this)' style='padding:2px 6px;border-radius:4px;background:rgba(34,197,94,.15);color:var(--g);border:none;font-size:.55rem;font-weight:700;cursor:pointer'>T1 ✅</button>"+
+        "<button data-id='"+x.id+"' data-r='T2_HIT' data-px='"+x.t2+"' onclick='perfBtn(this)' style='padding:2px 6px;border-radius:4px;background:rgba(34,197,94,.15);color:var(--g);border:none;font-size:.55rem;font-weight:700;cursor:pointer'>T2 🎯</button>"+
+        "<button data-id='"+x.id+"' data-r='SL_HIT' data-px='"+x.sl+"' onclick='perfBtn(this)' style='padding:2px 6px;border-radius:4px;background:rgba(239,68,68,.15);color:var(--r);border:none;font-size:.55rem;font-weight:700;cursor:pointer'>SL ❌</button>"+
+        "</div>";
+    } else {
+      logHtml+="<div style='font-size:.72rem;font-weight:700;color:"+statusCol+"'>"+statusTxt+"</div><div style='font-size:.65rem;color:"+(x.pnl>=0?"var(--g)":"var(--r)")+"'>"+pnlTxt+"</div>";
+    }
+    logHtml+="</div></div>";
+  });
+
+  if(!recent.length)logHtml="<div style='text-align:center;padding:20px;color:var(--m);font-size:.75rem'>No signals tracked yet.<br>Tap Execute on any signal to start tracking.</div>";
+
+  el.innerHTML=statsHtml+
+    "<div style='font-size:.6rem;font-weight:700;color:var(--m);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px'>Recent Signals ("+p.total+" tracked, "+p.open+" open)</div>"+
+    logHtml+
+    "<button onclick='clearPerfLog()' style='width:100%;padding:8px;margin-top:10px;border-radius:7px;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--m);font-size:.7rem;cursor:pointer'>🗑 Clear Log</button>";
+}
+
+function clearPerfLog(){
+  if(!confirm("Clear all signal tracking data?"))return;
+  SIGNAL_LOG=[];
+  saveSignalLog();
+  renderPerformance();
+}
+
+
+function perfBtn(b){updateSignalOutcome(b.dataset.id,b.dataset.r,parseFloat(b.dataset.px)||0);}
 </script>
 </body>
 </html>
