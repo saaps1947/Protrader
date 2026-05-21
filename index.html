@@ -791,6 +791,18 @@ function showTech(s){
   if(!s.sma20&&!s.rsi){strip.style.display="none";return;}
   strip.style.display="flex";
   var pills=[];
+  // Multi-TF alignment badge (most important)
+  if(s.tfAlignment){
+    var aCol=s.tfAlignment==="STRONG_BULL"?"var(--g)":s.tfAlignment==="BULL"?"rgba(34,197,94,.7)":s.tfAlignment==="STRONG_BEAR"?"var(--r)":s.tfAlignment==="BEAR"?"rgba(239,68,68,.7)":"var(--y)";
+    var aLabel=s.tfAlignment==="STRONG_BULL"?"🟢 All TFs: BULL":s.tfAlignment==="BULL"?"🟡 2/3 TFs: BULL":s.tfAlignment==="STRONG_BEAR"?"🔴 All TFs: BEAR":s.tfAlignment==="BEAR"?"🟡 2/3 TFs: BEAR":"⚠ MIXED TFs";
+    pills.push('<span class="tech-pill" style="background:rgba(255,255,255,.06);color:'+aCol+';font-weight:800">'+aLabel+'</span>');
+  }
+  // CPR info
+  if(s.cpr){
+    var cprCol=s.cpr.is_narrow?"var(--g)":"var(--m)";
+    var cprLabel=s.cpr.is_narrow?"📐 Narrow CPR (Trending)":"📐 Wide CPR (Sideways)";
+    pills.push('<span class="tech-pill" style="background:rgba(255,255,255,.04);color:'+cprCol+'">'+cprLabel+' · Pivot ₹'+s.cpr.pivot+'</span>');
+  }
   if(s.sma20&&s.sma50){
     var crossCol=s.crossover==="GOLDEN_CROSS"?"background:rgba(34,197,94,.15);color:var(--g);border:1px solid rgba(34,197,94,.25)":s.crossover==="DEATH_CROSS"?"background:rgba(239,68,68,.15);color:var(--r);border:1px solid rgba(239,68,68,.25)":"background:rgba(255,255,255,.05);color:var(--m)";
     if(s.crossover&&s.crossover!=="NONE")pills.push('<span class="tech-pill" style="'+crossCol+'">'+(s.crossover==="GOLDEN_CROSS"?"☀ Golden Cross":"💀 Death Cross")+'</span>');
@@ -1008,20 +1020,35 @@ function localSigs(){
     var nearCeWall=ceWall>0&&Math.abs(px-ceWall)/px<0.008; // within 0.8% of CE wall
     var nearPeWall=peWall>0&&Math.abs(px-peWall)/px<0.008;
 
-    // ── LAYER 2: Technicals ──
+    // ── LAYER 2: Multi-Timeframe Technicals ──
     var sma20=s.sma20||0, sma50=s.sma50||0, rsi=s.rsi||50;
     var aboveSma20=sma20>0&&px>sma20;
     var aboveSma50=sma50>0&&px>sma50;
     var golden=s.crossover==="GOLDEN_CROSS";
     var death=s.crossover==="DEATH_CROSS";
-    var trendBull=s.trend==="BULLISH";  // SMA20>SMA50
-    var trendBear=s.trend==="BEARISH";  // SMA20<SMA50
-    var rsiBull=rsi>0&&rsi>=35&&rsi<=55&&aboveSma20; // RSI in bullish zone
-    var rsiBear=rsi>0&&rsi>=45&&rsi<=65&&!aboveSma20; // RSI in bearish zone
-    var rsiOS=rsi>0&&rsi<32;  // oversold
-    var rsiOB=rsi>0&&rsi>68;  // overbought
+    var trendBull=s.trend==="BULLISH";
+    var trendBear=s.trend==="BEARISH";
+    var rsiBull=rsi>0&&rsi>=35&&rsi<=55&&aboveSma20;
+    var rsiBear=rsi>0&&rsi>=45&&rsi<=65&&!aboveSma20;
+    var rsiOS=rsi>0&&rsi<32;
+    var rsiOB=rsi>0&&rsi>68;
     var breakout=s.breakout||false;
     var breakdown=s.breakdown||false;
+    // 15-min and 1-hour SMA alignment
+    var trend15=s.trend15||"";
+    var trend1h=s.trend1h||"";
+    var tfAlign=s.tfAlignment||"MIXED";
+    var allTFBull=tfAlign==="STRONG_BULL";
+    var allTFBear=tfAlign==="STRONG_BEAR";
+    var mostlyBull=tfAlign==="BULL"||allTFBull;
+    var mostlyBear=tfAlign==="BEAR"||allTFBear;
+    var tfMixed=tfAlign==="MIXED";
+    // CPR
+    var cpr=s.cpr||null;
+    var cprNarrow=cpr&&cpr.is_narrow;  // trending day expected
+    var aboveCPR=cpr&&px>cpr.pivot;
+    var belowCPR=cpr&&px<cpr.pivot;
+    var atCPR=cpr&&Math.abs(px-cpr.pivot)/px<0.002; // within 0.2% of pivot
 
     // ── LAYER 3: IV Context ──
     var ivVsVix=iv>0&&VIX>0?iv/VIX:1;
@@ -1047,19 +1074,36 @@ function localSigs(){
     if(nearPeWall){bullScore+=2;bullReasons.push("At PE wall ₹"+peWall+" = strong support");}
     if(nearCeWall){bearScore+=2;bearReasons.push("At CE wall ₹"+ceWall+" = strong resistance");}
 
-    // Technical confirmations
-    if(golden){bullScore+=4;bullReasons.push("🔥 Golden Cross (SMA20 crossed above SMA50)");}
-    if(death){bearScore+=4;bearReasons.push("🔥 Death Cross (SMA20 crossed below SMA50)");}
+    // ── Technical Confirmations ──
+    // 5-min signals
+    if(golden){bullScore+=4;bullReasons.push("🔥 Golden Cross (SMA20 crossed above SMA50 on 5-min)");}
+    if(death){bearScore+=4;bearReasons.push("🔥 Death Cross (SMA20 crossed below SMA50 on 5-min)");}
     if(breakout&&aboveSma20){bullScore+=3;bullReasons.push("Day high breakout + above SMA20");}
     if(breakdown&&!aboveSma20){bearScore+=3;bearReasons.push("Day low breakdown + below SMA20");}
-    if(trendBull&&aboveSma50){bullScore+=1;bullReasons.push("SMA trend bullish, price above SMA50 "+sma50);}
-    if(trendBear&&!aboveSma50){bearScore+=1;bearReasons.push("SMA trend bearish, price below SMA50 "+sma50);}
-    if(rsiOS&&aboveSma20){bullScore+=2;bullReasons.push("RSI "+rsi+" oversold + holding above SMA20");}
+    if(rsiOS&&aboveSma20){bullScore+=2;bullReasons.push("RSI "+rsi+" oversold + above SMA20");}
     if(rsiOB&&!aboveSma20){bearScore+=2;bearReasons.push("RSI "+rsi+" overbought + below SMA20");}
-    if(rsiBull){bullScore+=1;bullReasons.push("RSI "+rsi+" in bullish momentum zone");}
-    if(rsiBear){bearScore+=1;bearReasons.push("RSI "+rsi+" in bearish momentum zone");}
-    if(aboveSma20&&aboveSma50){bullScore+=1;bullReasons.push("Price above both SMA20("+sma20+") & SMA50("+sma50+")");}
-    if(!aboveSma20&&!aboveSma50){bearScore+=1;bearReasons.push("Price below both SMA20("+sma20+") & SMA50("+sma50+")");}
+    if(aboveSma20&&aboveSma50){bullScore+=1;bullReasons.push("Price above SMA20("+sma20+") & SMA50("+sma50+") on 5-min");}
+    if(!aboveSma20&&!aboveSma50){bearScore+=1;bearReasons.push("Price below SMA20("+sma20+") & SMA50("+sma50+") on 5-min");}
+    // Multi-TF alignment (most powerful)
+    if(allTFBull){bullScore+=4;bullReasons.push("✅ All 3 timeframes BULLISH (5min+15min+1hr aligned)");}
+    else if(mostlyBull){bullScore+=2;bullReasons.push("📈 2 of 3 timeframes bullish");}
+    if(allTFBear){bearScore+=4;bearReasons.push("✅ All 3 timeframes BEARISH (5min+15min+1hr aligned)");}
+    else if(mostlyBear){bearScore+=2;bearReasons.push("📉 2 of 3 timeframes bearish");}
+    if(tfMixed&&!golden&&!death){
+      // Conflicting TFs — reduce max conviction
+      bullScore=Math.min(bullScore,4);
+      bearScore=Math.min(bearScore,4);
+      bullReasons.push("⚠ Mixed TF signals — reduced conviction");
+    }
+    // CPR scoring
+    if(cprNarrow){
+      if(aboveCPR){bullScore+=2;bullReasons.push("📐 Narrow CPR (trending day) + price above pivot ₹"+cpr.pivot);}
+      else if(belowCPR){bearScore+=2;bearReasons.push("📐 Narrow CPR (trending day) + price below pivot ₹"+cpr.pivot);}
+    } else if(cpr) {
+      if(aboveCPR){bullScore+=1;bullReasons.push("Price above CPR pivot ₹"+cpr.pivot);}
+      else if(belowCPR){bearScore+=1;bearReasons.push("Price below CPR pivot ₹"+cpr.pivot);}
+    }
+    if(atCPR&&cprNarrow){neutralScore+=2;neutReasons.push("Price at CPR pivot on narrow CPR — breakout imminent");}
 
     // IV context
     if(ivHigh){neutralScore+=3;neutReasons.push("IV("+iv+"%) >> VIX("+VIX+") — sell premium");}
@@ -1684,7 +1728,7 @@ window.onload=function(){
   // Scan after short delay
   setTimeout(function(){try{runScan(false);}catch(e){}},3000);
   setInterval(function(){try{runScan(false);}catch(e){}},180000);
-  setTimeout(function(){if(CS){fetchSMC(CS.sym);fetchOI(CS.sym);}},2000);
+  setTimeout(function(){if(CS){fetchSMC(CS.sym);fetchOI(CS.sym);fetchMTF(CS.sym);}},2000);
   loadSignalLog();renderPerformance();
   // Fetch OI every 60 seconds during market hours
   setInterval(function(){if(CS&&SERVER_URL)fetchOI(CS.sym);},60000);
@@ -1716,14 +1760,14 @@ function showSMCStrip(sym){
   if(!strip)return;
   var s=allS().filter(function(x){return x.sym===sym;})[0];
   if(!s){strip.style.display="none";return;}
-  var parts=[];
-  if(s.sma20)parts.push('<span style="display:inline-block;padding:2px 8px;border-radius:5px;background:rgba(255,255,255,.06);font-size:.6rem;font-weight:600;margin-right:4px;color:#94a3b8">SMA20: '+s.sma20+'</span>');
-  if(s.sma50)parts.push('<span style="display:inline-block;padding:2px 8px;border-radius:5px;background:rgba(255,255,255,.06);font-size:.6rem;font-weight:600;margin-right:4px;color:#94a3b8">SMA50: '+s.sma50+'</span>');
   var smc=s.smc||{};
+  var parts=[];
+
+  // Only SMC data — no SMA (already shown in tech strip above)
   if(smc.structure&&smc.structure!=="UNKNOWN"){
-    parts.push('<span style="display:inline-block;padding:2px 6px;color:#64748b;font-size:.58rem;margin-right:2px">|SMC|</span>');
     var sc=smc.structure==="BULLISH"?"rgba(34,197,94,.12)":smc.structure==="BEARISH"?"rgba(239,68,68,.12)":"rgba(245,158,11,.12)";
     var tc=smc.structure==="BULLISH"?"var(--g)":smc.structure==="BEARISH"?"var(--r)":"var(--y)";
+    parts.push('<span style="display:inline-block;padding:2px 6px;color:#64748b;font-size:.58rem;margin-right:4px">|SMC|</span>');
     parts.push('<span style="display:inline-block;padding:2px 8px;border-radius:5px;background:'+sc+';color:'+tc+';font-size:.6rem;font-weight:700;margin-right:4px">Structure: '+smc.structure+'</span>');
   }
   (smc.sweep||[]).forEach(function(sw){
@@ -1733,17 +1777,28 @@ function showSMCStrip(sym){
   (smc.ob||[]).forEach(function(ob){
     if(!s.px||Math.abs(s.px-ob.mid)/s.px>0.015)return;
     var oc=ob.type==="BULLISH"?"var(--g)":"var(--r)";
-    parts.push('<span style="display:inline-block;padding:2px 8px;border-radius:5px;background:rgba(59,130,246,.1);color:var(--b);font-size:.6rem;font-weight:700;margin-right:4px">OB '+ob.type.slice(0,4)+' ₹'+ob.mid+'</span>');
+    var obg=ob.type==="BULLISH"?"rgba(34,197,94,.1)":"rgba(239,68,68,.1)";
+    parts.push('<span style="display:inline-block;padding:2px 8px;border-radius:5px;background:'+obg+';color:'+oc+';border:1px solid '+oc+';font-size:.6rem;font-weight:700;margin-right:4px">OB '+ob.type.slice(0,4)+' ₹'+ob.mid+'</span>');
   });
   (smc.fvg||[]).slice(-3).forEach(function(fvg){
     if(fvg.filled||!s.px||Math.abs(s.px-fvg.mid)/s.px>0.02)return;
-    parts.push('<span style="display:inline-block;padding:2px 8px;border-radius:5px;background:rgba(139,92,246,.1);color:var(--p);font-size:.6rem;font-weight:700;margin-right:4px">FVG '+fvg.type.slice(0,4)+' ₹'+fvg.bottom+'-'+fvg.top+'</span>');
+    var fc=fvg.type==="BULLISH"?"var(--g)":"var(--r)";
+    parts.push('<span style="display:inline-block;padding:2px 8px;border-radius:5px;background:rgba(139,92,246,.1);color:var(--p);border:1px solid rgba(139,92,246,.3);font-size:.6rem;font-weight:700;margin-right:4px">FVG '+fvg.type.slice(0,4)+' ₹'+fvg.bottom+'-'+fvg.top+'</span>');
   });
-  if(parts.length){strip.style.display="block";strip.innerHTML=parts.join("");}
-  else strip.style.display="none";
+
+  if(parts.length){
+    strip.style.display="block";
+    strip.innerHTML=parts.join("");
+  } else if(smc.structure){
+    // At minimum show structure even if no sweep/OB/FVG
+    strip.style.display="block";
+    strip.innerHTML='<span style="display:inline-block;padding:2px 6px;color:#64748b;font-size:.58rem;margin-right:4px">|SMC|</span><span style="font-size:.6rem;color:var(--m)">No zones near price</span>';
+  } else {
+    strip.style.display="none";
+  }
 }
 
-// ══ Scanner - Market Overview ══
+
 function renderScanner(){
   var el=document.getElementById("scanList");
   if(!el)return;
@@ -1944,6 +1999,31 @@ function clearPerfLog(){
 
 
 function perfBtn(b){updateSignalOutcome(b.dataset.id,b.dataset.r,parseFloat(b.dataset.px)||0);}
+
+// ══════════════════════════════════════════════
+// MULTI-TIMEFRAME + CPR FETCH
+// ══════════════════════════════════════════════
+function fetchMTF(sym){
+  var url=SERVER_URL||localStorage.getItem("pt_server")||"";
+  if(!url)return;
+  fetch(url+"/mtf/"+sym,{signal:AbortSignal.timeout(15000)})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(!d||!d.ok||!d.data)return;
+    var s=allS().filter(function(x){return x.sym===sym;})[0];
+    if(!s)return;
+    s.mtf=d.data;
+    // Store individual TF data
+    if(d.data.tf5){s.sma20=d.data.tf5.sma20;s.sma50=d.data.tf5.sma50;s.rsi=d.data.tf5.rsi;s.trend=d.data.tf5.trend;s.crossover=d.data.tf5.crossover;}
+    if(d.data.tf15){s.sma20_15=d.data.tf15.sma20;s.sma50_15=d.data.tf15.sma50;s.trend15=d.data.tf15.trend;}
+    if(d.data.tf1h){s.sma20_1h=d.data.tf1h.sma20;s.sma50_1h=d.data.tf1h.sma50;s.trend1h=d.data.tf1h.trend;}
+    if(d.data.cpr){s.cpr=d.data.cpr;}
+    s.tfAlignment=d.data.alignment||"MIXED";
+    // Update tech strip with multi-TF data
+    if(CS&&CS.sym===sym){showTech(CS);showSMCStrip(sym);}
+  }).catch(function(){});
+}
+
 </script>
 </body>
 </html>
