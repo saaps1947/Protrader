@@ -677,16 +677,14 @@ function fetchFromServer(){
     setStatus("live","Server · "+t);
     var isMCX=CS.sym==="CRUDEOIL"||CS.sym==="GOLD";
     document.getElementById("dataSrc").textContent="PRO Trader Server · "+t+(isMCX?" · MCX approx ₹ (USD×84)":"");
-    // Convert USD commodity prices to approximate INR for MCX
-    var usdInr=84; // approximate
-    var crude=SD.com.filter(function(s){return s.sym==="CRUDEOIL";})[0];
-    if(crude&&crude.px>0&&crude.px<500){// Yahoo gives USD ~60-100
-      crude.px=Math.round(crude.px*usdInr);crude.chg=Math.round(crude.chg*usdInr);
-      var cStep=50;crude.atm=Math.round(crude.px/cStep)*cStep;crude.step=cStep;
+    // MCX prices now converted on server with live USD/INR rate
+    // Just update ATM strikes based on received INR prices
+    var crude=allS().filter(function(s){return s.sym==="CRUDEOIL";})[0];
+    if(crude&&crude.px>500){// Already in INR from server
+      var cStep=100;crude.atm=Math.round(crude.px/cStep)*cStep;crude.step=cStep;
     }
-    var gold=SD.com.filter(function(s){return s.sym==="GOLD";})[0];
-    if(gold&&gold.px>0&&gold.px<5000){// Yahoo gives USD/oz ~2000-3000
-      gold.px=Math.round(gold.px*usdInr/31.1*10);gold.chg=Math.round(gold.chg*usdInr/31.1*10);
+    var gold=allS().filter(function(s){return s.sym==="GOLD";})[0];
+    if(gold&&gold.px>1000){// Already in INR from server
       var gStep=100;gold.atm=Math.round(gold.px/gStep)*gStep;gold.step=gStep;
     }
     // Fetch OI for current instrument
