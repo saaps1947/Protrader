@@ -689,20 +689,12 @@ var JOURNAL=[
 // ═══════════════════════════════════════════
 function istNow(){return new Date(Date.now()+(5*60+30)*60000);}
 function istTime(){var d=istNow(),h=d.getUTCHours(),m=d.getUTCMinutes(),ap=h>=12?"PM":"AM",h12=h%12||12;return h12+":"+(m<10?"0":"")+m+" "+ap;}
-function isOpen(){
-  // NSE market: Mon-Fri, 9:15 AM - 3:30 PM IST
-  // IST = UTC + 5:30, so in UTC: 3:45 AM - 10:00 AM
-  var d=new Date();
-  var utcMins=d.getUTCHours()*60+d.getUTCMinutes();
-  var istMins=utcMins+330; // IST = UTC + 330 minutes
-  if(istMins>=1440)istMins-=1440; // wrap midnight
-  var day=d.getUTCDay();
-  // Adjust day for IST midnight wrap
-  if(utcMins+330>=1440&&day<6)day++;
-  if(day===0||day===6)return false; // weekend
-  return istMins>=555&&istMins<=930; // 9:15 AM (555) to 3:30 PM (930) IST
-}
-function mktTxt(){var d=istNow(),day=d.getUTCDay(),h=d.getUTCHours(),m=d.getUTCMinutes(),mins=h*60+m;if(day===0)return"Closed (Sun)";if(day===6)return"Closed (Sat)";if(mins<555)return"Pre-market";if(mins>=555&&mins<=930)return"● LIVE";return"Closed";}
+function istMinsNow(){var d=new Date();return(d.getUTCHours()*60+d.getUTCMinutes()+330)%1440;}
+function istDayNow(){var d=new Date();var u=d.getUTCHours()*60+d.getUTCMinutes();var day=d.getUTCDay();if(u+330>=1440&&day<6)day=(day+1)%7;return day;}
+function isOpen(){var m=istMinsNow(),day=istDayNow();if(day===0||day===6)return false;return m>=555&&m<=930;}
+function isMCXOpen(){var m=istMinsNow(),day=istDayNow();if(day===0)return false;if(day===6)return m>=540&&m<=840;return m>=540&&m<=1410;}
+function isSymMCX(sym){return sym==="CRUDEOIL"||sym==="GOLD"||sym==="SILVER";}
+function mktTxt(){var d=istNow(),day=d.getUTCDay(),h=d.getUTCHours(),m=d.getUTCMinutes(),mins=h*60+m;if(day===0)return"Closed (Sun)";if(day===6)return"Closed (Sat)";if(mins<555)return"Pre-market";if(mins>=555&&mins<=930)return"● LIVE";if(isSymMCX(CS&&CS.sym||"")&&isMCXOpen())return"● MCX LIVE";return"Closed";}
 function nextExp(sym){var d=istNow(),day=d.getUTCDay();if(sym==="SENSEX"){var dt=day<=4?4-day:11-day;return new Date(d.getTime()+dt*864e5);}var dt2=day<=2?2-day:9-day;if(!dt2)dt2=7;return new Date(d.getTime()+dt2*864e5);}
 
 // ═══════════════════════════════════════════
@@ -797,7 +789,22 @@ function fetchFromServer(){
   });
 }
 
-// fetchOI defined below (Kite → NSE → Server fallback chain)
+function fetchOI(sym){
+  if(!SERVER_URL)return;
+  fetch(SERVER_URL+"/oi/"+sym,{signal:AbortSignal.timeout(10000)})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(!d||!d.ok||!d.data)return;
+    var sc=allS().filter(function(s){return s.sym===sym;})[0];
+    if(!sc)return;
+    var oi=d.data;
+    sc.cOI=oi.ce_oi||0;sc.pOI=oi.pe_oi||0;
+    sc.cC=oi.ce_chg||0;sc.pC=oi.pe_chg||0;
+    sc.pcr=oi.pcr||0;sc.mp=oi.max_pain||0;
+    sc.iv=oi.iv||0;sc.cW=oi.ce_wall||0;sc.pW=oi.pe_wall||0;
+    updateHero();updateOI(CS);
+  }).catch(function(){});
+}
 
 function startPolling(){
   // Fetch immediately
@@ -807,10 +814,9 @@ function startPolling(){
     if(isOpen()||!serverOk)fetchFromServer();
   },isOpen()?30000:300000);
   // More frequent OI updates during market
-  // Fetch OI every 2 min - NSE data available 24/7
   setInterval(function(){
     if(CS&&CS.sym)fetchOI(CS.sym);
-  },120000);
+  },60000);
 }
 
 function setStatus(state,msg){
@@ -879,7 +885,7 @@ function showTech(s){
 }
 
 function buildTicker(){
-  var all=allS(),h="";
+  var all=allS().filter(function(s){return s.px>0;});if(!all.length)all=allS();var h="";
   for(var p=0;p<2;p++){all.forEach(function(s){var up=s.chg>=0;h+="<div class='tki'><span class='tki-n'>"+s.sym+"</span><span class='tki-p "+(up?"up":"dn")+"' "+(p===0?"id='tp-"+s.sym+"'":"")+">"+( s.px?s.px.toLocaleString("en-IN"):"–")+"</span><span class='tki-c "+(up?"upb":"dnb")+"'>"+(s.pct?(up?"+":"")+s.pct.toFixed(2)+"%":"–")+"</span></div>";})}
   document.getElementById("tkWrap").innerHTML=h;
 }
@@ -887,7 +893,20 @@ function updTicker(){allS().forEach(function(s){var el=document.getElementById("
 
 function updateOI(s){
   var strip=document.getElementById("oiStrip");
-  if(!strip||!s.cOI){if(strip)strip.style.display="none";return;}
+  if(!strip||!s.cOI){
+    if(strip){
+      if(isSymMCX(s.sym)){
+        strip.style.display="block";
+        strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>MCX options OI not available via public API. Price data active.</div>";
+      } else if(!isOpen()){
+        strip.style.display="block";
+        strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>NSE Option Chain loads at market open (9:15 AM IST).</div>";
+      } else {
+        strip.style.display="none";
+      }
+    }
+    return;
+  }
   strip.style.display="block";
   document.getElementById("oiSym").textContent=s.sym;
   document.getElementById("oiTime").textContent=istTime()+" IST";
@@ -1536,8 +1555,6 @@ function ckLoad(){
     var k=localStorage.getItem("pt_apiKey")||"";
     var s=localStorage.getItem("pt_apiSecret")||"";
     var t=localStorage.getItem("pt_accessToken")||"";
-    // Auto-restore KITE connection from saved token
-    if(k&&t){KITE.apiKey=k;KITE.accessToken=t;KITE.apiSecret=s;KITE.connected=true;}
     var e;
     e=document.getElementById("ck_key");if(e&&k)e.value=k;
     e=document.getElementById("ck_sec");if(e&&s)e.value=s;
@@ -1968,16 +1985,10 @@ function fetchOIFromKite(sym,cb){
     instruments.push("NFO:"+sym+expStr+sk+"PE");
   });
   
-  // Fetch quotes from Kite - also try using /quote/ltp which is lighter
-  console.log("[Kite OI] Fetching for",sym,"expiry:",expStr,"instruments:",instruments.slice(0,2));
+  // Fetch quotes from Kite
   var qs=instruments.map(function(i){return "i="+encodeURIComponent(i);}).join("&");
-  // Note: Kite API may block direct browser fetch due to CORS
-  // Route through our server as authenticated proxy
-  var kiteUrl="https://api.kite.trade/quote?"+qs;
-  var proxyUrl=(SERVER_URL||"")+"/kite_proxy?url="+encodeURIComponent(kiteUrl)+"&key="+KITE.apiKey+"&token="+KITE.accessToken;
-  var fetchUrl=SERVER_URL?proxyUrl:kiteUrl; // use proxy if server available
-  fetch(fetchUrl,{
-    headers:SERVER_URL?{}:{
+  fetch("https://api.kite.trade/quote?"+qs,{
+    headers:{
       "X-Kite-Version":"3",
       "Authorization":"token "+KITE.apiKey+":"+KITE.accessToken
     }
@@ -2043,29 +2054,25 @@ function getNearestExpiry(sym){
 }
 
 function formatKiteExpiry(exp){
-  // Kite weekly option format: YYMDDAY where M is month number (single digit for Oct=O,Nov=N,Dec=D)
-  // Example: 26 May 2026 weekly = 2652 (year=26, month=5, day=22 for that week)
-  // For monthly: 24MAY format
+  // Convert YYYY-MM-DD or "28 MAY" to Kite format like "24MAY"
   if(!exp)return "";
-  var d;
-  if(typeof exp==="string"&&exp.indexOf(" ")>0){
-    var parts=exp.trim().split(" ");
-    var months2=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
-    var mon2=parts[1]?parts[1].toUpperCase().slice(0,3):"";
-    var monIdx=months2.indexOf(mon2);
-    d=new Date(new Date().getFullYear(), monIdx>=0?monIdx:0, parseInt(parts[0])||1);
-  } else {
-    d=new Date(exp);
+  var months=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+  var d=new Date(exp);
+  if(isNaN(d.getTime())){
+    // Try parsing "28 MAY" format
+    var parts=exp.toString().split(" ");
+    if(parts.length>=2){
+      var day=parseInt(parts[0]);
+      var mon=parts[1].toUpperCase().slice(0,3);
+      var yr=new Date().getFullYear().toString().slice(2);
+      return yr+mon+(day<10?"0"+day:""+day);
+    }
+    return "";
   }
-  if(isNaN(d.getTime()))return "";
   var yr=d.getFullYear().toString().slice(2);
-  var mon=d.getMonth()+1; // 1-12
+  var mon=months[d.getMonth()];
   var day=d.getDate();
-  // Weekly format (Kite): YYMDd e.g. 26522 = year26, month5, day22
-  // Monthly format: YYMON e.g. 26MAY
-  // Use monthly format as it's more reliable
-  var months3=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
-  return yr+months3[d.getMonth()]+(day<10?"0"+day:""+day);
+  return yr+mon+(day<10?"0"+day:""+day);
 }
 
 function parseNSEOptionChain(d,sym){
@@ -2111,7 +2118,6 @@ function fetchOIFromServer(sym){
 function applyOIData(sym,o){
   var s=allS().filter(function(x){return x.sym===sym;})[0];
   if(!s)return;
-  console.log("[OI ✅] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" Buildup:"+o.buildup);
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.ceWall=o.ce_wall||0;s.peWall=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
