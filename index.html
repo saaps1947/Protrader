@@ -785,22 +785,7 @@ function fetchFromServer(){
   });
 }
 
-function fetchOI(sym){
-  if(!SERVER_URL)return;
-  fetch(SERVER_URL+"/oi/"+sym,{signal:AbortSignal.timeout(10000)})
-  .then(function(r){return r.json();})
-  .then(function(d){
-    if(!d||!d.ok||!d.data)return;
-    var sc=allS().filter(function(s){return s.sym===sym;})[0];
-    if(!sc)return;
-    var oi=d.data;
-    sc.cOI=oi.ce_oi||0;sc.pOI=oi.pe_oi||0;
-    sc.cC=oi.ce_chg||0;sc.pC=oi.pe_chg||0;
-    sc.pcr=oi.pcr||0;sc.mp=oi.max_pain||0;
-    sc.iv=oi.iv||0;sc.cW=oi.ce_wall||0;sc.pW=oi.pe_wall||0;
-    updateHero();updateOI(CS);
-  }).catch(function(){});
-}
+// fetchOI defined below (Kite → NSE → Server fallback chain)
 
 function startPolling(){
   // Fetch immediately
@@ -1538,6 +1523,8 @@ function ckLoad(){
     var k=localStorage.getItem("pt_apiKey")||"";
     var s=localStorage.getItem("pt_apiSecret")||"";
     var t=localStorage.getItem("pt_accessToken")||"";
+    // Auto-restore KITE connection from saved token
+    if(k&&t){KITE.apiKey=k;KITE.accessToken=t;KITE.apiSecret=s;KITE.connected=true;}
     var e;
     e=document.getElementById("ck_key");if(e&&k)e.value=k;
     e=document.getElementById("ck_sec");if(e&&s)e.value=s;
@@ -1968,10 +1955,16 @@ function fetchOIFromKite(sym,cb){
     instruments.push("NFO:"+sym+expStr+sk+"PE");
   });
   
-  // Fetch quotes from Kite
+  // Fetch quotes from Kite - also try using /quote/ltp which is lighter
+  console.log("[Kite OI] Fetching for",sym,"expiry:",expStr,"instruments:",instruments.slice(0,2));
   var qs=instruments.map(function(i){return "i="+encodeURIComponent(i);}).join("&");
-  fetch("https://api.kite.trade/quote?"+qs,{
-    headers:{
+  // Note: Kite API may block direct browser fetch due to CORS
+  // Route through our server as authenticated proxy
+  var kiteUrl="https://api.kite.trade/quote?"+qs;
+  var proxyUrl=(SERVER_URL||"")+"/kite_proxy?url="+encodeURIComponent(kiteUrl)+"&key="+KITE.apiKey+"&token="+KITE.accessToken;
+  var fetchUrl=SERVER_URL?proxyUrl:kiteUrl; // use proxy if server available
+  fetch(fetchUrl,{
+    headers:SERVER_URL?{}:{
       "X-Kite-Version":"3",
       "Authorization":"token "+KITE.apiKey+":"+KITE.accessToken
     }
@@ -2037,25 +2030,29 @@ function getNearestExpiry(sym){
 }
 
 function formatKiteExpiry(exp){
-  // Convert YYYY-MM-DD or "28 MAY" to Kite format like "24MAY"
+  // Kite weekly option format: YYMDDAY where M is month number (single digit for Oct=O,Nov=N,Dec=D)
+  // Example: 26 May 2026 weekly = 2652 (year=26, month=5, day=22 for that week)
+  // For monthly: 24MAY format
   if(!exp)return "";
-  var months=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
-  var d=new Date(exp);
-  if(isNaN(d.getTime())){
-    // Try parsing "28 MAY" format
-    var parts=exp.toString().split(" ");
-    if(parts.length>=2){
-      var day=parseInt(parts[0]);
-      var mon=parts[1].toUpperCase().slice(0,3);
-      var yr=new Date().getFullYear().toString().slice(2);
-      return yr+mon+(day<10?"0"+day:""+day);
-    }
-    return "";
+  var d;
+  if(typeof exp==="string"&&exp.indexOf(" ")>0){
+    var parts=exp.trim().split(" ");
+    var months2=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+    var mon2=parts[1]?parts[1].toUpperCase().slice(0,3):"";
+    var monIdx=months2.indexOf(mon2);
+    d=new Date(new Date().getFullYear(), monIdx>=0?monIdx:0, parseInt(parts[0])||1);
+  } else {
+    d=new Date(exp);
   }
+  if(isNaN(d.getTime()))return "";
   var yr=d.getFullYear().toString().slice(2);
-  var mon=months[d.getMonth()];
+  var mon=d.getMonth()+1; // 1-12
   var day=d.getDate();
-  return yr+mon+(day<10?"0"+day:""+day);
+  // Weekly format (Kite): YYMDd e.g. 26522 = year26, month5, day22
+  // Monthly format: YYMON e.g. 26MAY
+  // Use monthly format as it's more reliable
+  var months3=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+  return yr+months3[d.getMonth()]+(day<10?"0"+day:""+day);
 }
 
 function parseNSEOptionChain(d,sym){
