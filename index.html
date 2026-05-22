@@ -689,7 +689,19 @@ var JOURNAL=[
 // ═══════════════════════════════════════════
 function istNow(){return new Date(Date.now()+(5*60+30)*60000);}
 function istTime(){var d=istNow(),h=d.getUTCHours(),m=d.getUTCMinutes(),ap=h>=12?"PM":"AM",h12=h%12||12;return h12+":"+(m<10?"0":"")+m+" "+ap;}
-function isOpen(){var d=istNow(),day=d.getUTCDay(),h=d.getUTCHours(),m=d.getUTCMinutes();if(day===0||day===6)return false;var mins=h*60+m;return mins>=555&&mins<=930;}
+function isOpen(){
+  // NSE market: Mon-Fri, 9:15 AM - 3:30 PM IST
+  // IST = UTC + 5:30, so in UTC: 3:45 AM - 10:00 AM
+  var d=new Date();
+  var utcMins=d.getUTCHours()*60+d.getUTCMinutes();
+  var istMins=utcMins+330; // IST = UTC + 330 minutes
+  if(istMins>=1440)istMins-=1440; // wrap midnight
+  var day=d.getUTCDay();
+  // Adjust day for IST midnight wrap
+  if(utcMins+330>=1440&&day<6)day++;
+  if(day===0||day===6)return false; // weekend
+  return istMins>=555&&istMins<=930; // 9:15 AM (555) to 3:30 PM (930) IST
+}
 function mktTxt(){var d=istNow(),day=d.getUTCDay(),h=d.getUTCHours(),m=d.getUTCMinutes(),mins=h*60+m;if(day===0)return"Closed (Sun)";if(day===6)return"Closed (Sat)";if(mins<555)return"Pre-market";if(mins>=555&&mins<=930)return"● LIVE";return"Closed";}
 function nextExp(sym){var d=istNow(),day=d.getUTCDay();if(sym==="SENSEX"){var dt=day<=4?4-day:11-day;return new Date(d.getTime()+dt*864e5);}var dt2=day<=2?2-day:9-day;if(!dt2)dt2=7;return new Date(d.getTime()+dt2*864e5);}
 
@@ -795,9 +807,10 @@ function startPolling(){
     if(isOpen()||!serverOk)fetchFromServer();
   },isOpen()?30000:300000);
   // More frequent OI updates during market
+  // Fetch OI every 2 min - NSE data available 24/7
   setInterval(function(){
-    if(isOpen()&&CS.sym&&SERVER_URL)fetchOI(CS.sym);
-  },60000);
+    if(CS&&CS.sym)fetchOI(CS.sym);
+  },120000);
 }
 
 function setStatus(state,msg){
@@ -2098,6 +2111,7 @@ function fetchOIFromServer(sym){
 function applyOIData(sym,o){
   var s=allS().filter(function(x){return x.sym===sym;})[0];
   if(!s)return;
+  console.log("[OI ✅] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" Buildup:"+o.buildup);
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.ceWall=o.ce_wall||0;s.peWall=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
