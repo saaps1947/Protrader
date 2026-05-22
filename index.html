@@ -16,7 +16,7 @@
 body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;min-height:100dvh;overflow-x:hidden}
 /* TICKER */
 .ticker{height:30px;overflow:hidden;background:#000;border-bottom:1px solid var(--border);display:flex;align-items:center;position:sticky;top:0;z-index:100}
-.tk-wrap{display:flex;animation:scroll 30s linear infinite;white-space:nowrap}
+.tk-wrap{display:flex;animation:scroll 60s linear infinite;white-space:nowrap}
 @keyframes scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
 .tki{display:inline-flex;align-items:center;gap:5px;padding:0 14px;height:30px;border-right:1px solid #111}
 .tki-n{font-size:.58rem;font-weight:700;color:var(--m)}
@@ -463,6 +463,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 <!-- BIAS -->
 
 <div id="smcStrip" style="display:none;overflow-x:auto;white-space:nowrap;padding:5px 10px;border-top:1px solid var(--border);border-bottom:1px solid var(--border);background:rgba(0,0,0,.2);scrollbar-width:none"></div>
+<div id="mktBreadth" style="display:none;align-items:center;padding:5px 10px;border-top:1px solid var(--border);font-size:.62rem"></div>
 <div class="bias">
   <button class="bb on" id="bALL" onclick="setBias(this,'ALL')"><span>◉</span><span>All</span></button>
   <button class="bb" id="bBULL" onclick="setBias(this,'BULL')"><span>▲</span><span>Bullish</span></button>
@@ -925,7 +926,37 @@ function nav(el,id){
   if(id==="auto")updAT();
 }
 function gotoAT(){nav(document.querySelectorAll(".nb")[2],"auto");}
-function setBias(btn,b){bias=b;document.querySelectorAll(".bb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");renderFeed();renderScanner();}
+function setBias(btn,b){bias=b;document.querySelectorAll(".bb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");renderFeed();}
+
+function updateBiasCounts(){
+  var bulls=allSigs.filter(function(s){return s.bias==="BULLISH";}).length;
+  var bears=allSigs.filter(function(s){return s.bias==="BEARISH";}).length;
+  var neus=allSigs.filter(function(s){return s.bias==="NEUTRAL";}).length;
+  var btsts=allSigs.filter(function(s){return s.isBTST||s._isBTST;}).length;
+  var total=allSigs.length;
+  // Update button labels with counts
+  var bAll=document.getElementById("bALL");
+  var bBull=document.getElementById("bBULL");
+  var bBear=document.getElementById("bBEAR");
+  var bNeu=document.getElementById("bNEU");
+  var bBtst=document.getElementById("bBTST");
+  if(bAll)bAll.innerHTML="<span>◉</span><span>All <b style='color:var(--b)'>"+total+"</b></span>";
+  if(bBull)bBull.innerHTML="<span>▲</span><span>Bullish <b style='color:var(--g)'>"+bulls+"</b></span>";
+  if(bBear)bBear.innerHTML="<span>▼</span><span>Bearish <b style='color:var(--r)'>"+bears+"</b></span>";
+  if(bNeu)bNeu.innerHTML="<span>◆</span><span>Neutral <b style='color:var(--y)'>"+neus+"</b></span>";
+  if(bBtst)bBtst.innerHTML="<span>🌙</span><span>BTST <b style='color:var(--p)'>"+btsts+"</b></span>";
+  // Show market breadth summary above buttons
+  var breadth=document.getElementById("mktBreadth");
+  if(breadth&&total>0){
+    var bullPct=Math.round(bulls/total*100);
+    var bearPct=Math.round(bears/total*100);
+    var mood=bullPct>=60?"🟢 Bullish Market":bearPct>=60?"🔴 Bearish Market":"⚡ Mixed Market";
+    var moodCol=bullPct>=60?"var(--g)":bearPct>=60?"var(--r)":"var(--y)";
+    breadth.style.display="flex";
+    breadth.innerHTML="<span style='font-size:.65rem;font-weight:700;color:"+moodCol+"'>"+mood+"</span>"+
+      "<span style='font-size:.6rem;color:var(--m);margin-left:auto'>"+bulls+"↑ "+bears+"↓ "+neus+"→ "+btsts+"🌙</span>";
+  }
+}
 function setSF(btn,f){document.querySelectorAll(".fb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");scanFilt=f;renderScanner();}
 
 // ═══════════════════════════════════════════
@@ -1001,25 +1032,50 @@ function runScan(manual){
     if(s.trend)tech.push("Trend:"+s.trend);
     if(s.breakout)tech.push("BREAKOUT");
     if(s.breakdown)tech.push("BREAKDOWN");
-    return s.sym+": ₹"+s.px+" Chg:"+s.pct+"% H:"+s.h+" L:"+s.l+
-      (s.pcr?" PCR:"+s.pcr:"")+
-      (s.mp?" MP:₹"+s.mp:"")+
-      (s.iv?" IV:"+s.iv+"%":"")+
-      (s.cOI?" CE_OI:"+(s.cOI/1e7).toFixed(1)+"Cr PE_OI:"+(s.pOI/1e7).toFixed(1)+"Cr CE_Wall:"+s.cW+" PE_Wall:"+s.pW:"")+
-      (tech.length?" ["+tech.join(",")+" ]":"");
+    var oiInfo="";
+    if(s.pcr)oiInfo+=" PCR:"+s.pcr;
+    if(s.mp)oiInfo+=" MP:₹"+s.mp+" dist:"+(s.mp_dist||0)+"pts";
+    if(s.iv)oiInfo+=" IV:"+s.iv+"%";
+    if(s.cOI)oiInfo+=" CE_OI:"+(s.cOI/1e7).toFixed(1)+"Cr PE_OI:"+(s.pOI/1e7).toFixed(1)+"Cr";
+    if(s.ceWall)oiInfo+=" CE_Wall:"+s.ceWall+" PE_Wall:"+s.peWall;
+    if(s.buildup&&s.buildup!=="UNKNOWN")oiInfo+=" OI_BUILDUP:"+s.buildup;
+    if(s.cC)oiInfo+=" CE_CHG:"+(s.cC>0?"+":"")+Math.round(s.cC/1e5)+"L PE_CHG:"+(s.pC>0?"+":"")+Math.round(s.pC/1e5)+"L";
+    var tfInfo="";
+    if(s.tfAlignment&&s.tfAlignment!=="MIXED")tfInfo+=" TF_ALIGN:"+s.tfAlignment;
+    if(s.sma20_1h)tfInfo+=" SMA20_1H:"+s.sma20_1h;
+    if(s.cpr&&s.cpr.is_narrow)tfInfo+=" CPR:NARROW(trending)";
+    return s.sym+": ₹"+s.px+" Chg:"+s.pct+"% H:"+s.h+" L:"+s.l+oiInfo+
+      (tech.length?" ["+tech.join(",")+"]":"")+tfInfo+
+      // SMC data for signal
+      (s.smc&&s.smc.structure&&s.smc.structure!=="UNKNOWN"?" SMC_STRUCT:"+s.smc.structure:"")+ 
+      (s.smc&&s.smc.sweep&&s.smc.sweep.length?" LIQ_SWEEP:₹"+s.smc.sweep[0].level+"("+s.smc.sweep[0].type+")":"")+
+      (s.smc&&s.smc.ob&&s.smc.ob.filter(function(o){return s.px&&Math.abs(s.px-o.mid)/s.px<0.015;}).length?" OB_NEAR:"+s.smc.ob[0].type+"₹"+s.smc.ob[0].mid:"")+
+      (s.smc&&s.smc.fvg&&s.smc.fvg.filter(function(f){return !f.filled&&s.px&&Math.abs(s.px-f.mid)/s.px<0.02;}).length?" FVG:"+s.smc.fvg[0].type+"₹"+s.smc.fvg[0].bottom+"-"+s.smc.fvg[0].top:"");
   }).join("\n");
   var mkt=isOpen()?"OPEN":"CLOSED";
   var prompt="You are a professional Indian F&O options trader. Date:"+new Date().toDateString()+" Market:"+mkt+" VIX:"+VIX+"\n\n"+
     "LIVE DATA:\n"+lines+"\n\n"+
     "SIGNAL FRAMEWORK (use all 3 layers for each signal):\n"+
-    "LAYER 1 OI: PCR>1.4=extreme bearish(reversal bull), PCR<0.6=extreme bullish(reversal bear). "+
-    "PCR 1.1-1.4=bullish, 0.7-0.9=bearish. Change in OI: put writing↑=support=bullish, call writing↑=resistance=bearish. "+
-    "CE wall=resistance, PE wall=support. Price below Max Pain=gravitates up, above=gravitates down.\n"+
+    "LAYER 1 OI ANALYSIS (most important for Indian F&O):\n"+
+    "PCR>1.4=extreme bearish(contrarian BULLISH reversal likely). PCR<0.6=extreme bullish(contrarian BEARISH). "+
+    "PCR 1.1-1.4=bullish, 0.7-0.9=bearish, 0.9-1.1=neutral.\n"+
+    "OI BUILDUP TYPES - mention EXPLICITLY in signal why field:\n"+
+    "LONG_BUILDUP=Put writers adding+price rising=STRONGLY BULLISH (institutions adding support).\n"+
+    "SHORT_BUILDUP=Call writers adding+price falling=STRONGLY BEARISH (institutions adding resistance).\n"+
+    "SHORT_COVERING=Call longs exiting+price rising=BULLISH but momentum may fade (bears running away).\n"+
+    "LONG_UNWINDING=Put longs exiting+price falling=BEARISH but may stabilize (bulls giving up).\n"+
+    "CE_CHG=call OI change, PE_CHG=put OI change. Positive=new positions, Negative=closing.\n"+
+    "CE wall=strongest resistance, PE wall=strongest support. Price below Max Pain=gravitates up.\n"+
     "LAYER 2 TECHNICALS: Golden Cross(SMA20>SMA50 crossover)=strongest buy. Death Cross=strongest sell. "+
     "RSI 30-50 with price above SMA20=bullish. RSI 50-70 below SMA20=bearish. "+
     "RSI<32=oversold bounce. RSI>68=overbought reversal. Breakout=buy CE, Breakdown=buy PE.\n"+
-    "LAYER 3 CONTEXT: IV/VIX>1.3=sell premium(Iron Condor). IV/VIX<0.9=buy options cheap. "+
-    "Near expiry + near Max Pain=theta play. BTST when market closed with strong close.\n"+
+    "LAYER 3 SMC (Smart Money Concepts):\n"+
+    "LIQ_SWEEP=Liquidity sweep(stop hunt by institutions) - HIGHEST probability reversal. Bear sweep→BULLISH. Bull sweep→BEARISH.\n"+
+    "OB_NEAR=Order Block near price - institutional footprint, strong support/resistance.\n"+
+    "FVG=Fair Value Gap - price magnet, will be filled. Use as entry zone or target.\n"+
+    "SMC_STRUCT=BULLISH means HH+HL pattern, BEARISH means LH+LL pattern.\n"+
+    "LAYER 4 CONTEXT: IV/VIX>1.3=sell premium(Iron Condor). IV/VIX<0.9=buy options cheap. "+
+    "Near expiry+near Max Pain=theta play. BTST when market closed with strong close.\n"+
     "RULES: Min 2 confirmations across layers. Buy options only(CE/PE). ATM or 1 strike OTM. "+
     "Crude Oil options exist on MCX. Quality>quantity.\n"+
     "Return ONLY JSON array:\n"+
@@ -1254,7 +1310,7 @@ function processScan(sigs){
   var cut=Date.now()-30*60*1000;
   allSigs=allSigs.filter(function(s){return !s._ts||s._ts>cut;});
   allSigs.sort(function(a,b){if(a.urgency==="HIGH"&&b.urgency!=="HIGH")return -1;if(b.urgency==="HIGH"&&a.urgency!=="HIGH")return 1;return (b.confidence||0)-(a.confidence||0);});
-  renderFeed();buildSF();
+  renderFeed();buildSF();updateBiasCounts();
   // Urgent pill
   var high=allSigs.filter(function(s){return s.urgency==="HIGH";}).length;
   var pill=document.getElementById("urgPill");
@@ -1745,8 +1801,28 @@ window.onload=function(){
   // Scan after short delay
   setTimeout(function(){try{runScan(false);}catch(e){}},3000);
   setInterval(function(){try{runScan(false);}catch(e){}},180000);
-  setTimeout(function(){if(CS){fetchSMC(CS.sym);fetchOI(CS.sym);fetchMTF(CS.sym);}},2000);
+  setTimeout(function(){
+  if(CS){fetchSMC(CS.sym);fetchOI(CS.sym);fetchMTF(CS.sym);}
+  // Fetch OI for all indices on startup
+  ["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"].forEach(function(sym,i){
+    setTimeout(function(){fetchOI(sym);},i*2000+3000);
+  });
+},2000);
   setInterval(function(){if(CS&&SERVER_URL)fetchSMC(CS.sym);},300000);
+  // Fetch SMC for all live instruments in background (staggered)
+  setTimeout(function(){
+    var live=allS().filter(function(s){return s.px>0&&SERVER_URL;});
+    live.forEach(function(s,i){
+      setTimeout(function(){fetchSMC(s.sym);},i*1500+5000);
+    });
+  },8000);
+  // Refresh SMC for all every 10 minutes
+  setInterval(function(){
+    var live=allS().filter(function(s){return s.px>0&&SERVER_URL;});
+    live.forEach(function(s,i){
+      setTimeout(function(){fetchSMC(s.sym);},i*1500);
+    });
+  },600000);
   setInterval(function(){if(CS&&SERVER_URL)fetchOI(CS.sym);},60000);
   setInterval(function(){if(SERVER_URL)fetch(SERVER_URL+"/ping").catch(function(){});},540000);
   loadSignalLog();setTimeout(function(){renderPerformance();},500);
@@ -1867,8 +1943,168 @@ function showSMCStrip(sym){
 // ══════════════════════════════════════════════════════
 // OI FETCH — tries server first, then reports status
 // ══════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════
+// NSE OI CLIENT-SIDE FETCH
+// Phone has Indian IP — NSE won't block it
+// Two-step: get cookies from NSE homepage, then fetch OI
+// ══════════════════════════════════════════════════════
+var _nseReady = false;
+var _nseTs = 0;
+var _nseHeaders = {
+  "Accept": "application/json, text/plain, */*",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Referer": "https://www.nseindia.com/option-chain",
+  "X-Requested-With": "XMLHttpRequest"
+};
+
+function initNSE(cb){
+  // Visit NSE homepage to get session cookies
+  // Note: Direct fetch to NSE from browser works on phone (Indian IP)
+  var now = Date.now();
+  if(_nseReady && (now - _nseTs) < 300000){ // reuse for 5 min
+    if(cb) cb();
+    return;
+  }
+  // Fetch NSE homepage to establish session
+  fetch("https://www.nseindia.com", {
+    method: "GET",
+    credentials: "include",
+    headers: {"User-Agent": "Mozilla/5.0", "Accept": "text/html"}
+  })
+  .then(function(){
+    return fetch("https://www.nseindia.com/option-chain", {
+      method: "GET",
+      credentials: "include",
+      headers: {"User-Agent": "Mozilla/5.0", "Accept": "text/html"}
+    });
+  })
+  .then(function(){
+    _nseReady = true;
+    _nseTs = now;
+    if(cb) cb();
+  })
+  .catch(function(e){
+    // NSE session init failed - try server fallback
+    _nseReady = false;
+    fetchOIFromServer(sym);
+  });
+}
+
 function fetchOI(sym){
-  var url=SERVER_URL||localStorage.getItem("pt_server")||"";
+  // Try NSE direct first (works from Indian IPs)
+  // Then fall back to server
+  fetchNSEOI(sym, function(data){
+    if(data){
+      applyOIData(sym, data);
+    } else {
+      // Fallback to server
+      fetchOIFromServer(sym);
+    }
+  });
+}
+
+function fetchNSEOI(sym, cb){
+  var isIndex = ["NIFTY","BANKNIFTY","FINNIFTY","MIDCPNIFTY","SENSEX"].indexOf(sym) >= 0;
+  var url = isIndex
+    ? "https://www.nseindia.com/api/option-chain-indices?symbol=" + sym
+    : "https://www.nseindia.com/api/option-chain-equities?symbol=" + sym;
+
+  fetch(url, {
+    credentials: "include",
+    headers: {
+      "Accept": "application/json, text/plain, */*",
+      "Referer": "https://www.nseindia.com/option-chain",
+      "X-Requested-With": "XMLHttpRequest"
+    }
+  })
+  .then(function(r){
+    if(!r.ok) throw new Error("NSE returned " + r.status);
+    return r.json();
+  })
+  .then(function(d){
+    if(!d || !d.filtered) throw new Error("No filtered data");
+    var f = d.filtered.data || [];
+    var spot = d.filtered.underlyingValue || (d.records && d.records.underlyingValue) || 0;
+    var ce_oi=0,pe_oi=0,ce_chg=0,pe_chg=0;
+    f.forEach(function(x){
+      ce_oi += (x.CE && x.CE.openInterest) || 0;
+      pe_oi += (x.PE && x.PE.openInterest) || 0;
+      ce_chg += (x.CE && x.CE.changeinOpenInterest) || 0;
+      pe_chg += (x.PE && x.PE.changeinOpenInterest) || 0;
+    });
+    var pcr = ce_oi ? Math.round(pe_oi/ce_oi*100)/100 : 0;
+    // Max Pain
+    var strikes = f.filter(function(x){return x.strikePrice;}).map(function(x){
+      return {s:x.strikePrice, ce:(x.CE&&x.CE.openInterest)||0, pe:(x.PE&&x.PE.openInterest)||0};
+    });
+    var mp=0, mpv=Infinity;
+    strikes.forEach(function(s){
+      var pain = strikes.reduce(function(a,x){
+        return a + Math.max(0,x.s-s.s)*x.ce + Math.max(0,s.s-x.s)*x.pe;
+      },0);
+      if(pain<mpv){mpv=pain;mp=s.s;}
+    });
+    // CE/PE walls
+    var ceWall = strikes.reduce(function(a,b){return a.ce>b.ce?a:b;},{ce:0,s:0}).s;
+    var peWall = strikes.reduce(function(a,b){return a.pe>b.pe?a:b;},{pe:0,s:0}).s;
+    // IV at ATM
+    var iv=0;
+    f.forEach(function(x){
+      if(Math.abs((x.strikePrice||0)-spot)<200 && !iv){
+        iv = (x.CE&&x.CE.impliedVolatility)||0;
+      }
+    });
+    // Buildup analysis
+    var buildup="UNKNOWN";
+    if(ce_chg>0&&pe_chg>0){buildup=pe_chg>ce_chg?"LONG_BUILDUP":"SHORT_BUILDUP";}
+    else if(ce_chg<0&&pe_chg<0){buildup=ce_chg<pe_chg?"SHORT_COVERING":"LONG_UNWINDING";}
+    else if(ce_chg>0&&pe_chg<0){buildup="SHORT_BUILDUP";}
+    else if(ce_chg<0&&pe_chg>0){buildup="LONG_BUILDUP";}
+    // PCR interpretation
+    var pcr_interp = pcr>1.4?"EXTREME_BULL":pcr>1.1?"BULLISH":pcr>0.9?"NEUTRAL":pcr>0.7?"BEARISH":"EXTREME_BEAR";
+    cb({
+      ce_oi:ce_oi, pe_oi:pe_oi, ce_chg:ce_chg, pe_chg:pe_chg,
+      pcr:pcr, max_pain:mp, iv:iv, ce_wall:ceWall, pe_wall:peWall,
+      spot:spot, buildup:buildup, pcr_interp:pcr_interp,
+      mp_dist: spot ? Math.round(spot-mp) : 0
+    });
+  })
+  .catch(function(e){
+    console.warn("NSE OI failed:", e.message);
+    cb(null); // trigger server fallback
+  });
+}
+
+function fetchOIFromServer(sym){
+  var url = SERVER_URL || localStorage.getItem("pt_server") || "";
+  if(!url) return;
+  fetch(url+"/oi/"+sym, {signal: AbortSignal.timeout(12000)})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(!d||!d.ok||!d.data) return;
+    applyOIData(sym, d.data);
+  })
+  .catch(function(){});
+}
+
+function applyOIData(sym, o){
+  var s = allS().filter(function(x){return x.sym===sym;})[0];
+  if(!s) return;
+  s.cOI=o.ce_oi||0; s.pOI=o.pe_oi||0;
+  s.cC=o.ce_chg||0; s.pC=o.pe_chg||0;
+  s.pcr=o.pcr||0; s.mp=o.max_pain||0; s.iv=o.iv||0;
+  s.ceWall=o.ce_wall||0; s.peWall=o.pe_wall||0;
+  s.buildup=o.buildup||"";
+  s.pcr_interp=o.pcr_interp||"";
+  s.mp_dist=o.mp_dist||0;
+  if(CS&&CS.sym===sym){updateHero(); updateOI(CS);}
+  // Also update signal context for next scan
+  console.log("[OI] "+sym+": PCR="+o.pcr+" Buildup="+o.buildup+" MP="+o.max_pain);
+}
+
+function _oldFetchOI_disabled(sym){
+  var url=SERVER_URL||"";
   if(!url)return;
   fetch(url+"/oi/"+sym,{signal:AbortSignal.timeout(12000)})
   .then(function(r){return r.json();})
