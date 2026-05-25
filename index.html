@@ -712,6 +712,7 @@ function fetchFromServer(){
     if(!d||!d.data){throw new Error("bad response");}
     serverOk=true;
     VIX=d.vix||17.5;
+    console.log('[Server] Data refreshed at',new Date().toLocaleTimeString('en-IN'));
     // Update each instrument
     Object.keys(d.data).forEach(function(sym){
       var sd=d.data[sym];
@@ -811,8 +812,8 @@ function startPolling(){
   fetchFromServer();
   // Then every 30 seconds during market hours, every 5 min otherwise
   setInterval(function(){
-    if(isOpen()||!serverOk)fetchFromServer();
-  },isOpen()?30000:300000);
+    fetchFromServer(); // Always refresh every 30s regardless of market hours
+  },30000);
   // More frequent OI updates during market
   setInterval(function(){
     if(CS&&CS.sym)fetchOI(CS.sym);
@@ -1747,6 +1748,7 @@ function loadSaved(){
 }
 
 window.onload=function(){
+  try{ckLoad();}catch(e){} // Restore KITE connection first
   try{buildTicker();}catch(e){}
   try{updateHero();}catch(e){}
   try{updAT();}catch(e){}
@@ -1767,15 +1769,16 @@ window.onload=function(){
   setTimeout(function(){try{runScan(false);}catch(e){}},3000);
   setInterval(function(){try{runScan(false);}catch(e){}},180000);
   setTimeout(function(){
-    if(CS){fetchSMC(CS.sym);fetchOI(CS.sym);fetchMTF(CS.sym);}
-    ["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"].forEach(function(sym,i){
-      setTimeout(function(){fetchOI(sym);},i*2000+3000);
-    });
-    setTimeout(function(){
-      var live=allS().filter(function(s){return s.px>0&&SERVER_URL;});
-      live.forEach(function(s,i){setTimeout(function(){fetchSMC(s.sym);},i*1500);});
-    },8000);
-  },2000);
+    // ckLoad() already called - KITE.connected should be true now
+    if(CS){
+      fetchSMC(CS.sym);
+      fetchMTF(CS.sym);
+    }
+    // Stagger OI fetches to avoid hammering server
+    setTimeout(function(){fetchOI("NIFTY");},500);
+    setTimeout(function(){fetchOI("BANKNIFTY");},4000);
+    setTimeout(function(){fetchOI("FINNIFTY");},7000);
+  },1500);
   setInterval(function(){if(CS&&SERVER_URL)fetchSMC(CS.sym);},300000);
   setInterval(function(){if(CS&&SERVER_URL)fetchOI(CS.sym);},60000);
   setInterval(function(){if(SERVER_URL)fetch(SERVER_URL+"/ping").catch(function(){});},540000);
