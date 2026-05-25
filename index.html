@@ -1555,6 +1555,14 @@ function ckLoad(){
     var k=localStorage.getItem("pt_apiKey")||"";
     var s=localStorage.getItem("pt_apiSecret")||"";
     var t=localStorage.getItem("pt_accessToken")||"";
+    // ✅ CRITICAL: Restore KITE connection from saved token
+    if(k&&t){
+      KITE.apiKey=k;
+      KITE.accessToken=t;
+      KITE.apiSecret=s;
+      KITE.connected=true;
+      console.log("[KITE] Restored connection from localStorage. Key:",k.slice(0,8)+"...");
+    }
     var e;
     e=document.getElementById("ck_key");if(e&&k)e.value=k;
     e=document.getElementById("ck_sec");if(e&&s)e.value=s;
@@ -1935,9 +1943,38 @@ function showSMCStrip(sym){
 // ══ OI FETCH ══
 var _nseReady=false,_nseTs=0;
 function fetchOI(sym){
-  fetchNSEOI(sym,function(data){
-    if(data)applyOIData(sym,data);
-    else fetchOIFromServer(sym);
+  // PRIORITY ORDER:
+  // 1. Zerodha server proxy (most reliable - server-side, no CORS)
+  // 2. Direct NSE from phone (Indian IP)
+  // 3. Server cached OI
+  
+  if(KITE.connected&&KITE.apiKey&&KITE.accessToken&&SERVER_URL){
+    fetchOIViaZerodhaProxy(sym);
+  } else {
+    fetchOIFromServer(sym); // server cache fallback
+  }
+}
+
+function fetchOIViaZerodhaProxy(sym){
+  // Server fetches Kite instruments API and calculates OI/PCR
+  var url=SERVER_URL+"/zerodha_oi?sym="+sym
+    +"&key="+encodeURIComponent(KITE.apiKey)
+    +"&token="+encodeURIComponent(KITE.accessToken);
+  
+  fetch(url,{signal:AbortSignal.timeout(25000)})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(d&&d.ok&&d.data){
+      applyOIData(sym,d.data);
+      console.log("[OI ✅] "+sym+" via Zerodha: PCR="+d.data.pcr+" MP="+d.data.max_pain);
+    } else {
+      console.warn("[OI] Zerodha proxy failed:",d&&d.error);
+      fetchOIFromServer(sym); // fallback to cached
+    }
+  })
+  .catch(function(e){
+    console.warn("[OI] Zerodha proxy error:",e.message);
+    fetchOIFromServer(sym);
   });
 }
 function fetchNSEOI(sym,cb){
@@ -2112,7 +2149,11 @@ function fetchOIFromServer(sym){
   if(!url)return;
   fetch(url+"/oi/"+sym,{signal:AbortSignal.timeout(12000)})
   .then(function(r){return r.json();})
-  .then(function(d){if(d&&d.ok&&d.data)applyOIData(sym,d.data);})
+  .then(function(d){
+    if(!d||!d.ok||!d.data)return;
+    applyOIData(sym,d.data);
+    console.log("[OI] Server cache for",sym,"age:",d.age_min||0,"min");
+  })
   .catch(function(){});
 }
 function applyOIData(sym,o){
