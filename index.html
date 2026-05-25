@@ -790,22 +790,9 @@ function fetchFromServer(){
   });
 }
 
-function fetchOI(sym){
-  if(!SERVER_URL)return;
-  fetch(SERVER_URL+"/oi/"+sym,{signal:AbortSignal.timeout(10000)})
-  .then(function(r){return r.json();})
-  .then(function(d){
-    if(!d||!d.ok||!d.data)return;
-    var sc=allS().filter(function(s){return s.sym===sym;})[0];
-    if(!sc)return;
-    var oi=d.data;
-    sc.cOI=oi.ce_oi||0;sc.pOI=oi.pe_oi||0;
-    sc.cC=oi.ce_chg||0;sc.pC=oi.pe_chg||0;
-    sc.pcr=oi.pcr||0;sc.mp=oi.max_pain||0;
-    sc.iv=oi.iv||0;sc.cW=oi.ce_wall||0;sc.pW=oi.pe_wall||0;
-    updateHero();updateOI(CS);
-  }).catch(function(){});
-}
+// fetchOI → see fetchOIMain() below (Zerodha→Server cache chain)
+function fetchOI(sym){fetchOIMain(sym);}
+
 
 function startPolling(){
   // Fetch immediately
@@ -1748,7 +1735,7 @@ function loadSaved(){
 }
 
 window.onload=function(){
-  try{ckLoad();}catch(e){} // Restore KITE connection first
+  try{ckLoad();}catch(e){}
   try{buildTicker();}catch(e){}
   try{updateHero();}catch(e){}
   try{updAT();}catch(e){}
@@ -1768,17 +1755,13 @@ window.onload=function(){
   // Scan after short delay
   setTimeout(function(){try{runScan(false);}catch(e){}},3000);
   setInterval(function(){try{runScan(false);}catch(e){}},180000);
+  // Fetch OI immediately after load (KITE already restored by ckLoad above)
   setTimeout(function(){
-    // ckLoad() already called - KITE.connected should be true now
-    if(CS){
-      fetchSMC(CS.sym);
-      fetchMTF(CS.sym);
-    }
-    // Stagger OI fetches to avoid hammering server
-    setTimeout(function(){fetchOI("NIFTY");},500);
-    setTimeout(function(){fetchOI("BANKNIFTY");},4000);
-    setTimeout(function(){fetchOI("FINNIFTY");},7000);
+    if(CS){fetchSMC(CS.sym);fetchMTF(CS.sym);}
+    fetchOI("NIFTY");
   },1500);
+  setTimeout(function(){fetchOI("BANKNIFTY");},5000);
+  setTimeout(function(){fetchOI("FINNIFTY");},8000);
   setInterval(function(){if(CS&&SERVER_URL)fetchSMC(CS.sym);},300000);
   setInterval(function(){if(CS&&SERVER_URL)fetchOI(CS.sym);},60000);
   setInterval(function(){if(SERVER_URL)fetch(SERVER_URL+"/ping").catch(function(){});},540000);
@@ -1945,7 +1928,7 @@ function showSMCStrip(sym){
 
 // ══ OI FETCH ══
 var _nseReady=false,_nseTs=0;
-function fetchOI(sym){
+function fetchOIMain(sym){
   // PRIORITY ORDER:
   // 1. Zerodha server proxy (most reliable - server-side, no CORS)
   // 2. Direct NSE from phone (Indian IP)
@@ -1962,21 +1945,37 @@ function fetchOIViaZerodhaProxy(sym){
   var url=SERVER_URL+"/zerodha_oi?sym="+sym
     +"&key="+encodeURIComponent(KITE.apiKey)
     +"&token="+encodeURIComponent(KITE.accessToken);
-  console.log("[OI] Fetching via Zerodha proxy for",sym);
+  console.log("[OI] Fetching Zerodha proxy for",sym,"key:",KITE.apiKey.slice(0,8));
   fetch(url,{signal:AbortSignal.timeout(30000)})
   .then(function(r){return r.json();})
   .then(function(d){
     if(d&&d.ok&&d.data){
       applyOIData(sym,d.data);
     } else {
-      console.warn("[OI] Zerodha proxy failed:",d&&d.error,"→ trying server cache");
-      fetchOIFromServer(sym);
+      var err=d&&d.error||"Unknown error";
+      var code=d&&d.code||0;
+      console.warn("[OI ❌]",sym,"Zerodha failed:",err);
+      showOIError(sym,err);
+      // Only try server cache if not an auth error
+      if(code!==403)fetchOIFromServer(sym);
     }
   })
   .catch(function(e){
-    console.warn("[OI] Proxy error:",e.message,"→ trying server cache");
+    console.warn("[OI ❌]",sym,"fetch error:",e.message);
+    showOIError(sym,e.message);
     fetchOIFromServer(sym);
   });
+}
+
+function showOIError(sym,msg){
+  if(!CS||CS.sym!==sym)return;
+  var strip=document.getElementById("oiStrip");
+  if(!strip)return;
+  strip.style.display="block";
+  var isExpired=msg&&(msg.indexOf("401")>-1||msg.indexOf("Invalid")>-1||msg.indexOf("expired")>-1);
+  var txt=isExpired?"Zerodha token expired. Go to Settings → Reconnect Zerodha":"OI unavailable: "+msg.slice(0,50);
+  var col=isExpired?"var(--y)":"var(--m)";
+  strip.innerHTML="<div style=\"padding:6px 12px;font-size:.68rem;color:"+col+"\">⚠ "+txt+"</div>";
 }
 function fetchNSEOI(sym,cb){
   // PRIMARY: Use Kite Connect API (user's Indian account = works!)
