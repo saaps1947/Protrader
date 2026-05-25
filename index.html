@@ -1959,24 +1959,22 @@ function fetchOI(sym){
 }
 
 function fetchOIViaZerodhaProxy(sym){
-  // Server fetches Kite instruments API and calculates OI/PCR
   var url=SERVER_URL+"/zerodha_oi?sym="+sym
     +"&key="+encodeURIComponent(KITE.apiKey)
     +"&token="+encodeURIComponent(KITE.accessToken);
-  
-  fetch(url,{signal:AbortSignal.timeout(25000)})
+  console.log("[OI] Fetching via Zerodha proxy for",sym);
+  fetch(url,{signal:AbortSignal.timeout(30000)})
   .then(function(r){return r.json();})
   .then(function(d){
     if(d&&d.ok&&d.data){
       applyOIData(sym,d.data);
-      console.log("[OI ✅] "+sym+" via Zerodha: PCR="+d.data.pcr+" MP="+d.data.max_pain);
     } else {
-      console.warn("[OI] Zerodha proxy failed:",d&&d.error);
-      fetchOIFromServer(sym); // fallback to cached
+      console.warn("[OI] Zerodha proxy failed:",d&&d.error,"→ trying server cache");
+      fetchOIFromServer(sym);
     }
   })
   .catch(function(e){
-    console.warn("[OI] Zerodha proxy error:",e.message);
+    console.warn("[OI] Proxy error:",e.message,"→ trying server cache");
     fetchOIFromServer(sym);
   });
 }
@@ -2165,7 +2163,11 @@ function applyOIData(sym,o){
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.ceWall=o.ce_wall||0;s.peWall=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
+  console.log("[OI ✅] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" Buildup:"+o.buildup+" Source:"+o.source);
+  // Update UI immediately
   if(CS&&CS.sym===sym){updateHero();updateOI(CS);}
+  // Also refresh scanner if open
+  try{renderScanner();}catch(e){}
 }
 
 // ══ MULTI-TF FETCH ══
