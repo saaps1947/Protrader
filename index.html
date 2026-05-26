@@ -707,7 +707,7 @@ function fetchFromServer(){
   }
   setStatus("fetching");
   // Render free tier sleeps - use 90s timeout for wake-up
-  var timeout = serverOk ? 20000 : 90000;
+  var timeout = 30000; // 30s always - server responds in <5s when awake
   fetch(SERVER_URL+"/market",{signal:AbortSignal.timeout(timeout)})
   .then(function(r){return r.json();})
   .then(function(d){
@@ -715,7 +715,7 @@ function fetchFromServer(){
     var wasDown=!serverOk;
     serverOk=true;
     VIX=d.vix||17.5;
-    if(wasDown&&KITE.connected){console.log('[OI] Server awake - fetching OI');setTimeout(startOIFetch,500);}
+    if(wasDown){setTimeout(fetchStocks,2000);if(KITE.connected){console.log('[OI] Server awake - fetching OI');setTimeout(startOIFetch,1000);}}
     console.log('[Server] Data refreshed at',new Date().toLocaleTimeString('en-IN'));
     // Update each instrument
     Object.keys(d.data).forEach(function(sym){
@@ -1763,6 +1763,9 @@ window.onload=function(){
   // Scan after short delay
   setTimeout(function(){try{runScan(false);}catch(e){}},3000);
   setInterval(function(){try{runScan(false);}catch(e){}},180000);
+  setTimeout(function(){fetchStocks();},5000); // Initial stock fetch
+  setInterval(function(){fetchStocks();},300000); // Refresh every 5 min
+
   // Fetch OI immediately after load (KITE already restored by ckLoad above)
   // Fetch OI after server confirms awake
   function startOIFetch(){
@@ -2115,6 +2118,27 @@ function switchToSig(sym){
   pickSym(sym);window.scrollTo(0,0);
 }
 
+
+// ══ Fetch stock data (separate from /market for speed) ══
+function fetchStocks(){
+  if(!SERVER_URL)return;
+  fetch(SERVER_URL+"/stocks",{signal:AbortSignal.timeout(30000)})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    if(!d||!d.data)return;
+    Object.keys(d.data).forEach(function(sym){
+      var s=allS().filter(function(x){return x.sym===sym;})[0];
+      if(!s)return;
+      var sd=d.data[sym];
+      if(sd.px){s.px=sd.px;s.chg=sd.chg||0;s.pct=sd.pct||0;s.h=sd.high||0;s.l=sd.low||0;s.o=sd.open||0;}
+      if(sd.sma20){s.sma20=sd.sma20;s.sma50=sd.sma50;s.rsi=sd.rsi;s.trend=sd.trend;s.crossover=sd.crossover;s.breakout=sd.breakout;s.breakdown=sd.breakdown;}
+    });
+    buildTicker();
+    if(CS)updateHero();
+    console.log("[Stocks] Updated "+Object.keys(d.data).length+" stocks");
+  })
+  .catch(function(){});
+}
 </script>
 </body>
 </html>
