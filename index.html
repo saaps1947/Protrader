@@ -875,9 +875,16 @@ function _doFetchFromServer(){
     updateHero();updTicker();updateOI(CS);showTech(CS);
     try{savePriceCache();}catch(e){}
     var t=istTime();
-    setStatus("live","Server · "+t);
-    var isMCX=CS.sym==="CRUDEOIL"||CS.sym==="GOLD";
-    document.getElementById("dataSrc").textContent="PRO Trader Server · "+t+(isMCX?" · MCX live ₹ (USD×"+USDINR.toFixed(1)+")":"");
+    var isStale=mktData.stale||mktData.source==="cache_stale";
+    var ageMin=mktData.cached_age_s?Math.round(mktData.cached_age_s/60):0;
+    if(isStale){
+      setStatus("live","Closed · Last: "+t);
+      document.getElementById("dataSrc").textContent="⏸ Market closed — showing last data"+(ageMin>0?" ("+ageMin+"m ago)":"");
+    } else {
+      setStatus("live","Server · "+t);
+      var isMCX=CS.sym==="CRUDEOIL"||CS.sym==="GOLD";
+      document.getElementById("dataSrc").textContent="PRO Trader Server · "+t+(isMCX?" · MCX live ₹ (USD×"+USDINR.toFixed(1)+")":"");
+    }
     // Fetch live USD/INR from server and update commodity prices
     if(SERVER_URL){fetch(SERVER_URL+"/usdinr",{signal:AbortSignal.timeout(5000)}).then(function(r){return r.json();}).then(function(u){if(u&&u.rate&&u.rate>80&&u.rate<110){USDINR=u.rate;}}).catch(function(){});}
     // Convert USD commodity prices to INR for MCX
@@ -2527,16 +2534,14 @@ function saveConn(key,tok,sec){
     localStorage.setItem("pt_apiKey",key);localStorage.setItem("pt_accessToken",tok);
     if(sec)localStorage.setItem("pt_apiSecret",sec);
     localStorage.setItem("protrader_api",JSON.stringify({apiKey:key,accessToken:tok,apiSecret:sec||""}));
-  }catch(e){}
-  // Immediately update ALL token display fields so user sees the new token
-  var e;
-  e=document.getElementById("ck_tok");if(e)e.value=tok;
-  e=document.getElementById("ck_key");if(e&&key)e.value=key;
-  e=document.getElementById("ss_tok");if(e)e.value=tok;
-  e=document.getElementById("ss_key");if(e&&key)e.value=key;
+  }catch(ex){}
+  // Update ALL visible token fields immediately
+  var el;
+  el=document.getElementById("ck_tok");if(el)el.value=tok;
+  el=document.getElementById("ck_key");if(el&&key)el.value=key;
+  el=document.getElementById("ss_tok");if(el)el.value=tok;
+  el=document.getElementById("ss_key");if(el&&key)el.value=key;
   hideBanner();updBadges(true);
-  // Also fetch fresh data now
-  fetchFromServer();
 }
 function updBadges(on){
   var els=["csBdg","ssBdg"];
