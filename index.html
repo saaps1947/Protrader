@@ -2522,6 +2522,12 @@ function saveConn(key,tok,sec){
     if(sec)localStorage.setItem("pt_apiSecret",sec);
     localStorage.setItem("protrader_api",JSON.stringify({apiKey:key,accessToken:tok,apiSecret:sec||""}));
   }catch(e){}
+  // Immediately update ALL token display fields so user sees the new token
+  var e;
+  e=document.getElementById("ck_tok");if(e)e.value=tok;
+  e=document.getElementById("ck_key");if(e&&key)e.value=key;
+  e=document.getElementById("ss_tok");if(e)e.value=tok;
+  e=document.getElementById("ss_key");if(e&&key)e.value=key;
   hideBanner();updBadges(true);
   // Also fetch fresh data now
   fetchFromServer();
