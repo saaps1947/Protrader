@@ -2574,8 +2574,9 @@ function ssLoad(){
       e=document.getElementById("ss_tok");if(e)e.value=d.accessToken||"";
     }
     var srv=localStorage.getItem("pt_server")||"";
+    srv=srv.replace(/\/+$/,""); // strip trailing slash from stored value
     var e=document.getElementById("ss_srv");if(e)e.value=srv;
-    if(srv)SERVER_URL=srv;
+    if(srv){SERVER_URL=srv;try{localStorage.setItem("pt_server",srv);}catch(ex){}} // save cleaned URL back
     updBadges(KITE.connected);
   }catch(e){}
 }
