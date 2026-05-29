@@ -2499,7 +2499,13 @@ function ckGenerate(){
       ckSt("ok","🎉 Connected! Welcome "+(d.user_name||"")+"!\nAccess token saved. Live data starting...");
       var bdg=document.getElementById("csBdg");
       if(bdg){bdg.style.cssText="background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);color:var(--g)";bdg.textContent="⚡ Live";}
-      setTimeout(function(){closeCS();toast("⚡ Zerodha Live","Connected successfully","tg");},2000);
+      setTimeout(function(){
+        closeCS();
+        toast("⚡ Zerodha Live","Connected successfully","tg");
+        // Immediately fetch with new token — don't wait for next auto-cycle
+        _hasLoaded=false; // reset so fetch lock allows immediate load
+        fetchFromServer();
+      },2000);
     }else{
       ckSt("err","❌ "+(d.error||"Failed. Check API Key, Secret and try Step 2 again."));
     }
