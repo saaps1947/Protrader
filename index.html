@@ -2755,15 +2755,15 @@ function setConvFilt(btn, f){
 }
 
 // ══ SIGNAL PERFORMANCE TRACKER ══
-var SIGNAL_LOG=[];
+// SIGNAL_LOG declared above at line 2165 — do not redeclare here
 function loadSignalLog(){try{var s=localStorage.getItem("pt_siglog");if(s)SIGNAL_LOG=JSON.parse(s);}catch(e){SIGNAL_LOG=[];}}
-function saveSignalLog(){try{if(SIGNAL_LOG.length>200)SIGNAL_LOG=SIGNAL_LOG.slice(-200);localStorage.setItem("pt_siglog",JSON.stringify(SIGNAL_LOG));}catch(e){}}
+function saveSignalLog(){try{if(SIGNAL_LOG.length>500)SIGNAL_LOG=SIGNAL_LOG.slice(-500);localStorage.setItem("pt_siglog",JSON.stringify(SIGNAL_LOG));}catch(e){}}
 function logSignalEntry(sig){
   var e={id:sig.sym+"_"+Date.now(),sym:sig.sym,bias:sig.bias,trade:sig.trade,strategy:sig.strategy,
     confidence:sig.confidence,entry:parseFloat(sig.entry)||0,sl:parseFloat(sig.sl)||0,
     t1:parseFloat(sig.target1||sig.target)||0,t2:parseFloat(sig.target2||sig.target1||sig.target)||0,
     entryTime:istTime(),status:"OPEN",pnl:0,result:""};
-  SIGNAL_LOG.push(e);saveSignalLog();renderPerformance();
+  SIGNAL_LOG.push(e);saveSignalLog();renderPerformance();renderJ();
 }
 function perfBtn(b){
   var id=b.dataset.id,res=b.dataset.r,px=parseFloat(b.dataset.px)||0;
@@ -2771,7 +2771,7 @@ function perfBtn(b){
   if(!e)return;
   e.status="CLOSED";e.result=res;e.exitPrice=px;e.exitTime=istTime();
   e.pnl=Math.round((e.bias==="BULLISH"?px-e.entry:e.entry-px)*100)/100;
-  saveSignalLog();renderPerformance();
+  saveSignalLog();renderPerformance();renderJ();
 }
 function clearLog(){if(!confirm("Clear all signal logs?"))return;SIGNAL_LOG=[];saveSignalLog();renderPerformance();}
 function renderPerformance(){
