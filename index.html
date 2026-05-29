@@ -1035,11 +1035,11 @@ function updateOI(s){
       if(isSymMCX(s.sym)){
         strip.style.display="block";
         strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>MCX options OI not available via public API. Price data active.</div>";
-      } else if(!isOpen()){
-        strip.style.display="block";
-        strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>NSE Option Chain loads at market open (9:15 AM IST).</div>";
       } else {
-        strip.style.display="none";
+        // Always try to fetch OI — server returns cached data even after market close
+        fetchOI(s.sym);
+        strip.style.display="block";
+        strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>⏳ Loading OI data…</div>";
       }
     }
     return;
@@ -1839,8 +1839,8 @@ function processScan(sigs){
     sig._time=istTime();sig._ts=Date.now();
     sig._isNew=!prev[sig.sym];
     if(!sig._isNew&&prev[sig.sym]){sig._ts=prev[sig.sym]._ts;sig._time=prev[sig.sym]._time;}
-    // Auto-log HIGH conviction signals to journal
-    if(sig._isNew&&sig.urgency==="HIGH") try{autoLogSignal(sig);}catch(e){}
+    // Auto-log HIGH conviction signals — dedup handled inside autoLogSignal
+    if(sig.urgency==="HIGH") try{autoLogSignal(sig);}catch(e){}
     var idx=-1;for(var i=0;i<allSigs.length;i++){if(allSigs[i].sym===sig.sym){idx=i;break;}}
     if(idx>=0)allSigs[idx]=sig;else allSigs.unshift(sig);
   });
