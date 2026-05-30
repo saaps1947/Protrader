@@ -859,12 +859,15 @@ function _doFetchFromServer(){
         sc.breakdown=sd.technicals.breakdown;
         sc.above_sma20=sd.technicals.above_sma20;
       }
-      // OI data if present
+      // OI data if present (from background stock OI thread for 18 liquid stocks, or live for indices)
       if(sd.oi){
         sc.cOI=sd.oi.ce_oi||0;sc.pOI=sd.oi.pe_oi||0;
         sc.cC=sd.oi.ce_chg||0;sc.pC=sd.oi.pe_chg||0;
         sc.pcr=sd.oi.pcr||0;sc.mp=sd.oi.max_pain||0;
         sc.iv=sd.oi.iv||0;sc.cW=sd.oi.ce_wall||0;sc.pW=sd.oi.pe_wall||0;
+        sc.buildup=sd.oi.buildup||"";           // LONG_BUILDUP / SHORT_BUILDUP etc
+        sc.pcr_interp=sd.oi.pcr_interp||"";    // BULLISH / BEARISH / NEUTRAL etc
+        sc.mp_dist=sd.oi.mp_dist||0;           // distance from max pain
       }
     });
     // Update ATM for all instruments based on current price
