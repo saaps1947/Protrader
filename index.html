@@ -1365,18 +1365,20 @@ function localSigs(){
     var ivLow=ivVsVix<0.9;
     var ivNormal=!ivHigh&&!ivLow;
 
-    // ── LAYER 6: VWAP ──
+    // ── LAYER 6: VWAP — only valid during market hours ──
     var vwap=s.vwap||0;
-    var aboveVwap=vwap>0&&px>vwap;
-    var belowVwap=vwap>0&&px<vwap;
-    var atVwap=vwap>0&&Math.abs(px-vwap)/vwap<0.001;
-    var vwapReclaim=aboveVwap&&s.pct>0; // Was below, now above
+    var vwapValid=isOpen(); // VWAP resets at 9:15 AM — meaningless after close
+    var aboveVwap=vwapValid&&vwap>0&&px>vwap;
+    var belowVwap=vwapValid&&vwap>0&&px<vwap;
+    var atVwap=vwapValid&&vwap>0&&Math.abs(px-vwap)/vwap<0.001;
+    var vwapReclaim=aboveVwap&&s.pct>0;
     var vwapReject=belowVwap&&s.pct<0;
 
-    // ── LAYER 7: ORB ──
+    // ── LAYER 7: ORB — only valid 9:30–11:00 AM ──
     var orb=s.orb||null;
-    var orbBreakout=orb&&orb.breakout;
-    var orbBreakdown=orb&&orb.breakdown;
+    var orbSessionValid=(nowH===9&&nowM>=30)||(nowH===10&&nowM<=59); // 9:30–10:59 only
+    var orbBreakout=orbSessionValid&&orb&&orb.breakout;
+    var orbBreakdown=orbSessionValid&&orb&&orb.breakdown;
     var insideOrb=orb&&orb.inside;
 
     // ── LAYER 8: Volume ──
@@ -1431,10 +1433,10 @@ function localSigs(){
     if(breakdown&&!aboveSma20){bearScore+=3;bearReasons.push("Day low breakdown + below SMA20");}
     if(trendBull&&aboveSma50){bullScore+=1;bullReasons.push("SMA trend bullish, price above SMA50 "+sma50);}
     if(trendBear&&!aboveSma50){bearScore+=1;bearReasons.push("SMA trend bearish, price below SMA50 "+sma50);}
-    if(rsiOS&&aboveSma20){bullScore+=2;bullReasons.push("RSI "+rsi+" oversold + holding above SMA20");}
-    if(rsiOB&&!aboveSma20){bearScore+=2;bearReasons.push("RSI "+rsi+" overbought + below SMA20");}
-    if(rsiBull){bullScore+=1;bullReasons.push("RSI "+rsi+" in bullish momentum zone");}
-    if(rsiBear){bearScore+=1;bearReasons.push("RSI "+rsi+" in bearish momentum zone");}
+    if(rsiOS&&aboveSma20){bullScore+=2;bullReasons.push("RSI "+rsi+" oversold + holding above SMA20");} // oversold takes priority - no bullish zone double count
+    else if(rsiBull){bullScore+=1;bullReasons.push("RSI "+rsi+" in bullish momentum zone");}  // only if NOT already oversold
+    if(rsiOB&&!aboveSma20){bearScore+=2;bearReasons.push("RSI "+rsi+" overbought + below SMA20");} // overbought takes priority
+    else if(rsiBear){bearScore+=1;bearReasons.push("RSI "+rsi+" in bearish momentum zone");}  // only if NOT already overbought
     if(aboveSma20&&aboveSma50){bullScore+=1;bullReasons.push("Price above both SMA20("+sma20+") & SMA50("+sma50+")");}
     if(!aboveSma20&&!aboveSma50){bearScore+=1;bearReasons.push("Price below both SMA20("+sma20+") & SMA50("+sma50+")");}
 
@@ -1684,6 +1686,61 @@ function localSigs(){
       return; // forEach return = skip this symbol
     }
 
+    // ══════════════════════════════════════════════════════════
+    // LAYER DIVERSITY GATE — Phase 1 core change
+    // Count confirmations from INDEPENDENT source categories.
+    // Same market move triggering breakout+aboveSMA20+aboveVWAP
+    // is ONE confirmation, not three.
+    // ══════════════════════════════════════════════════════════
+    var hasOI = (pcr>0||ceOI>0||peOI>0||ceWall>0||peWall>0||mp>0); // real OI data present
+
+    // OI category: PCR, walls, writer traps (all from option chain)
+    var oiCatBull = (pcrBull?1:0)+(pcrExtremeBull?1:0)+(nearPeWall?1:0)+
+                    (belowMp?1:0)+(putWriting?1:0)+(trappedCE?1:0)+(ceUnwinding?1:0);
+    var oiCatBear = (pcrBear?1:0)+(pcrExtremeBear?1:0)+(nearCeWall?1:0)+
+                    (aboveMp?1:0)+(callWriting?1:0)+(trappedPE?1:0)+(peUnwinding?1:0);
+
+    // Price action category: VWAP, ORB, SMC, CPR (all from candles/structure)
+    var priceActBull = (aboveVwap?1:0)+(vwapReclaim?1:0)+(orbBreakout?1:0)+
+                       (bullOB?1:0)+(bullFVG?1:0)+(bullSweep?1:0)+(cprNarrow&&aboveTC?1:0);
+    var priceActBear = (belowVwap?1:0)+(vwapReject?1:0)+(orbBreakdown?1:0)+
+                       (bearOB?1:0)+(bearFVG?1:0)+(bearSweep?1:0)+(cprNarrow&&belowBC?1:0);
+
+    // Momentum category: RSI, SMA crossover, volume, trend
+    var momCatBull = (golden?2:0)+(breakout?1:0)+(rsiOS?1:0)+(rsiBull?1:0)+
+                     (aboveSma20&&aboveSma50?1:0)+(trendBull?1:0)+(volExpanding&&aboveSma20?1:0);
+    var momCatBear = (death?2:0)+(breakdown?1:0)+(rsiOB?1:0)+(rsiBear?1:0)+
+                     (!aboveSma20&&!aboveSma50?1:0)+(trendBear?1:0)+(volExpanding&&!aboveSma20?1:0);
+
+    // Regime category: market context
+    var regimeCat = (isTrending||isBreakoutDay)?1:0;
+
+    // Count independent layers confirmed (≥1 signal each)
+    var bullLayers=0, bearLayers=0;
+    if(oiCatBull>=1)   bullLayers++;
+    if(priceActBull>=1) bullLayers++;
+    if(momCatBull>=1)   bullLayers++;
+    if(regimeCat>=1&&regimeCode==="TRENDING_UP") bullLayers++;
+
+    if(oiCatBear>=1)   bearLayers++;
+    if(priceActBear>=1) bearLayers++;
+    if(momCatBear>=1)   bearLayers++;
+    if(regimeCat>=1&&regimeCode==="TRENDING_DOWN") bearLayers++;
+
+    // Store setup key for performance tracking
+    var bullSetupKey="", bearSetupKey="";
+    var bk=[], bbk=[];
+    if(oiCatBull>=1)    bk.push("OI");
+    if(priceActBull>=1) bk.push("Price");
+    if(momCatBull>=1)   bk.push("Momentum");
+    if(regimeCode==="TRENDING_UP") bk.push("Regime");
+    if(oiCatBear>=1)    bbk.push("OI");
+    if(priceActBear>=1) bbk.push("Price");
+    if(momCatBear>=1)   bbk.push("Momentum");
+    if(regimeCode==="TRENDING_DOWN") bbk.push("Regime");
+    bullSetupKey = bk.join("+") || "Unconfirmed";
+    bearSetupKey = bbk.join("+") || "Unconfirmed";
+
     // ── GENERATE SIGNAL ──
     var sig=null;
     var totalScore=Math.max(bullScore,bearScore,neutralScore);
@@ -1745,8 +1802,13 @@ function localSigs(){
     if(bullScore>=minScore&&bullScore>bearScore&&bullScore>neutralScore){
       var rr=calcRR("BULL");
       if(!rr){return;} // R:R engine rejected — skip signal
+      // Layer diversity gate: cap confidence based on independent layers
       var conf=Math.min(94,Math.max(62,68+bullScore*3-(bearScore*2)));
-      var urg=bullScore>=7?"HIGH":bullScore>=5?"MEDIUM":"LOW";
+      if(bullLayers<2) conf=Math.min(conf,74);      // 1 layer = LOW only
+      if(!hasOI)       conf=Math.min(conf,79);      // no OI = max MEDIUM
+      // Urgency: HIGH requires 2+ layers AND OI present
+      var urg=( conf>=82 && bullLayers>=2 && hasOI )?"HIGH":
+               conf>=75||bullLayers>=2?"MEDIUM":"LOW";
       var strat=golden?"Golden Cross + OI":
                 trappedCE?"CE Writer Squeeze":
                 orbBreakout&&volExpanding?"ORB Breakout + Volume":
@@ -1759,6 +1821,9 @@ function localSigs(){
                 regimeCode==="TRENDING_UP"?"Trend Continuation":"Multi-factor Bullish";
       var isBtst=mktClosed&&bullScore>=4;
       var whyText=bullReasons.slice(0,3).join(" | ");
+      // Time bucket for performance tracking
+      var timeBucket=nowH<10?"morning":nowH<13?"midday":nowH<15?"afternoon":"closing";
+      if(!isOpen())timeBucket="after_hours";
       sig={
         sym:s.sym, bias:"BULLISH", trade:"Buy "+(atm+step)+" CE", strategy:strat,
         why:whyText, confidence:conf,
@@ -1768,6 +1833,10 @@ function localSigs(){
         isBTST:isBtst,
         btstNote:isBtst?"Hold overnight. Exit if gap-up ≥0.3% at open. SL: ₹"+px:"",
         regime:regimeCode,
+        setupKey:bullSetupKey,       // e.g. "OI+Price+Momentum"
+        timeBucket:timeBucket,       // "morning"/"midday"/"afternoon"/"closing"
+        layers:bullLayers,           // number of independent layers confirmed
+        hasOI:hasOI,                 // whether OI data was present
         _score:bullScore, _reasons:bullReasons
       };
 
@@ -1775,7 +1844,10 @@ function localSigs(){
       var rr2=calcRR("BEAR");
       if(!rr2){return;} // R:R engine rejected
       var conf2=Math.min(94,Math.max(62,68+bearScore*3-(bullScore*2)));
-      var urg2=bearScore>=7?"HIGH":bearScore>=5?"MEDIUM":"LOW";
+      if(bearLayers<2) conf2=Math.min(conf2,74);
+      if(!hasOI)       conf2=Math.min(conf2,79);
+      var urg2=(conf2>=82&&bearLayers>=2&&hasOI)?"HIGH":
+               conf2>=75||bearLayers>=2?"MEDIUM":"LOW";
       var strat2=death?"Death Cross + OI":
                  trappedPE?"PE Writer Squeeze":
                  orbBreakdown&&volExpanding?"ORB Breakdown + Volume":
@@ -1787,6 +1859,8 @@ function localSigs(){
                  pcrExtremeBear?"PCR Extreme Reversal":
                  regimeCode==="TRENDING_DOWN"?"Trend Continuation":"Multi-factor Bearish";
       var whyBear=bearReasons.slice(0,3).join(" | ");
+      var timeBucket2=nowH<10?"morning":nowH<13?"midday":nowH<15?"afternoon":"closing";
+      if(!isOpen())timeBucket2="after_hours";
       sig={
         sym:s.sym, bias:"BEARISH", trade:"Buy "+atm+" PE", strategy:strat2,
         why:whyBear, confidence:conf2,
@@ -1795,6 +1869,10 @@ function localSigs(){
         timeframe:death?"Daily":orbBreakdown?"5M":cprNarrow?"15M":bearOB?"1H":"5M",
         isBTST:false, btstNote:"",
         regime:regimeCode,
+        setupKey:bearSetupKey,
+        timeBucket:timeBucket2,
+        layers:bearLayers,
+        hasOI:hasOI,
         _score:bearScore, _reasons:bearReasons
       };
 
@@ -1828,31 +1906,51 @@ function localSigs(){
   });
 
   return tradeable_sigs; // Return only real signals
-  return tradeable_sigs;
 }
 
 
 function processScan(sigs){
   window._lastScanTs = Date.now();
-  var prev={};allSigs.forEach(function(s){prev[s.sym]=s;});
+  var prev={};allSigs.forEach(function(s){prev[s.sym+s.bias]=s;});
   sigs.forEach(function(sig){
-    sig._time=istTime();sig._ts=Date.now();
-    sig._isNew=!prev[sig.sym];
-    if(!sig._isNew&&prev[sig.sym]){sig._ts=prev[sig.sym]._ts;sig._time=prev[sig.sym]._time;}
-    // Auto-log HIGH conviction signals — dedup handled inside autoLogSignal
+    var prevSig=prev[sig.sym+sig.bias]; // match sym AND direction
+    var prevAny=allSigs.filter(function(s){return s.sym===sig.sym;})[0];
+
+    // Direction flipped (was BULLISH now BEARISH or vice versa) = treat as NEW
+    var dirFlip=prevAny&&prevAny.bias!==sig.bias;
+
+    if(prevSig&&!dirFlip){
+      // Same symbol, same direction — preserve first-seen timestamp
+      sig._firstSeen     = prevSig._firstSeen || prevSig._time || istTime();
+      sig._firstSeenTs   = prevSig._firstSeenTs || prevSig._ts || Date.now();
+      sig._ts            = prevSig._firstSeenTs || prevSig._ts || Date.now();
+      sig._time          = prevSig._firstSeen || prevSig._time || istTime();
+      sig._isNew         = false;
+    } else {
+      // New signal or direction flip — lock first-seen NOW
+      sig._firstSeen     = istTime();
+      sig._firstSeenTs   = Date.now();
+      sig._ts            = Date.now();
+      sig._time          = istTime();
+      sig._isNew         = true;
+    }
+
+    // Auto-log HIGH conviction signals
     if(sig.urgency==="HIGH") try{autoLogSignal(sig);}catch(e){}
-    var idx=-1;for(var i=0;i<allSigs.length;i++){if(allSigs[i].sym===sig.sym){idx=i;break;}}
+
+    var idx=-1;
+    for(var i=0;i<allSigs.length;i++){if(allSigs[i].sym===sig.sym){idx=i;break;}}
     if(idx>=0)allSigs[idx]=sig;else allSigs.unshift(sig);
   });
-  // Remove >30min old
+  // Remove signals not seen in last 30 min
   var cut=Date.now()-30*60*1000;
-  allSigs=allSigs.filter(function(s){return !s._ts||s._ts>cut;});
+  allSigs=allSigs.filter(function(s){return !s._firstSeenTs||s._firstSeenTs>cut;});
   allSigs.sort(function(a,b){if(a.urgency==="HIGH"&&b.urgency!=="HIGH")return -1;if(b.urgency==="HIGH"&&a.urgency!=="HIGH")return 1;return (b.confidence||0)-(a.confidence||0);});
   renderFeed();buildSF();updateBiasCounts();
-  // Urgent pill
   var high=allSigs.filter(function(s){return s.urgency==="HIGH";}).length;
   var pill=document.getElementById("urgPill");
   if(pill){if(high>0){pill.style.display="inline";pill.textContent="🔥 "+high+" HIGH";}else pill.style.display="none";}
+  // Toast only for genuinely new HIGH signals
   sigs.filter(function(s){return s.urgency==="HIGH"&&s._isNew;}).forEach(function(s){
     toast((s.isBTST?"🌙 BTST":"🔥 "+s.sym+" HIGH"),s.trade+" · "+s.confidence+"%",s.bias==="BULLISH"?"tg":"tr");
     if(AT.active)qAT(s);
@@ -1885,8 +1983,12 @@ function renderFeed(){
     var convLbl=sig.confidence>=88?"Very High":sig.confidence>=82?"High":sig.confidence>=76?"Moderate":"Watch";
     var badge=bt?"<span class='sc-badge bbtst'>🌙 BTST</span>":sig._isNew?"<span class='sc-badge bnew'>NEW</span>":"<span class='sc-badge bupd'>UPD</span>";
     var hbadge=sig.urgency==="HIGH"?"<span class='bhigh'>🔥 HIGH</span>":"";
-    var age=sig._ts?Math.round((Date.now()-sig._ts)/60000):0;
-    var ageStr=age<1?"just now":age+"m ago";
+    var age=sig._firstSeenTs?Math.round((Date.now()-sig._firstSeenTs)/60000):0;
+    var ageStr=age<1?"just now":age<60?age+"m ago":Math.floor(age/60)+"h "+age%60+"m ago";
+    var firstSeenStr=sig._firstSeen||sig._time||"";
+    var timeDisplay=sig._isNew?
+      "🆕 "+firstSeenStr :
+      "⏱ First: "+firstSeenStr+(age>0?" ("+ageStr+")":"");
     var exSty=bt?"background:rgba(139,92,246,.15);color:var(--p);border:1px solid rgba(139,92,246,.3)":sig.bias==="NEUTRAL"?"background:rgba(245,158,11,.1);color:var(--y);border:1px solid rgba(245,158,11,.2)":"";
 
     // ── Timeframe tags ──
@@ -1956,7 +2058,10 @@ function renderFeed(){
         "<div style='flex:1;text-align:center;background:rgba(255,255,255,.04);border-radius:6px;padding:4px'><div style='font-size:.55rem;color:var(--m)'>VIX</div><div style='font-size:.7rem;font-weight:700;color:var(--m)'>"+VIX+"</div></div>"+
       "</div>"+
       "<button class='sc-exec "+(exSty?"":exCls)+"' style='"+exSty+"' onclick='execSig("+gi+")'>"+( AT.active?"⚡ Auto-Execute":"▶ Execute")+" — "+sig.trade+"</button>"+
-      "<div class='sc-time'>📡 "+sig._time+" · "+ageStr+"</div></div>";
+      "<div class='sc-time'>"+timeDisplay+
+      (sig.setupKey?" · <span style='color:var(--b)'>"+sig.setupKey+"</span>":"")+
+      (sig.layers?" · "+sig.layers+"/4 layers":"")+
+      "</div></div>";
   });
   feed.innerHTML=h;
 }
@@ -2194,7 +2299,13 @@ function autoLogSignal(sig){
     bias: sig.bias,
     trade: sig.trade,
     strategy: sig.strategy,
+    setupKey: sig.setupKey||"Unknown",         // e.g. "OI+Price+Momentum"
+    timeBucket: sig.timeBucket||"unknown",     // "morning"/"midday"/"afternoon"
+    regime: sig.regime||"UNKNOWN",             // market regime at signal time
+    layers: sig.layers||0,                     // independent layers confirmed
+    hasOI: sig.hasOI||false,                   // whether OI data was present
     confidence: sig.confidence,
+    urgency: sig.urgency||"HIGH",
     entry_px: parseFloat(sig.entry)||0,
     sl_px: parseFloat(sig.sl)||0,
     t1_px: parseFloat(sig.target1)||0,
@@ -2203,9 +2314,10 @@ function autoLogSignal(sig){
     why: sig.why||"",
     vix: VIX,
     timeframe: sig.timeframe||"",
+    firstSeen: sig._firstSeen||istTime(),      // when signal FIRST appeared
     ts: new Date().toISOString(),
     date: istTime(),
-    status: "OPEN",  // OPEN → SL_HIT / T1_HIT / T2_HIT / MANUAL
+    status: "OPEN",
     exit_px: null,
     pnl: null,
     outcome: null,
@@ -2414,22 +2526,96 @@ function exportJ(){
 }
 
 function renderPerformance(){
-  var el=document.getElementById("perfSection");
-  if(!el) return;
-  var closed=SIGNAL_LOG.filter(function(x){return x.status!=="OPEN"&&x.pnl!=null;});
-  if(!closed.length){el.innerHTML="<div style='text-align:center;padding:20px;color:var(--m);font-size:.65rem'>Close signals to see performance</div>";return;}
-  var wins=closed.filter(function(x){return (x.pnl||0)>0;}).length;
-  var losses=closed.filter(function(x){return (x.pnl||0)<0;}).length;
-  var wr=Math.round(wins/closed.length*100);
+  var perf=document.getElementById("perfSection");
+  if(!perf)return;
+  var closed=SIGNAL_LOG.filter(function(x){return x.status!=="OPEN";});
+  var open=SIGNAL_LOG.filter(function(x){return x.status==="OPEN";});
+  var wins=closed.filter(function(x){return x.outcome==="WIN"||x.outcome==="BIG WIN"||(x.pnl!=null&&x.pnl>0);}).length;
+  var wr=closed.length?Math.round(wins/closed.length*100):0;
   var totPnl=closed.reduce(function(a,x){return a+(x.pnl||0);},0);
-  var maxWin=Math.max.apply(null,closed.map(function(x){return x.pnl||0;}));
-  var maxLoss=Math.min.apply(null,closed.map(function(x){return x.pnl||0;}));
-  el.innerHTML=
-    "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:12px'>" +
-    "<div style='background:var(--bg3);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);margin-bottom:3px'>WIN RATE</div><div style='font-size:1.1rem;font-weight:800;color:"+(wr>=60?"var(--g)":wr>=40?"var(--y)":"var(--r)")+"'>"+wr+"%</div><div style='font-size:.55rem;color:var(--m)'>"+wins+"W / "+losses+"L</div></div>" +
-    "<div style='background:var(--bg3);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);margin-bottom:3px'>TOTAL P&L</div><div style='font-size:1.1rem;font-weight:800;color:"+(totPnl>=0?"var(--g)":"var(--r)")+";'>"+(totPnl>=0?"+":"")+"₹"+Math.abs(totPnl).toLocaleString("en-IN")+"</div><div style='font-size:.55rem;color:var(--m)'>"+closed.length+" trades</div></div>" +
-    "<div style='background:var(--bg3);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);margin-bottom:3px'>BEST / WORST</div><div style='font-size:.75rem;font-weight:700;color:var(--g)'>+₹"+maxWin.toLocaleString("en-IN")+"</div><div style='font-size:.75rem;font-weight:700;color:var(--r)'>-₹"+Math.abs(maxLoss).toLocaleString("en-IN")+"</div></div>" +
-    "</div>";
+
+  // Setup Leaderboard
+  var setupStats={};
+  closed.forEach(function(e){
+    var k=e.setupKey||"Unknown";
+    if(!setupStats[k])setupStats[k]={trades:0,wins:0,pnl:0};
+    setupStats[k].trades++;
+    if(e.outcome==="WIN"||e.outcome==="BIG WIN"||(e.pnl!=null&&e.pnl>0))setupStats[k].wins++;
+    setupStats[k].pnl+=(e.pnl||0);
+  });
+  var setupRows=Object.keys(setupStats).sort(function(a,b){return setupStats[b].trades-setupStats[a].trades;});
+
+  // Time bucket stats
+  var timeStats={};
+  closed.forEach(function(e){
+    var k=e.timeBucket||"unknown";
+    if(!timeStats[k])timeStats[k]={trades:0,wins:0};
+    timeStats[k].trades++;
+    if(e.outcome==="WIN"||e.outcome==="BIG WIN"||(e.pnl!=null&&e.pnl>0))timeStats[k].wins++;
+  });
+
+  // Regime stats
+  var regimeStats={};
+  closed.forEach(function(e){
+    var k=e.regime||"UNKNOWN";
+    if(!regimeStats[k])regimeStats[k]={trades:0,wins:0};
+    regimeStats[k].trades++;
+    if(e.outcome==="WIN"||e.outcome==="BIG WIN"||(e.pnl!=null&&e.pnl>0))regimeStats[k].wins++;
+  });
+
+  var html="<div style='padding:4px 0 12px'>";
+
+  // Overall stats
+  html+="<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px'>";
+  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>WIN RATE</div><div style='font-size:1.1rem;font-weight:800;color:"+(wr>=60?"var(--g)":wr>=40?"var(--y)":"var(--r)")+"'>"+wr+"%</div></div>";
+  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>SIGNALS</div><div style='font-size:1.1rem;font-weight:800;color:var(--t1)'>"+SIGNAL_LOG.length+"</div></div>";
+  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>P&L</div><div style='font-size:.85rem;font-weight:800;color:"+(totPnl>=0?"var(--g)":"var(--r)")+"'>"+(totPnl>=0?"+":"")+"₹"+Math.abs(totPnl).toLocaleString("en-IN")+"</div></div>";
+  html+="</div>";
+
+  // Setup Leaderboard
+  html+="<div style='font-size:.6rem;font-weight:700;letter-spacing:1px;color:var(--m);margin-bottom:6px'>📊 SETUP LEADERBOARD</div>";
+  if(setupRows.length){
+    html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:12px'>";
+    html+="<div style='display:grid;grid-template-columns:2fr 1fr 1fr 1fr;padding:6px 10px;border-bottom:1px solid var(--border);background:var(--bg3)'>";
+    html+="<div style='font-size:.5rem;color:var(--m);font-weight:700'>SETUP</div><div style='font-size:.5rem;color:var(--m);font-weight:700;text-align:center'>TRADES</div><div style='font-size:.5rem;color:var(--m);font-weight:700;text-align:center'>WIN%</div><div style='font-size:.5rem;color:var(--m);font-weight:700;text-align:right'>P&L</div></div>";
+    setupRows.forEach(function(k){
+      var st=setupStats[k];
+      var swr=Math.round(st.wins/st.trades*100);
+      html+="<div style='display:grid;grid-template-columns:2fr 1fr 1fr 1fr;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.04)'>";
+      html+="<div style='font-size:.58rem;font-weight:600;color:var(--t1)'>"+k+"</div>";
+      html+="<div style='font-size:.6rem;color:var(--m);text-align:center'>"+st.trades+"</div>";
+      html+="<div style='font-size:.65rem;font-weight:700;color:"+(swr>=60?"var(--g)":swr>=40?"var(--y)":"var(--r)")+";text-align:center'>"+swr+"%</div>";
+      html+="<div style='font-size:.6rem;font-weight:600;color:"+(st.pnl>=0?"var(--g)":"var(--r)")+";text-align:right'>"+(st.pnl>=0?"+":"")+"₹"+Math.abs(st.pnl).toLocaleString("en-IN")+"</div></div>";
+    });
+    html+="</div>";
+  } else {
+    html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center;margin-bottom:12px;color:var(--m);font-size:.65rem'>Mark signal outcomes to build your leaderboard</div>";
+  }
+
+  // Time + Regime breakdown (only show if data exists)
+  if(Object.keys(timeStats).length){
+    html+="<div style='font-size:.6rem;font-weight:700;letter-spacing:1px;color:var(--m);margin-bottom:6px'>⏰ BY SESSION</div>";
+    html+="<div style='display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px'>";
+    ["morning","midday","afternoon","closing","after_hours"].forEach(function(tb){
+      if(!timeStats[tb])return;
+      var ts=timeStats[tb],twr=Math.round(ts.wins/ts.trades*100);
+      var lbl={morning:"9:30–10:00",midday:"10:00–13:00",afternoon:"13:00–15:00",closing:"15:00–15:30",after_hours:"After Hours"}[tb]||tb;
+      html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px'><div style='font-size:.55rem;color:var(--m)'>"+lbl+"</div><div style='font-size:.75rem;font-weight:700;color:"+(twr>=60?"var(--g)":twr>=40?"var(--y)":"var(--r)")+"'>"+twr+"% <span style='font-size:.5rem;color:var(--m)'>"+ts.trades+"t</span></div></div>";
+    });
+    html+="</div>";
+  }
+  if(Object.keys(regimeStats).length){
+    html+="<div style='font-size:.6rem;font-weight:700;letter-spacing:1px;color:var(--m);margin-bottom:6px'>🌐 BY REGIME</div>";
+    html+="<div style='display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px'>";
+    Object.keys(regimeStats).forEach(function(r){
+      var rs=regimeStats[r],rwr=Math.round(rs.wins/rs.trades*100);
+      html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px'><div style='font-size:.55rem;color:var(--m)'>"+r+"</div><div style='font-size:.75rem;font-weight:700;color:"+(rwr>=60?"var(--g)":rwr>=40?"var(--y)":"var(--r)")+"'>"+rwr+"% <span style='font-size:.5rem;color:var(--m)'>"+rs.trades+"t</span></div></div>";
+    });
+    html+="</div>";
+  }
+
+  html+="</div>";
+  perf.innerHTML=html;
 }
 
 function clearLog(){
@@ -2774,47 +2960,7 @@ function perfBtn(b){
   saveSignalLog();renderPerformance();renderJ();
 }
 function clearLog(){if(!confirm("Clear all signal logs?"))return;SIGNAL_LOG=[];saveSignalLog();renderPerformance();}
-function renderPerformance(){
-  var el=document.getElementById("perfPanel");if(!el)return;
-  var closed=SIGNAL_LOG.filter(function(x){return x.status==="CLOSED";});
-  var open=SIGNAL_LOG.filter(function(x){return x.status==="OPEN";});
-  var wins=closed.filter(function(x){return x.result==="T1_HIT"||x.result==="T2_HIT";}).length;
-  var t2h=closed.filter(function(x){return x.result==="T2_HIT";}).length;
-  var sl=closed.filter(function(x){return x.result==="SL_HIT";}).length;
-  var wr=closed.length>0?Math.round(wins/closed.length*100):0;
-  var pnl=Math.round(closed.reduce(function(a,x){return a+x.pnl;},0)*100)/100;
-  var pc=wr>=60?"var(--g)":wr>=40?"var(--y)":"var(--r)";
-  var h="<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:10px'>";
-  h+="<div style='background:rgba(255,255,255,.04);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.48rem;color:var(--m);text-transform:uppercase'>Win Rate</div><div style='font-size:.95rem;font-weight:800;color:"+pc+"'>"+wr+"%</div></div>";
-  h+="<div style='background:rgba(255,255,255,.04);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.48rem;color:var(--m);text-transform:uppercase'>P&L</div><div style='font-size:.95rem;font-weight:800;color:"+(pnl>=0?"var(--g)":"var(--r)")+";'>"+(pnl>=0?"+":"")+pnl+"</div></div>";
-  h+="<div style='background:rgba(255,255,255,.04);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.48rem;color:var(--m);text-transform:uppercase'>Open</div><div style='font-size:.95rem;font-weight:800;color:var(--b)'>"+open.length+"</div></div>";
-  h+="<div style='background:rgba(255,255,255,.04);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.48rem;color:var(--m);text-transform:uppercase'>Wins</div><div style='font-size:.95rem;font-weight:800;color:var(--g)'>"+wins+"</div></div>";
-  h+="<div style='background:rgba(255,255,255,.04);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.48rem;color:var(--m);text-transform:uppercase'>T2 Hit</div><div style='font-size:.95rem;font-weight:800;color:var(--g)'>"+t2h+"</div></div>";
-  h+="<div style='background:rgba(255,255,255,.04);border-radius:8px;padding:7px;text-align:center'><div style='font-size:.48rem;color:var(--m);text-transform:uppercase'>SL Hit</div><div style='font-size:.95rem;font-weight:800;color:var(--r)'>"+sl+"</div></div></div>";
-  var recent=SIGNAL_LOG.slice(-10).reverse();
-  if(!recent.length){h+="<div style='text-align:center;padding:15px;color:var(--m);font-size:.72rem'>No signals tracked yet. Tap Execute to start.</div>";}
-  else{
-    h+="<div style='font-size:.58rem;color:var(--m);text-transform:uppercase;margin-bottom:5px'>Recent Signals</div>";
-    recent.forEach(function(x){
-      var sc2=x.status==="OPEN"?"var(--b)":x.result==="SL_HIT"?"var(--r)":"var(--g)";
-      var st=x.status==="OPEN"?"⏳":x.result==="T2_HIT"?"🎯":x.result==="T1_HIT"?"✅":"❌";
-      h+="<div style='display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.04)'>";
-      h+="<div style='min-width:65px'><div style='font-size:.72rem;font-weight:800'>"+x.sym+"</div><div style='font-size:.52rem;color:var(--m)'>"+x.entryTime+"</div></div>";
-      h+="<div style='flex:1'><div style='font-size:.65rem;color:"+(x.bias==="BULLISH"?"var(--g)":"var(--r)")+"'>"+x.bias.slice(0,4)+" "+x.confidence+"%</div></div>";
-      if(x.status==="OPEN"){
-        h+="<div style='display:flex;gap:2px'>";
-        h+="<button data-id='"+x.id+"' data-r='T1_HIT' data-px='"+x.t1+"' onclick='perfBtn(this)' style='padding:2px 5px;border-radius:4px;background:rgba(34,197,94,.15);color:var(--g);border:none;font-size:.52rem;cursor:pointer'>T1</button>";
-        h+="<button data-id='"+x.id+"' data-r='T2_HIT' data-px='"+x.t2+"' onclick='perfBtn(this)' style='padding:2px 5px;border-radius:4px;background:rgba(34,197,94,.15);color:var(--g);border:none;font-size:.52rem;cursor:pointer'>T2</button>";
-        h+="<button data-id='"+x.id+"' data-r='SL_HIT' data-px='"+x.sl+"' onclick='perfBtn(this)' style='padding:2px 5px;border-radius:4px;background:rgba(239,68,68,.15);color:var(--r);border:none;font-size:.52rem;cursor:pointer'>SL</button></div>";
-      } else {
-        h+="<div><span style='font-size:.7rem;font-weight:700;color:"+sc2+"'>"+st+"</span> <span style='font-size:.6rem;color:"+(x.pnl>=0?"var(--g)":"var(--r)")+";'>"+(x.pnl>=0?"+":"")+x.pnl+"</span></div>";
-      }
-      h+="</div>";
-    });
-    h+="<button onclick='clearLog()' style='width:100%;padding:7px;margin-top:8px;border-radius:7px;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--m);font-size:.68rem;cursor:pointer'>🗑 Clear Log</button>";
-  }
-  el.innerHTML=h;
-}
+// ── renderPerformance defined above (line 2528) ──
 
 // ══ BIAS COUNTS (from CMP not signals) ══
 function updateBiasCounts(){
