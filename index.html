@@ -2334,15 +2334,14 @@ function autoLogSignal(sig){
 function updateSignalOutcome(id, outcome, exit_px, notes){
   var e=SIGNAL_LOG.filter(function(x){return x.id===id;})[0];
   if(!e) return;
-  e.status = outcome; // SL_HIT, T1_HIT, T2_HIT, MANUAL
-  e.exit_px = parseFloat(exit_px)||0;
-  e.notes = notes||"";
-  // Calculate P&L based on outcome
+  e.status   = outcome; // SL_HIT, T1_HIT, T2_HIT, MANUAL
+  e.exit_px  = parseFloat(exit_px)||0;
+  e.exitTime = istTime(); // timestamp when outcome was marked
+  e.notes    = notes||"";
   if(e.entry_px && e.exit_px){
     var diff = e.bias==="BULLISH" ?
       e.exit_px - e.entry_px :
       e.entry_px - e.exit_px;
-    // Rough lot size estimation
     var lotSize = LOT_SIZES[e.sym] || LOT_SIZES["DEFAULT"] || 50;
     e.pnl = Math.round(diff * lotSize);
   }
@@ -2515,14 +2514,44 @@ function saveManualEntry(){
 function addJ(){ showManualEntry(); } // backward compat
 
 function exportJ(){
-  var rows=["ID,Symbol,Bias,Trade,Strategy,Confidence,Entry,SL,T1,T2,Status,Exit,PnL,Outcome,Date,Why"];
+  var headers=[
+    "ID","Symbol","Bias","Trade",
+    "Strategy",          // Human label: "ORB Breakout + Volume", "VWAP Reclaim + OI" etc
+    "Setup Key",         // Category key for leaderboard: "OI+Price+Momentum+Regime"
+    "Confidence","Urgency","Layers",
+    "Entry","SL","T1","T2","R:R",
+    "Status","Exit Price","PnL","Outcome",
+    "First Seen",        // When signal FIRST appeared (locked timestamp)
+    "Signal Date",       // Date of first signal
+    "Exit Time",         // When outcome was marked
+    "Time Bucket",       // morning/midday/afternoon/closing
+    "Regime","VIX","Timeframe",
+    "Why"
+  ];
+  var rows=[headers.join(",")];
   SIGNAL_LOG.forEach(function(e){
-    rows.push([e.id,e.sym,e.bias,e.trade,e.strategy,e.confidence,
-      e.entry_px,e.sl_px,e.t1_px,e.t2_px,e.status,e.exit_px||"",e.pnl||"",e.outcome||"",
-      e.date,'"'+(e.why||"").replace(/"/g,"'")+'"'].join(","));
+    var why='"'+(e.why||"").replace(/"/g,"'").replace(/,/g," ")+'"';
+    rows.push([
+      e.id, e.sym, e.bias,
+      '"'+(e.trade||"").replace(/"/g,"'")+'"',
+      '"'+(e.strategy||"").replace(/"/g,"'")+'"',
+      e.setupKey||"Unknown",
+      e.confidence||"", e.urgency||"HIGH", e.layers||"",
+      e.entry_px||"", e.sl_px||"", e.t1_px||"", e.t2_px||"",
+      e.rr||"",
+      e.status||"OPEN",
+      e.exit_px||"", e.pnl||"", e.outcome||"",
+      e.firstSeen||e.date||"",    // First seen time — when signal originally appeared
+      (e.ts||"").slice(0,10),     // Date only (YYYY-MM-DD)
+      e.exitTime||"",             // When outcome was marked
+      e.timeBucket||"",
+      e.regime||"", e.vix||"", e.timeframe||"",
+      why
+    ].join(","));
   });
   var blob=new Blob([rows.join("\n")],{type:"text/csv"});
-  var a=document.createElement("a");a.href=URL.createObjectURL(blob);
+  var a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
   a.download="protrader_signals_"+new Date().toISOString().slice(0,10)+".csv";
   a.click();
   toast("📤 Exported","Signal log saved as CSV","tg");
