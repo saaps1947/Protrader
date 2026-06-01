@@ -935,8 +935,11 @@ function _doFetchFromServer(){
 }
 
 // fetchOI → lock prevents duplicate concurrent OI fetches
+// Lock is 30s normally, but bypassed on first load (_hasOILoaded flag)
+var _oiFirstLoad={};
 function fetchOI(sym){
-  safeFetch("oi_"+sym, function(){return fetchOIMain(sym);}, 30000); // min 30s between OI fetches per symbol
+  var minInterval = _oiFirstLoad[sym] ? 30000 : 100; // near-instant on first load
+  safeFetch("oi_"+sym, function(){return fetchOIMain(sym);}, minInterval);
 }
 
 
@@ -1043,6 +1046,15 @@ function updateOI(s){
         fetchOI(s.sym);
         strip.style.display="block";
         strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>⏳ Loading OI data…</div>";
+        // Auto-retry after 8s if still not loaded (handles 30s lock being held by startOIFetch)
+        var _retrySymOI=s.sym;
+        safeTimeout(function(){
+          var sc2=allS().filter(function(x){return x.sym===_retrySymOI;})[0];
+          if(sc2&&!sc2.cOI){
+            _oiFirstLoad[_retrySymOI]=false; // reset so fetchOI bypasses lock
+            fetchOI(_retrySymOI);
+          }
+        },8000);
       }
     }
     return;
@@ -3151,6 +3163,7 @@ function fetchOIMain(sym){
 }
 
 function applyOIData(sym,o){
+  _oiFirstLoad[sym] = true; // mark first load done — subsequent calls use 30s lock
   var s=allS().filter(function(x){return x.sym===sym;})[0];
   if(!s)return;
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
