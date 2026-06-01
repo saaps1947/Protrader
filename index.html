@@ -2287,14 +2287,39 @@ function saveSignalLog(){
 }
 
 function autoLogSignal(sig){
-  // Auto-log HIGH conviction signals
+  // Guard 1: must be HIGH conviction
   if(!sig||sig.urgency!=="HIGH"||sig.confidence<82) return;
-  // Don't duplicate
-  var exists=SIGNAL_LOG.filter(function(x){
-    return x.sym===sig.sym&&x.trade===sig.trade&&
-    Math.abs(new Date(x.ts)-Date.now())<600000; // within 10min
-  }).length>0;
-  if(exists) return;
+
+  // Guard 2: must have valid price data — reject undefined/zero entry
+  var entryPx = parseFloat(sig.entry)||0;
+  if(!entryPx||isNaN(entryPx)||entryPx<10) return; // clearly invalid
+
+  // Guard 3: must have valid SL and T1
+  var slPx = parseFloat(sig.sl)||0;
+  var t1Px = parseFloat(sig.target1)||0;
+  if(!slPx||!t1Px) return;
+
+  // Guard 4: if same symbol + same direction already OPEN → skip (dedup)
+  var sameOpen = SIGNAL_LOG.filter(function(x){
+    return x.sym===sig.sym && x.bias===sig.bias && x.status==="OPEN";
+  }).length > 0;
+  if(sameOpen) return;
+
+  // Guard 5: if opposite direction OPEN for same symbol → auto-close it
+  // (NIFTY was bullish, now bearish → close the bullish signal as MANUAL)
+  SIGNAL_LOG.forEach(function(x){
+    if(x.sym===sig.sym && x.bias!==sig.bias && x.status==="OPEN"){
+      x.status  = "MANUAL";
+      x.outcome = "MANUAL";
+      x.exitTime= istTime();
+      x.exit_px = entryPx; // last known price as exit
+      x.notes   = "Auto-closed: direction flipped to "+sig.bias;
+      if(x.entry_px&&x.exit_px){
+        var diff = x.bias==="BULLISH"?x.exit_px-x.entry_px:x.entry_px-x.exit_px;
+        x.pnl = Math.round(diff*(LOT_SIZES[x.sym]||LOT_SIZES.DEFAULT||50));
+      }
+    }
+  });
 
   var entry={
     id: Date.now()+"_"+sig.sym,
@@ -2302,33 +2327,31 @@ function autoLogSignal(sig){
     bias: sig.bias,
     trade: sig.trade,
     strategy: sig.strategy,
-    setupKey: sig.setupKey||"Unknown",         // e.g. "OI+Price+Momentum"
-    timeBucket: sig.timeBucket||"unknown",     // "morning"/"midday"/"afternoon"
-    regime: sig.regime||"UNKNOWN",             // market regime at signal time
-    layers: sig.layers||0,                     // independent layers confirmed
-    hasOI: sig.hasOI||false,                   // whether OI data was present
+    setupKey: sig.setupKey||"Unknown",
+    timeBucket: sig.timeBucket||"unknown",
+    regime: sig.regime||"UNKNOWN",
+    layers: sig.layers||0,
+    hasOI: sig.hasOI||false,
     confidence: sig.confidence,
     urgency: sig.urgency||"HIGH",
-    entry_px: parseFloat(sig.entry)||0,
-    sl_px: parseFloat(sig.sl)||0,
-    t1_px: parseFloat(sig.target1)||0,
-    t2_px: parseFloat(sig.target2||sig.target1)||0,
+    entry_px: entryPx,
+    sl_px: slPx,
+    t1_px: t1Px,
+    t2_px: parseFloat(sig.target2||sig.target1)||t1Px,
     rr: sig.rr||"1:2",
     why: sig.why||"",
     vix: VIX,
     timeframe: sig.timeframe||"",
-    firstSeen: sig._firstSeen||istTime(),      // when signal FIRST appeared
+    firstSeen: sig._firstSeen||istTime(),
     ts: new Date().toISOString(),
     date: istTime(),
     status: "OPEN",
-    exit_px: null,
-    pnl: null,
-    outcome: null,
-    notes: ""
+    exit_px: null, pnl: null, outcome: null, exitTime: null, notes: ""
   };
   SIGNAL_LOG.unshift(entry);
   saveSignalLog();
   renderJ();
+  renderPerformance();
 }
 
 function updateSignalOutcome(id, outcome, exit_px, notes){
