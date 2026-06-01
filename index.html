@@ -1038,22 +1038,24 @@ function updTicker(){allS().forEach(function(s){var el=document.getElementById("
 
 function updateOI(s){
   var strip=document.getElementById("oiStrip");
-  if(!strip||!s.cOI){
+  // Consider OI available if ANY of: cOI, pcr, ce wall, pe wall present
+  var hasOIData = s.cOI>0 || s.pcr>0 || s.cW>0 || s.pW>0 || s.mp>0;
+
+  if(!strip||!hasOIData){
     if(strip){
       if(isSymMCX(s.sym)){
         strip.style.display="block";
         strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>MCX options OI not available via public API. Price data active.</div>";
       } else {
-        // Always try to fetch OI — server returns cached data even after market close
         fetchOI(s.sym);
         strip.style.display="block";
         strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>⏳ Loading OI data…</div>";
-        // Auto-retry after 8s if still not loaded (handles 30s lock being held by startOIFetch)
         var _retrySymOI=s.sym;
         safeTimeout(function(){
           var sc2=allS().filter(function(x){return x.sym===_retrySymOI;})[0];
-          if(sc2&&!sc2.cOI){
-            _oiFirstLoad[_retrySymOI]=false; // reset so fetchOI bypasses lock
+          var stillEmpty=sc2&&!sc2.cOI&&!sc2.pcr&&!sc2.cW;
+          if(stillEmpty){
+            _oiFirstLoad[_retrySymOI]=false;
             fetchOI(_retrySymOI);
           }
         },8000);
@@ -1064,16 +1066,20 @@ function updateOI(s){
   strip.style.display="block";
   document.getElementById("oiSym").textContent=s.sym;
   document.getElementById("oiTime").textContent=istTime()+" IST";
-  document.getElementById("oiPe").textContent=(s.pOI/1e7).toFixed(2)+" Cr";
-  document.getElementById("oiCe").textContent=(s.cOI/1e7).toFixed(2)+" Cr";
-  document.getElementById("oiPeC").textContent="Chg: "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr";
-  document.getElementById("oiCeC").textContent="Chg: "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr";
-  var pcr=s.pcr||s.pOI/s.cOI;
+  // Show OI totals if available, else show "–"
+  document.getElementById("oiPe").textContent=s.pOI>0?(s.pOI/1e7).toFixed(2)+" Cr":"–";
+  document.getElementById("oiCe").textContent=s.cOI>0?(s.cOI/1e7).toFixed(2)+" Cr":"–";
+  document.getElementById("oiPeC").textContent=s.pC?"Chg: "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr":"";
+  document.getElementById("oiCeC").textContent=s.cC?"Chg: "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr":"";
+  var pcr=s.pcr||(s.pOI&&s.cOI?s.pOI/s.cOI:0);
   var pe=document.getElementById("oiPcr");
-  pe.textContent=pcr.toFixed(2);pe.style.color=pcr>1.1?"var(--g)":pcr<0.9?"var(--r)":"var(--y)";
+  if(pcr){pe.textContent=pcr.toFixed(2);pe.style.color=pcr>1.1?"var(--g)":pcr<0.9?"var(--r)":"var(--y)";}
+  else{pe.textContent="–";pe.style.color="var(--m)";}
   document.getElementById("oiWalls").textContent="MP ₹"+(s.mp||"–")+" | CE Wall ₹"+(s.cW||"–");
   document.getElementById("oiVix").textContent=VIX+" (IV "+(s.iv||"–")+"%)";
-  document.getElementById("oiSig").textContent=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":"⚖ Neutral — watch CE wall";
+  var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"Loading live OI…";
+  if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
+  document.getElementById("oiSig").textContent=sig;
 }
 
 // ═══════════════════════════════════════════
@@ -3105,13 +3111,18 @@ function showSMCStrip(sym){
     parts.push("<span style='display:inline-block;padding:2px 8px;border-radius:5px;background:rgba(255,165,0,.1);color:#f59e0b;font-size:.6rem;font-weight:700;margin-right:4px'>"+(sw.type==="BEAR_SWEEP"?"🐂":"🐻")+" Liq Sweep ₹"+sw.level+"</span>");
   });
   (smc.ob||[]).forEach(function(ob){
-    if(!s.px||Math.abs(s.px-ob.mid)/s.px>0.015)return;
+    if(!s.px||!ob)return;
+    // Server returns ob.high and ob.low — compute mid safely
+    var obMid = ob.mid || (ob.high&&ob.low ? Math.round((ob.high+ob.low)/2) : ob.high||ob.low||0);
+    if(!obMid||Math.abs(s.px-obMid)/s.px>0.015)return;
     var oc=ob.type==="BULLISH"?"var(--g)":"var(--r)";
-    parts.push("<span style='display:inline-block;padding:2px 8px;border-radius:5px;background:"+(ob.type==="BULLISH"?"rgba(34,197,94,.1)":"rgba(239,68,68,.1)")+";color:"+oc+";font-size:.6rem;font-weight:700;margin-right:4px;border:1px solid "+oc+"'>OB "+ob.type.slice(0,4)+" ₹"+ob.mid+"</span>");
+    parts.push("<span style='display:inline-block;padding:2px 8px;border-radius:5px;background:"+(ob.type==="BULLISH"?"rgba(34,197,94,.1)":"rgba(239,68,68,.1)")+";color:"+oc+";font-size:.6rem;font-weight:700;margin-right:4px;border:1px solid "+oc+"'>OB "+ob.type.slice(0,4)+" ₹"+obMid+"</span>");
   });
   (smc.fvg||[]).slice(-3).forEach(function(fvg){
-    if(fvg.filled||!s.px||Math.abs(s.px-fvg.mid)/s.px>0.02)return;
-    parts.push("<span style='display:inline-block;padding:2px 8px;border-radius:5px;background:rgba(139,92,246,.1);color:var(--p);font-size:.6rem;font-weight:700;margin-right:4px;border:1px solid rgba(139,92,246,.3)'>FVG "+fvg.type.slice(0,4)+" ₹"+fvg.bottom+"-"+fvg.top+"</span>");
+    if(!fvg||fvg.filled||!s.px)return;
+    var fvgMid = fvg.mid || (fvg.top&&fvg.bottom ? Math.round((fvg.top+fvg.bottom)/2) : 0);
+    if(!fvgMid||Math.abs(s.px-fvgMid)/s.px>0.02)return;
+    parts.push("<span style='display:inline-block;padding:2px 8px;border-radius:5px;background:rgba(139,92,246,.1);color:var(--p);font-size:.6rem;font-weight:700;margin-right:4px;border:1px solid rgba(139,92,246,.3)'>FVG "+fvg.type.slice(0,4)+" ₹"+(fvg.bottom||"")+(fvg.top?"-"+fvg.top:"")+"</span>");
   });
   if(parts.length){el.style.display="block";el.innerHTML=parts.join("");}
   else if(smc.structure){el.style.display="block";el.innerHTML="<span style='display:inline-block;padding:2px 6px;color:#64748b;font-size:.58rem'>|SMC| No zones near price</span>";}
