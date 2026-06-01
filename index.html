@@ -511,7 +511,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
     <div><div style="font-size:.85rem;font-weight:800">Market Overview</div>
     <div style="font-size:.62rem;color:var(--m);margin-top:1px">Nifty 50 · tap any to switch</div></div>
-    <button style="padding:5px 10px;border-radius:7px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.2);color:var(--b);font-size:.68rem;font-weight:700;cursor:pointer" onclick="renderScannerSetups()">⟳</button>
+    <button style="padding:5px 10px;border-radius:7px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.2);color:var(--b);font-size:.68rem;font-weight:700;cursor:pointer" id="scanRefreshBtn" onclick="scannerRefresh()">⟳ Refresh</button>
   </div>
   <div style="display:flex;gap:4px;overflow-x:auto;padding-bottom:7px;scrollbar-width:none;margin-bottom:7px" id="sectorFilter">
     <button class="sflt on" onclick="setSector(this,'ALL')">All</button>
@@ -777,7 +777,27 @@ function isOpen(){var m=istMinsNow(),day=istDayNow();if(day===0||day===6)return 
 function isMCXOpen(){var m=istMinsNow(),day=istDayNow();if(day===0)return false;if(day===6)return m>=540&&m<=840;return m>=540&&m<=1410;}
 function isSymMCX(sym){return sym==="CRUDEOIL"||sym==="GOLD"||sym==="SILVER";}
 function mktTxt(){var d=istNow(),day=d.getUTCDay(),h=d.getUTCHours(),m=d.getUTCMinutes(),mins=h*60+m;if(day===0)return"Closed (Sun)";if(day===6)return"Closed (Sat)";if(mins<555)return"Pre-market";if(mins>=555&&mins<=930)return"● LIVE";if(isSymMCX(CS&&CS.sym||"")&&isMCXOpen())return"● MCX LIVE";return"Closed";}
-function nextExp(sym){var d=istNow(),day=d.getUTCDay();if(sym==="SENSEX"){var dt=day<=4?4-day:11-day;return new Date(d.getTime()+dt*864e5);}var dt2=day<=2?2-day:9-day;if(!dt2)dt2=7;return new Date(d.getTime()+dt2*864e5);}
+function nextExp(sym){
+  // If OI data has actual expiry from Zerodha — most accurate
+  var s=allS().filter(function(x){return x.sym===sym;})[0];
+  if(s&&s.exp&&s.exp.length>4){
+    try{return new Date(s.exp);}catch(e){}
+  }
+  // Current expiry schedule (effective Sep 1, 2025):
+  // NSE: ALL contracts (NIFTY weekly, BANKNIFTY monthly, FINNIFTY monthly, stocks monthly) → TUESDAY
+  // BSE: SENSEX weekly → THURSDAY
+  var d=istNow(), day=d.getDay(); // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
+  if(sym==="SENSEX"){
+    // BSE SENSEX: weekly Thursday
+    var dt=day<=4?4-day:11-day;
+    if(!dt)dt=7;
+    return new Date(d.getTime()+dt*864e5);
+  }
+  // All NSE instruments: NIFTY weekly, BANKNIFTY/FINNIFTY/stocks monthly → Tuesday
+  var dt2=day<=2?2-day:9-day;
+  if(!dt2)dt2=7;
+  return new Date(d.getTime()+dt2*864e5);
+}
 
 // ═══════════════════════════════════════════
 // SERVER DATA FETCH
@@ -882,6 +902,8 @@ function _doFetchFromServer(){
     });
     updateHero();updTicker();updateOI(CS);showTech(CS);
     try{savePriceCache();}catch(e){}
+    // Auto-detect SL/T1/T2 hits on every price update
+    try{checkSignalLevels();}catch(e){}
     var t=istTime();
     var isStale=mktData.stale||mktData.source==="cache_stale";
     var ageMin=mktData.cached_age_s?Math.round(mktData.cached_age_s/60):0;
@@ -964,6 +986,28 @@ function manualRefresh(){
   setTimeout(function(){if(btn){btn.style.color="var(--m)";btn.style.animation="";}},3000);
 }
 
+function scannerRefresh(){
+  // Full scanner refresh: new market data + fresh SMC/MTF/OI for current symbol
+  var btn=document.getElementById("scanRefreshBtn");
+  if(btn){btn.textContent="⟳ Refreshing…";btn.style.opacity="0.6";}
+  _serverRetryCount=0;
+  fetchFromServer(); // fresh market data — signals will update too
+  if(CS&&CS.sym){
+    // Force fresh SMC and MTF by clearing fetch timestamps
+    delete _fetchTimestamps["smc_"+CS.sym];
+    delete _fetchTimestamps["mtf_"+CS.sym];
+    delete _fetchTimestamps["oi_"+CS.sym];
+    _oiFirstLoad[CS.sym]=false;
+    fetchSMC(CS.sym);
+    fetchMTF(CS.sym);
+    fetchOI(CS.sym);
+  }
+  setTimeout(function(){
+    renderScannerSetups();
+    if(btn){btn.textContent="⟳ Refresh";btn.style.opacity="1";}
+  },3500);
+}
+
 function setStatus(state,msg){
   var dot=document.getElementById("ldot");
   var txt=document.getElementById("stxt");
@@ -1012,9 +1056,21 @@ function updateHero(){
 function showTech(s){
   var strip=document.getElementById("techStrip");
   if(!strip)return;
-  if(!s.sma20&&!s.rsi){strip.style.display="none";return;}
+  if(!s.sma20&&!s.rsi&&!s.cpr){strip.style.display="none";return;}
   strip.style.display="flex";
   var pills=[];
+  // CPR pill — first so it's most visible
+  if(s.cpr&&s.cpr.type){
+    var cprBg=s.cpr.type==="NARROW"?"rgba(34,197,94,.12)":"rgba(245,158,11,.12)";
+    var cprCol=s.cpr.type==="NARROW"?"var(--g)":"var(--y)";
+    var cprLabel=s.cpr.type==="NARROW"?"📐 Narrow CPR — Trending Day":"📐 Wide CPR — Choppy Day";
+    pills.push('<span class="tech-pill" style="background:'+cprBg+';color:'+cprCol+';border:1px solid '+cprCol+'25">'+cprLabel+'</span>');
+    if(s.cpr.pivot) pills.push('<span class="tech-pill" style="background:rgba(255,255,255,.04);color:var(--m)">P: <b style="color:var(--t)">'+s.cpr.pivot+'</b> TC: <b style="color:var(--g)">'+s.cpr.tc+'</b> BC: <b style="color:var(--r)">'+s.cpr.bc+'</b></span>');
+    if(s.cpr.bias&&s.cpr.bias!=="NEUTRAL"){
+      var bCol=s.cpr.bias==="BULLISH"?"var(--g)":"var(--r)";
+      pills.push('<span class="tech-pill" style="background:rgba(255,255,255,.04);color:'+bCol+'">CPR Bias: '+s.cpr.bias+'</span>');
+    }
+  }
   if(s.sma20&&s.sma50){
     var crossCol=s.crossover==="GOLDEN_CROSS"?"background:rgba(34,197,94,.15);color:var(--g);border:1px solid rgba(34,197,94,.25)":s.crossover==="DEATH_CROSS"?"background:rgba(239,68,68,.15);color:var(--r);border:1px solid rgba(239,68,68,.25)":"background:rgba(255,255,255,.05);color:var(--m)";
     if(s.crossover&&s.crossover!=="NONE")pills.push('<span class="tech-pill" style="'+crossCol+'">'+(s.crossover==="GOLDEN_CROSS"?"☀ Golden Cross":"💀 Death Cross")+'</span>');
@@ -1066,7 +1122,6 @@ function updateOI(s){
   strip.style.display="block";
   document.getElementById("oiSym").textContent=s.sym;
   document.getElementById("oiTime").textContent=istTime()+" IST";
-  // Show OI totals if available, else show "–"
   document.getElementById("oiPe").textContent=s.pOI>0?(s.pOI/1e7).toFixed(2)+" Cr":"–";
   document.getElementById("oiCe").textContent=s.cOI>0?(s.cOI/1e7).toFixed(2)+" Cr":"–";
   document.getElementById("oiPeC").textContent=s.pC?"Chg: "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr":"";
@@ -1075,7 +1130,10 @@ function updateOI(s){
   var pe=document.getElementById("oiPcr");
   if(pcr){pe.textContent=pcr.toFixed(2);pe.style.color=pcr>1.1?"var(--g)":pcr<0.9?"var(--r)":"var(--y)";}
   else{pe.textContent="–";pe.style.color="var(--m)";}
-  document.getElementById("oiWalls").textContent="MP ₹"+(s.mp||"–")+" | CE Wall ₹"+(s.cW||"–");
+  // Updated layout: PCR/MaxPain | PE Wall/CE Wall | Signal
+  var mpStr="MP ₹"+(s.mp||"–");
+  var wallStr="PE Wall ₹"+(s.pW||"–")+" | CE Wall ₹"+(s.cW||"–");
+  document.getElementById("oiWalls").textContent=mpStr+" | "+wallStr;
   document.getElementById("oiVix").textContent=VIX+" (IV "+(s.iv||"–")+"%)";
   var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"Loading live OI…";
   if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
@@ -2071,10 +2129,10 @@ function renderFeed(){
       layerDetail+
       "<div class='sc-lvls'>"+
         "<div class='sc-lv'><div class='sc-ll'>Entry</div><div class='sc-lv-v le'>"+fpx(sig.entry)+"</div></div>"+
-        "<div class='sc-lv'><div class='sc-ll'>Stop</div><div class='sc-lv-v ls'>"+fpx(sig.sl)+"</div></div>"+
+        "<div class='sc-lv'><div class='sc-ll'>Stop"+(sig._slMoved?" 🔒":"")+"</div><div class='sc-lv-v ls' style='"+(sig._slMoved?"color:var(--y)":"")+"'>"+fpx(sig.sl)+(sig._slMoved?" BE":"")+"</div></div>"+
         "<div class='sc-lv'><div class='sc-ll'>T1</div><div class='sc-lv-v lt'>"+fpx(sig.target1)+"</div></div>"+
         "<div class='sc-lv'><div class='sc-ll'>T2</div><div class='sc-lv-v lt'>"+fpx(sig.target2||sig.target1)+"</div></div>"+
-      "</div>"+
+      "</div>"+(sig._slMoved?"<div style='padding:3px 10px 6px;font-size:.58rem;color:var(--y)'>🔒 SL moved to breakeven after T1 hit — trade is risk-free</div>":"")+
       "<div style='display:flex;gap:6px;padding:0 10px 8px'>"+
         "<div style='flex:1;text-align:center;background:rgba(255,255,255,.04);border-radius:6px;padding:4px'><div style='font-size:.55rem;color:var(--m)'>R:R</div><div style='font-size:.7rem;font-weight:700;color:var(--y)'>"+( sig.rr||"1:2")+"</div></div>"+
         "<div style='flex:1;text-align:center;background:rgba(255,255,255,.04);border-radius:6px;padding:4px'><div style='font-size:.55rem;color:var(--m)'>TF</div><div style='font-size:.7rem;font-weight:700;color:var(--b)'>"+( sig.timeframe||"Intraday")+"</div></div>"+
@@ -2377,9 +2435,9 @@ function autoLogSignal(sig){
 function updateSignalOutcome(id, outcome, exit_px, notes){
   var e=SIGNAL_LOG.filter(function(x){return x.id===id;})[0];
   if(!e) return;
-  e.status   = outcome; // SL_HIT, T1_HIT, T2_HIT, MANUAL
+  e.status   = outcome;
   e.exit_px  = parseFloat(exit_px)||0;
-  e.exitTime = istTime(); // timestamp when outcome was marked
+  e.exitTime = istTime();
   e.notes    = notes||"";
   if(e.entry_px && e.exit_px){
     var diff = e.bias==="BULLISH" ?
@@ -2392,6 +2450,64 @@ function updateSignalOutcome(id, outcome, exit_px, notes){
   saveSignalLog();
   renderJ();
   renderPerformance();
+}
+
+// ── AUTO SL/T1/T2 DETECTION ──
+// Called on every price update — auto-closes signals when price crosses levels
+function checkSignalLevels(){
+  if(!SIGNAL_LOG.length) return;
+  var changed=false;
+  SIGNAL_LOG.filter(function(x){return x.status==="OPEN";}).forEach(function(e){
+    var s=allS().filter(function(x){return x.sym===e.sym;})[0];
+    if(!s||!s.px||!e.entry_px) return;
+    var px=s.px;
+    var bull=e.bias==="BULLISH";
+
+    // SL hit check
+    if(e.sl_px>0){
+      var slBreached = bull ? px<=e.sl_px : px>=e.sl_px;
+      if(slBreached){
+        e.status="SL_HIT"; e.exit_px=e.sl_px; e.exitTime=istTime();
+        var diff=bull?e.sl_px-e.entry_px:e.entry_px-e.sl_px;
+        e.pnl=Math.round(diff*(LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50));
+        e.outcome="LOSS"; e.notes="Auto-detected: SL hit at ₹"+e.sl_px;
+        // Remove from live feed
+        allSigs=allSigs.filter(function(a){return !(a.sym===e.sym&&a.bias===e.bias);});
+        toast("🔴 SL Hit — "+e.sym,e.trade+" auto-closed at ₹"+e.sl_px,"tr");
+        changed=true; return;
+      }
+    }
+    // T2 hit check
+    if(e.t2_px>0){
+      var t2Hit = bull ? px>=e.t2_px : px<=e.t2_px;
+      if(t2Hit){
+        e.status="T2_HIT"; e.exit_px=e.t2_px; e.exitTime=istTime();
+        var diff2=bull?e.t2_px-e.entry_px:e.entry_px-e.t2_px;
+        e.pnl=Math.round(diff2*(LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50));
+        e.outcome="BIG WIN"; e.notes="Auto-detected: T2 hit at ₹"+e.t2_px;
+        toast("🏆 T2 Hit — "+e.sym,e.trade+" ₹"+e.t2_px+" | P&L: ₹"+e.pnl,"tg");
+        changed=true; return;
+      }
+    }
+    // T1 hit check (only if T2 not already hit and SL not moved yet)
+    if(e.t1_px>0&&!e._t1Hit){
+      var t1Hit = bull ? px>=e.t1_px : px<=e.t1_px;
+      if(t1Hit){
+        e._t1Hit=true;
+        // Move SL to entry (breakeven)
+        var oldSL=e.sl_px;
+        e.sl_px=e.entry_px;
+        e.notes=(e.notes||"")+" | T1 auto-hit ₹"+e.t1_px+" — SL moved to breakeven ₹"+e.entry_px;
+        // Update live signal SL too
+        allSigs.forEach(function(a){
+          if(a.sym===e.sym&&a.bias===e.bias){a.sl=""+e.entry_px;a._slMoved=true;}
+        });
+        toast("✅ T1 Hit — "+e.sym,"SL moved to breakeven ₹"+e.entry_px,"tg");
+        changed=true;
+      }
+    }
+  });
+  if(changed){saveSignalLog();renderJ();renderPerformance();renderFeed();}
 }
 
 function renderJ(){
@@ -2508,11 +2624,44 @@ function renderSignalEntry(e, isOpen){
 }
 
 function markOutcome(id, outcome){
-  var exit_px = prompt("Exit price (₹):", "");
-  if(exit_px===null) return; // cancelled
-  var notes = outcome==="SL_HIT"?"SL hit":outcome==="T1_HIT"?"T1 reached":outcome==="T2_HIT"?"T2 reached":"Manual exit";
-  updateSignalOutcome(id, outcome, exit_px, notes);
-  toast("✅ Updated","Signal outcome saved","tg");
+  var e=SIGNAL_LOG.filter(function(x){return x.id===id;})[0];
+  if(!e) return;
+  var exit_px;
+  if(outcome==="SL_HIT") exit_px=e.sl_px||"";
+  else if(outcome==="T1_HIT") exit_px=e.t1_px||"";
+  else if(outcome==="T2_HIT") exit_px=e.t2_px||"";
+  else exit_px="";
+  var entered=prompt("Exit price (₹):", exit_px);
+  if(entered===null) return;
+  var notes=outcome==="SL_HIT"?"SL hit":outcome==="T1_HIT"?"T1 reached":outcome==="T2_HIT"?"T2 reached":"Manual exit";
+  updateSignalOutcome(id, outcome, entered, notes);
+
+  // SL HIT → remove signal from live feed immediately
+  if(outcome==="SL_HIT"){
+    allSigs=allSigs.filter(function(s){return s.sym!==e.sym||(s.sym===e.sym&&s.bias!==e.bias);});
+    renderFeed();
+    toast("🔴 SL Hit",""+e.sym+" "+e.bias+" removed from feed","tr");
+  }
+
+  // T1 HIT → move SL to entry price (breakeven stop)
+  if(outcome==="T1_HIT"){
+    // Update the live signal's SL to entry price
+    allSigs.forEach(function(s){
+      if(s.sym===e.sym&&s.bias===e.bias){
+        s._origSL = s.sl;    // remember original SL
+        s.sl = ""+e.entry_px; // move to entry = breakeven
+        s._slMoved = true;
+      }
+    });
+    // Update journal entry too
+    e.sl_px = e.entry_px;
+    e.notes = (e.notes||"")+" | SL moved to entry ₹"+e.entry_px+" after T1 hit";
+    saveSignalLog();
+    renderFeed();
+    toast("✅ T1 Hit","SL moved to breakeven ₹"+e.entry_px,"tg");
+  } else {
+    toast("✅ Updated","Signal outcome saved","tg");
+  }
 }
 
 function showManualEntry(){
@@ -3017,8 +3166,7 @@ function setConvFilt(btn, f){
 
 // ══ SIGNAL PERFORMANCE TRACKER ══
 // SIGNAL_LOG declared above at line 2165 — do not redeclare here
-function loadSignalLog(){try{var s=localStorage.getItem("pt_siglog");if(s)SIGNAL_LOG=JSON.parse(s);}catch(e){SIGNAL_LOG=[];}}
-function saveSignalLog(){try{if(SIGNAL_LOG.length>500)SIGNAL_LOG=SIGNAL_LOG.slice(-500);localStorage.setItem("pt_siglog",JSON.stringify(SIGNAL_LOG));}catch(e){}}
+// loadSignalLog and saveSignalLog defined above
 function logSignalEntry(sig){
   var e={id:sig.sym+"_"+Date.now(),sym:sig.sym,bias:sig.bias,trade:sig.trade,strategy:sig.strategy,
     confidence:sig.confidence,entry:parseFloat(sig.entry)||0,sl:parseFloat(sig.sl)||0,
@@ -3034,7 +3182,7 @@ function perfBtn(b){
   e.pnl=Math.round((e.bias==="BULLISH"?px-e.entry:e.entry-px)*100)/100;
   saveSignalLog();renderPerformance();renderJ();
 }
-function clearLog(){if(!confirm("Clear all signal logs?"))return;SIGNAL_LOG=[];saveSignalLog();renderPerformance();}
+// clearLog defined above at line 2765
 // ── renderPerformance defined above (line 2528) ──
 
 // ══ BIAS COUNTS (from CMP not signals) ══
@@ -3175,13 +3323,15 @@ function fetchOIMain(sym){
 }
 
 function applyOIData(sym,o){
-  _oiFirstLoad[sym] = true; // mark first load done — subsequent calls use 30s lock
+  _oiFirstLoad[sym] = true;
   var s=allS().filter(function(x){return x.sym===sym;})[0];
   if(!s)return;
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.cW=o.ce_wall||0;s.pW=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
-  console.log("[OI ✅] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" src:"+(o.source||""));
+  // Store actual expiry from OI data — more accurate than computed nextExp()
+  if(o.expiry) s.exp=o.expiry;
+  console.log("[OI ✅] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" Exp:"+(o.expiry||"?")+" src:"+(o.source||""));
   if(CS&&CS.sym===sym){updateHero();updateOI(CS);}
   try{renderScanner();}catch(e){}
 }
