@@ -731,6 +731,8 @@ var SD = {
     {sym:"ULTRACEMCO",name:"UltraTech Cement",  px:0,chg:0,pct:0,h:0,l:0,o:0,atm:10000,pcr:0,mp:0,iv:0,exp:"",sector:"INFRA"},
     {sym:"GRASIM",    name:"Grasim",            px:0,chg:0,pct:0,h:0,l:0,o:0,atm:2500, pcr:0,mp:0,iv:0,exp:"",sector:"INFRA"},
     {sym:"BEL",       name:"BEL",               px:0,chg:0,pct:0,h:0,l:0,o:0,atm:270,  pcr:0,mp:0,iv:0,exp:"",sector:"INFRA"},
+    {sym:"HAL",       name:"HAL",               px:0,chg:0,pct:0,h:0,l:0,o:0,atm:4000, pcr:0,mp:0,iv:0,exp:"",sector:"INFRA"},
+    {sym:"INDIGO",    name:"IndiGo",            px:0,chg:0,pct:0,h:0,l:0,o:0,atm:4500, pcr:0,mp:0,iv:0,exp:"",sector:"INFRA"},
     {sym:"BHARTIARTL",name:"Bharti Airtel",     px:0,chg:0,pct:0,h:0,l:0,o:0,atm:1700, pcr:0,mp:0,iv:0,exp:"",sector:"TELECOM"},
     {sym:"SHRIRAMFIN",name:"Shriram Finance",   px:0,chg:0,pct:0,h:0,l:0,o:0,atm:600,  pcr:0,mp:0,iv:0,exp:"",sector:"FINANCE"}
   ]
@@ -3142,21 +3144,20 @@ function startOIFetch(){
 }
 
 function fetchOIMain(sym){
-  if(["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"].indexOf(sym)<0)return;
-  if(!SERVER_URL)return;
-  // Always pass Zerodha credentials so server can use Kite API
+  var OI_SYMS=["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"];
+  if(OI_SYMS.indexOf(sym)<0)return Promise.resolve(null); // return resolved promise so lock clears cleanly
+  if(!SERVER_URL)return Promise.resolve(null);
   var url=SERVER_URL+"/zerodha_oi?sym="+sym;
   if(KITE.apiKey&&KITE.accessToken){
     url+="&key="+encodeURIComponent(KITE.apiKey)+"&token="+encodeURIComponent(KITE.accessToken);
   }
-  fetch(url,{signal:AbortSignal.timeout(25000)})
+  return fetch(url,{signal:AbortSignal.timeout(25000)})  // MUST return promise so safeFetch holds lock until complete
   .then(function(r){return r.json();})
   .then(function(d){
     if(d&&d.ok&&d.data){
       applyOIData(sym,d.data);
-      console.log("[OI ✅]",sym,"PCR:"+d.data.pcr,"MP:"+d.data.max_pain,"src:"+d.data.source);
     } else {
-      console.warn("[OI ❌]",sym,d&&d.error||"no data",d&&d.trace||"");
+      console.warn("[OI ❌]",sym,d&&d.error||"no data");
     }
   })
   .catch(function(e){console.warn("[OI error]",sym,e.message);});
