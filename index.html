@@ -488,9 +488,8 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
       <div class="oi-side"><div class="oi-sl" style="color:var(--r)">Call OI (Resist)</div><div class="oi-sv" id="oiCe" style="color:var(--r)">–</div><div class="oi-sc" id="oiCeC" style="color:var(--r)">–</div></div>
     </div>
     <div class="oi-rows">
-      <div class="oi-row"><span class="oi-rl">PCR</span><span class="oi-rv" id="oiPcr">–</span></div>
-      <div class="oi-row"><span class="oi-rl">Max Pain / CE Wall</span><span class="oi-rv" id="oiWalls">–</span></div>
-      <div class="oi-row"><span class="oi-rl">India VIX</span><span class="oi-rv" id="oiVix" style="color:var(--y)">–</span></div>
+      <div class="oi-row"><span class="oi-rl">PCR</span><span class="oi-rv" id="oiPcr">–</span><span class="oi-rl" style="margin-left:12px">Max Pain</span><span class="oi-rv" id="oiMp">–</span></div>
+      <div class="oi-row"><span class="oi-rl" style="color:var(--g)">PE Wall</span><span class="oi-rv" id="oiPeWall" style="color:var(--g)">–</span><span class="oi-rl" style="margin-left:12px;color:var(--r)">CE Wall</span><span class="oi-rv" id="oiCeWall" style="color:var(--r)">–</span></div>
       <div class="oi-row"><span class="oi-rl">Signal</span><span class="oi-rv" id="oiSig" style="font-size:.63rem">–</span></div>
     </div>
   </div>
@@ -1130,11 +1129,15 @@ function updateOI(s){
   var pe=document.getElementById("oiPcr");
   if(pcr){pe.textContent=pcr.toFixed(2);pe.style.color=pcr>1.1?"var(--g)":pcr<0.9?"var(--r)":"var(--y)";}
   else{pe.textContent="–";pe.style.color="var(--m)";}
-  // Updated layout: PCR/MaxPain | PE Wall/CE Wall | Signal
-  var mpStr="MP ₹"+(s.mp||"–");
-  var wallStr="PE Wall ₹"+(s.pW||"–")+" | CE Wall ₹"+(s.cW||"–");
-  document.getElementById("oiWalls").textContent=mpStr+" | "+wallStr;
-  document.getElementById("oiVix").textContent=VIX+" (IV "+(s.iv||"–")+"%)";
+  // MP on same row as PCR
+  var mpEl=document.getElementById("oiMp");
+  if(mpEl) mpEl.textContent=s.mp?("₹"+s.mp.toLocaleString("en-IN")):"–";
+  // PE Wall and CE Wall on separate row
+  var peWallEl=document.getElementById("oiPeWall");
+  var ceWallEl=document.getElementById("oiCeWall");
+  if(peWallEl) peWallEl.textContent=s.pW?("₹"+s.pW.toLocaleString("en-IN")):"–";
+  if(ceWallEl) ceWallEl.textContent=s.cW?("₹"+s.cW.toLocaleString("en-IN")):"–";
+  // Remove old combined walls display
   var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"Loading live OI…";
   if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
   document.getElementById("oiSig").textContent=sig;
@@ -1850,7 +1853,9 @@ function localSigs(){
         t1=t1Levels.length?Math.min.apply(null,t1Levels):px+slDist*2;
         // Cap T1 at 2% from entry if CE wall is too far
         if(t1>px*1.02) t1=Math.round(px+slDist*2);
-        t2=ceWall>t1&&ceWall<px*1.03?ceWall:Math.round(px+slDist*3);
+        // T2 must ALWAYS be further than T1 for bull trades
+        var t2raw=ceWall>t1&&ceWall<px*1.04?ceWall:Math.round(px+slDist*3);
+        t2=Math.max(t2raw, Math.round(t1+(t1-px)*0.5)); // T2 >= T1 + 50% of T1 distance
 
         rrRatio=slDist>0?Math.round((t1-px)/slDist*10)/10:2;
 
@@ -1867,7 +1872,9 @@ function localSigs(){
         ].filter(function(x){return x>0&&x<px;});
         t1=t1Levels2.length?Math.max.apply(null,t1Levels2):px-slDist2*2;
         if(t1<px*0.98) t1=Math.round(px-slDist2*2);
-        t2=peWall<t1&&peWall>px*0.97?peWall:Math.round(px-slDist2*3);
+        // T2 must ALWAYS be further than T1 for bear trades (lower price)
+        var t2raw2=peWall<t1&&peWall>px*0.96?peWall:Math.round(px-slDist2*3);
+        t2=Math.min(t2raw2, Math.round(t1-(px-t1)*0.5)); // T2 <= T1 - 50% of T1 distance
 
         rrRatio=slDist2>0?Math.round((px-t1)/slDist2*10)/10:2;
       }
@@ -1990,30 +1997,38 @@ function localSigs(){
 }
 
 
+// Persistent first-seen timestamps — survives Scan Now button clicks
+var _sigFirstSeen = {}; // key: sym+bias → {time, ts}
+
 function processScan(sigs){
   window._lastScanTs = Date.now();
   var prev={};allSigs.forEach(function(s){prev[s.sym+s.bias]=s;});
   sigs.forEach(function(sig){
-    var prevSig=prev[sig.sym+sig.bias]; // match sym AND direction
+    var key=sig.sym+sig.bias;
+    var prevSig=prev[key];
     var prevAny=allSigs.filter(function(s){return s.sym===sig.sym;})[0];
-
-    // Direction flipped (was BULLISH now BEARISH or vice versa) = treat as NEW
     var dirFlip=prevAny&&prevAny.bias!==sig.bias;
 
-    if(prevSig&&!dirFlip){
-      // Same symbol, same direction — preserve first-seen timestamp
-      sig._firstSeen     = prevSig._firstSeen || prevSig._time || istTime();
-      sig._firstSeenTs   = prevSig._firstSeenTs || prevSig._ts || Date.now();
-      sig._ts            = prevSig._firstSeenTs || prevSig._ts || Date.now();
-      sig._time          = prevSig._firstSeen || prevSig._time || istTime();
-      sig._isNew         = false;
+    if(dirFlip){
+      // Direction flipped — clear old first-seen
+      delete _sigFirstSeen[key];
+    }
+
+    if(_sigFirstSeen[key]&&!dirFlip){
+      // Use persistent first-seen — survives Scan Now clicks
+      sig._firstSeen   = _sigFirstSeen[key].time;
+      sig._firstSeenTs = _sigFirstSeen[key].ts;
+      sig._ts          = _sigFirstSeen[key].ts;
+      sig._time        = _sigFirstSeen[key].time;
+      sig._isNew       = false;
     } else {
-      // New signal or direction flip — lock first-seen NOW
-      sig._firstSeen     = istTime();
-      sig._firstSeenTs   = Date.now();
-      sig._ts            = Date.now();
-      sig._time          = istTime();
-      sig._isNew         = true;
+      // Genuinely new signal
+      sig._firstSeen   = istTime();
+      sig._firstSeenTs = Date.now();
+      sig._ts          = Date.now();
+      sig._time        = istTime();
+      sig._isNew       = true;
+      _sigFirstSeen[key] = {time:sig._firstSeen, ts:sig._firstSeenTs};
     }
 
     // Auto-log HIGH conviction signals
@@ -2457,52 +2472,57 @@ function updateSignalOutcome(id, outcome, exit_px, notes){
 function checkSignalLevels(){
   if(!SIGNAL_LOG.length) return;
   var changed=false;
-  SIGNAL_LOG.filter(function(x){return x.status==="OPEN";}).forEach(function(e){
+  // Watch OPEN signals for all levels, T1_HIT signals for T2 only
+  SIGNAL_LOG.filter(function(x){return x.status==="OPEN"||x.status==="T1_HIT";}).forEach(function(e){
     var s=allS().filter(function(x){return x.sym===e.sym;})[0];
     if(!s||!s.px||!e.entry_px) return;
     var px=s.px;
     var bull=e.bias==="BULLISH";
+    var lotSize=LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
 
-    // SL hit check
-    if(e.sl_px>0){
-      var slBreached = bull ? px<=e.sl_px : px>=e.sl_px;
-      if(slBreached){
-        e.status="SL_HIT"; e.exit_px=e.sl_px; e.exitTime=istTime();
-        var diff=bull?e.sl_px-e.entry_px:e.entry_px-e.sl_px;
-        e.pnl=Math.round(diff*(LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50));
-        e.outcome="LOSS"; e.notes="Auto-detected: SL hit at ₹"+e.sl_px;
-        // Remove from live feed
-        allSigs=allSigs.filter(function(a){return !(a.sym===e.sym&&a.bias===e.bias);});
-        toast("🔴 SL Hit — "+e.sym,e.trade+" auto-closed at ₹"+e.sl_px,"tr");
-        changed=true; return;
+    if(e.status==="OPEN"){
+      // SL hit check
+      if(e.sl_px>0){
+        var slBreached = bull ? px<=e.sl_px : px>=e.sl_px;
+        if(slBreached){
+          e.status="SL_HIT"; e.exit_px=e.sl_px; e.exitTime=istTime();
+          var diff=bull?e.sl_px-e.entry_px:e.entry_px-e.sl_px;
+          e.pnl=Math.round(diff*lotSize);
+          e.outcome="LOSS"; e.notes="Auto-detected: SL hit at ₹"+e.sl_px;
+          allSigs=allSigs.filter(function(a){return !(a.sym===e.sym&&a.bias===e.bias);});
+          toast("🔴 SL Hit — "+e.sym,e.trade+" auto-closed at ₹"+e.sl_px,"tr");
+          changed=true; return;
+        }
+      }
+      // T1 hit check
+      if(e.t1_px>0&&!e._t1Hit){
+        var t1Hit = bull ? px>=e.t1_px : px<=e.t1_px;
+        if(t1Hit){
+          e._t1Hit=true;
+          e.status="T1_HIT"; e.outcome="WIN";
+          var t1diff=bull?e.t1_px-e.entry_px:e.entry_px-e.t1_px;
+          e.pnl=Math.round(t1diff*lotSize*0.5);
+          e.exit_px=e.t1_px; e.exitTime=istTime();
+          e.sl_px=e.entry_px; // move to breakeven
+          e.notes=(e.notes||"")+" | ✅ T1 hit ₹"+e.t1_px+" (50% booked)";
+          allSigs.forEach(function(a){if(a.sym===e.sym&&a.bias===e.bias){a.sl=""+e.entry_px;a._slMoved=true;}});
+          toast("✅ T1 Hit — "+e.sym,"50% booked ₹"+e.t1_px+" | SL→breakeven","tg");
+          changed=true; return;
+        }
       }
     }
-    // T2 hit check
+
+    // T2 hit — works for both OPEN and T1_HIT status
     if(e.t2_px>0){
       var t2Hit = bull ? px>=e.t2_px : px<=e.t2_px;
       if(t2Hit){
+        var t2diff=bull?e.t2_px-e.entry_px:e.entry_px-e.t2_px;
+        var prevPnl=e._t1Hit?e.pnl||0:0; // already booked P&L at T1
         e.status="T2_HIT"; e.exit_px=e.t2_px; e.exitTime=istTime();
-        var diff2=bull?e.t2_px-e.entry_px:e.entry_px-e.t2_px;
-        e.pnl=Math.round(diff2*(LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50));
-        e.outcome="BIG WIN"; e.notes="Auto-detected: T2 hit at ₹"+e.t2_px;
-        toast("🏆 T2 Hit — "+e.sym,e.trade+" ₹"+e.t2_px+" | P&L: ₹"+e.pnl,"tg");
-        changed=true; return;
-      }
-    }
-    // T1 hit check (only if T2 not already hit and SL not moved yet)
-    if(e.t1_px>0&&!e._t1Hit){
-      var t1Hit = bull ? px>=e.t1_px : px<=e.t1_px;
-      if(t1Hit){
-        e._t1Hit=true;
-        // Move SL to entry (breakeven)
-        var oldSL=e.sl_px;
-        e.sl_px=e.entry_px;
-        e.notes=(e.notes||"")+" | T1 auto-hit ₹"+e.t1_px+" — SL moved to breakeven ₹"+e.entry_px;
-        // Update live signal SL too
-        allSigs.forEach(function(a){
-          if(a.sym===e.sym&&a.bias===e.bias){a.sl=""+e.entry_px;a._slMoved=true;}
-        });
-        toast("✅ T1 Hit — "+e.sym,"SL moved to breakeven ₹"+e.entry_px,"tg");
+        // Full position P&L if no T1 hit, remaining 50% if T1 was hit
+        e.pnl=prevPnl+Math.round(t2diff*lotSize*(e._t1Hit?0.5:1));
+        e.outcome="BIG WIN"; e.notes=(e.notes||"")+" | 🏆 T2 hit ₹"+e.t2_px;
+        toast("🏆 T2 Hit — "+e.sym,e.trade+" ₹"+e.t2_px+" | Total P&L: ₹"+e.pnl,"tg");
         changed=true;
       }
     }
@@ -2565,7 +2585,7 @@ function renderSignalEntry(e, isOpen){
   var statusLabel = {
     "OPEN":"🔵 OPEN",
     "SL_HIT":"🔴 SL HIT",
-    "T1_HIT":"🟢 T1 HIT",
+    "T1_HIT":"✅ T1 HIT — watching T2",
     "T2_HIT":"🏆 T2 HIT",
     "MANUAL":"⚪ MANUAL EXIT"
   }[e.status]||e.status;
@@ -3224,7 +3244,7 @@ function updateBiasCounts(){
     breadth.innerHTML=
       "<span style='font-size:.63rem;font-weight:700;color:"+moodCol+"'>"+mood+"</span>"+
       "<span style='font-size:.58rem;color:var(--m);margin-left:auto'>"+cmBulls+"↑ "+cmBears+"↓ "+cmFlat+"→ stocks</span>"+
-      "<span style='font-size:.56rem;color:var(--m);margin-left:8px;padding-left:8px;border-left:1px solid var(--border)'>Signals: 🔥"+sigHigh+" ⚡"+sigMod+" 👀"+sigWatch+"</span>";
+      "<span style='font-size:.72rem;color:var(--m);margin-left:8px;padding-left:8px;border-left:1px solid var(--border)'>Signals: <span style='font-size:.8rem;font-weight:700;color:var(--r)'>🔥"+sigHigh+"</span> <span style='font-size:.8rem;font-weight:700;color:var(--b)'>⚡"+sigMod+"</span> <span style='font-size:.8rem;font-weight:700;color:var(--m)'>👀"+sigWatch+"</span></span>";
   }
 }
 
