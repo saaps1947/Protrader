@@ -3400,14 +3400,14 @@ function startOIFetch(){
 }
 
 function fetchOIMain(sym){
-  var OI_SYMS=["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"];
-  if(OI_SYMS.indexOf(sym)<0)return Promise.resolve(null); // return resolved promise so lock clears cleanly
+  // All OI-supported symbols: 4 indices + 18 liquid stocks + MCX (CRUDEOIL, GOLD)
+  // Server-side OI_ALL validates the symbol — no need to duplicate the list here
   if(!SERVER_URL)return Promise.resolve(null);
   var url=SERVER_URL+"/zerodha_oi?sym="+sym;
   if(KITE.apiKey&&KITE.accessToken){
     url+="&key="+encodeURIComponent(KITE.apiKey)+"&token="+encodeURIComponent(KITE.accessToken);
   }
-  return fetch(url,{signal:AbortSignal.timeout(25000)})  // MUST return promise so safeFetch holds lock until complete
+  return fetch(url,{signal:AbortSignal.timeout(25000)})
   .then(function(r){return r.json();})
   .then(function(d){
     if(d&&d.ok&&d.data){
