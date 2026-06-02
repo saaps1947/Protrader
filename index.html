@@ -1099,23 +1099,20 @@ function updateOI(s){
 
   if(!strip||!hasOIData){
     if(strip){
-      if(isSymMCX(s.sym)){
-        strip.style.display="block";
-        strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>MCX options OI not available via public API. Price data active.</div>";
-      } else {
-        fetchOI(s.sym);
-        strip.style.display="block";
-        strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>⏳ Loading OI data…</div>";
-        var _retrySymOI=s.sym;
-        safeTimeout(function(){
-          var sc2=allS().filter(function(x){return x.sym===_retrySymOI;})[0];
-          var stillEmpty=sc2&&!sc2.cOI&&!sc2.pcr&&!sc2.cW;
-          if(stillEmpty){
-            _oiFirstLoad[_retrySymOI]=false;
-            fetchOI(_retrySymOI);
-          }
-        },8000);
-      }
+      // MCX (CRUDEOIL/GOLD) OI is now supported via Zerodha MCX instruments
+      // Both MCX and non-MCX symbols go through the same fetchOI path
+      fetchOI(s.sym);
+      strip.style.display="block";
+      strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>⏳ Loading OI data"+(isSymMCX(s.sym)?" (MCX)":"")+"…</div>";
+      var _retrySymOI=s.sym;
+      safeTimeout(function(){
+        var sc2=allS().filter(function(x){return x.sym===_retrySymOI;})[0];
+        var stillEmpty=sc2&&!sc2.cOI&&!sc2.pcr&&!sc2.cW;
+        if(stillEmpty){
+          _oiFirstLoad[_retrySymOI]=false;
+          fetchOI(_retrySymOI);
+        }
+      },8000);
     }
     return;
   }
