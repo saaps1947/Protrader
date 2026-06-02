@@ -153,6 +153,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 .tsc{background:rgba(139,92,246,.1);color:var(--p);border:1px solid rgba(139,92,246,.2)}
 .tsw{background:rgba(59,130,246,.1);color:var(--b);border:1px solid rgba(59,130,246,.2)}
 .tbt{background:rgba(139,92,246,.1);color:var(--p)}.thf{background:rgba(239,68,68,.1);color:var(--r)}
+.tcpr{background:rgba(34,197,94,.1);color:var(--g);border:1px solid rgba(34,197,94,.2)}
 .su-title{font-size:.72rem;font-weight:700;flex:1}
 .su-prob{font-size:.75rem;font-weight:700}
 .su-body{padding:0 10px 9px}
@@ -1395,10 +1396,13 @@ function localSigs(){
     // Short buildup: OI rising + price falling = bears adding = bearish
     var putWriting=peChg>0&&peChg>ceChg;   // puts being written = support = bullish
     var callWriting=ceChg>0&&ceChg>peChg;  // calls being written = resistance = bearish
-    var pcrExtremeBull=pcr>0&&pcr<0.7;     // extreme low PCR = too many calls = reversal to bull
-    var pcrExtremeBear=pcr>1.4;            // extreme high PCR = too many puts = reversal to bear
-    var pcrBull=pcr>0&&pcr>=1.1&&pcr<=1.4; // normal bullish PCR
-    var pcrBear=pcr>0&&pcr>=0.7&&pcr<0.9;  // normal bearish PCR
+    var pcrStrongBull=pcr>=1.6;              // very heavy put writing = strong institutional support
+    var pcrExtremeBull=pcr>0&&pcr<0.6;      // extreme call buying = crowd overconfident = contrarian BEAR reversal
+    var pcrBull=pcr>0&&pcr>=1.1&&pcr<1.6;  // normal bullish OI PCR
+    var pcrBear=pcr>0&&pcr>=0.7&&pcr<0.9;  // normal bearish OI PCR
+    // NOTE: In Indian OI-based PCR (Zerodha), high PCR = put writing = institutions bullish
+    // Extreme high PCR (>1.6) = even stronger bull, NOT a bearish reversal
+    // Only extreme LOW PCR (<0.6) signals potential bearish reversal (too many calls)
 
     // Max Pain analysis
     var mpDist=mp>0?((px-mp)/mp*100):0; // +ve = above MP, -ve = below MP
@@ -1501,10 +1505,20 @@ function localSigs(){
     // OI confirmations
     if(putWriting){bullScore+=2;bullReasons.push("Put writing ↑ ("+((peChg/1e6).toFixed(1))+"M new puts = support)");}
     if(callWriting){bearScore+=2;bearReasons.push("Call writing ↑ ("+((ceChg/1e6).toFixed(1))+"M new calls = resistance)");}
-    if(pcrBull){bullScore+=1;bullReasons.push("PCR "+pcr+" bullish");}
-    if(pcrBear){bearScore+=1;bearReasons.push("PCR "+pcr+" bearish");}
-    if(pcrExtremeBull&&s.pct>0){bullScore+=3;bullReasons.push("PCR "+pcr+" extreme low → reversal up expected");}
-    if(pcrExtremeBear&&s.pct<0){bearScore+=3;bearReasons.push("PCR "+pcr+" extreme high → reversal down expected");}
+    if(pcrBull){bullScore+=1;bullReasons.push("PCR "+pcr+" bullish — put writing dominant");}
+    if(pcrStrongBull){
+      // Heavy put writing is bullish — but check if bearish flow contradicts it
+      var bearishFlowPresent = (s.buildup==="SHORT_BUILDUP") || belowVwap || callWriting;
+      if(bearishFlowPresent){
+        bullScore+=1; // downgrade: PCR says bull but flow says otherwise
+        bullReasons.push("PCR "+pcr+" strong put writing ⚠ reduced — contradicted by "+(s.buildup==="SHORT_BUILDUP"?"short buildup":belowVwap?"below VWAP":"CE writing"));
+      } else {
+        bullScore+=2;
+        bullReasons.push("PCR "+pcr+" strong — heavy institutional put writing, no bearish contradiction");
+      }
+    }
+    if(pcrBear){bearScore+=1;bearReasons.push("PCR "+pcr+" bearish — call writing dominant");}
+    if(pcrExtremeBull&&s.pct<0){bearScore+=2;bearReasons.push("PCR "+pcr+" extreme low — crowd buying calls, reversal risk");}
     if(belowMp){bullScore+=1;bullReasons.push("Below Max Pain ₹"+mp+" → gravitates up");}
     if(aboveMp){bearScore+=1;bearReasons.push("Above Max Pain ₹"+mp+" → gravitates down");}
     if(nearPeWall){bullScore+=2;bullReasons.push("At PE wall ₹"+peWall+" = strong support");}
@@ -1679,8 +1693,8 @@ function localSigs(){
 
     // 7. MULTI-LAYER ALIGNMENT BONUS
     // When OI + VWAP + Structure all agree = high conviction boost
-    var oiBull=(pcrBull||putWriting||trappedCE||pcrExtremeBull);
-    var oiBear=(pcrBear||callWriting||trappedPE||pcrExtremeBear);
+    var oiBull=(pcrBull||pcrStrongBull||putWriting||trappedCE);
+    var oiBear=(pcrBear||pcrExtremeBull||callWriting||trappedPE);
     var vwapBull=aboveVwap||vwapReclaim;
     var vwapBear=belowVwap||vwapReject;
     var structBull=bullStructure||bullOB||bullSweep;
@@ -1779,9 +1793,9 @@ function localSigs(){
     var hasOI = (pcr>0||ceOI>0||peOI>0||ceWall>0||peWall>0||mp>0); // real OI data present
 
     // OI category: PCR, walls, writer traps (all from option chain)
-    var oiCatBull = (pcrBull?1:0)+(pcrExtremeBull?1:0)+(nearPeWall?1:0)+
+    var oiCatBull = (pcrBull?1:0)+(pcrStrongBull?2:0)+(nearPeWall?1:0)+
                     (belowMp?1:0)+(putWriting?1:0)+(trappedCE?1:0)+(ceUnwinding?1:0);
-    var oiCatBear = (pcrBear?1:0)+(pcrExtremeBear?1:0)+(nearCeWall?1:0)+
+    var oiCatBear = (pcrBear?1:0)+(pcrExtremeBull?1:0)+(nearCeWall?1:0)+
                     (aboveMp?1:0)+(callWriting?1:0)+(trappedPE?1:0)+(peUnwinding?1:0);
 
     // Price action category: VWAP, ORB, SMC, CPR (all from candles/structure)
@@ -1905,8 +1919,8 @@ function localSigs(){
                 bullFVG&&aboveVwap?"FVG + VWAP Demand":
                 bullSweep&&peWriting?"Liq Sweep + OI Support":
                 cprNarrow&&aboveTC&&aboveVwap?"Narrow CPR + VWAP Breakout":
-                pcrExtremeBull?"PCR Extreme Reversal":
-                regimeCode==="TRENDING_UP"?"Trend Continuation":"Multi-factor Bullish";
+                pcrExtremeBull?"PCR Extreme Reversal (Calls)":
+                pcrStrongBull?"Heavy Put Writing + OI":"Multi-factor Bullish";                regimeCode==="TRENDING_UP"?"Trend Continuation":"Multi-factor Bullish";
       var isBtst=mktClosed&&bullScore>=4;
       var whyText=bullReasons.slice(0,3).join(" | ");
       // Time bucket for performance tracking
@@ -1944,8 +1958,8 @@ function localSigs(){
                  bearFVG&&belowVwap?"FVG + VWAP Supply":
                  bearSweep&&ceWriting?"Liq Sweep + OI Resistance":
                  cprNarrow&&belowBC&&belowVwap?"Narrow CPR + VWAP Breakdown":
-                 pcrExtremeBear?"PCR Extreme Reversal":
-                 regimeCode==="TRENDING_DOWN"?"Trend Continuation":"Multi-factor Bearish";
+                 pcrExtremeBull?"PCR Extreme Reversal (Calls overloaded)":
+                 callWriting?"CE Writing — Resistance Building":"Multi-factor Bearish";                 regimeCode==="TRENDING_DOWN"?"Trend Continuation":"Multi-factor Bearish";
       var whyBear=bearReasons.slice(0,3).join(" | ");
       var timeBucket2=nowH<10?"morning":nowH<13?"midday":nowH<15?"afternoon":"closing";
       if(!isOpen())timeBucket2="after_hours";
@@ -2177,6 +2191,32 @@ function execSig(idx){var sig=allSigs[idx];if(!sig)return;logSignalEntry(sig);pe
 // ═══════════════════════════════════════════
 function renderScannerSetups(){
   var setups=[];
+  // ── CPR Setup — always shown if data available ──
+  if(s.cpr&&s.cpr.type){
+    var cprNarrow=s.cpr.type==="NARROW";
+    var aboveTC2=px>s.cpr.tc; var belowBC2=px<s.cpr.bc;
+    if(cprNarrow&&aboveTC2){
+      setups.push({k:"cpr",d:"bull",tag:"tcpr",tn:"Narrow CPR",
+        title:"📐 Narrow CPR — Trending Day Breakout",
+        desc:"CPR width <0.3% — trending day expected. Price above TC ₹"+s.cpr.tc+". Trade CE on any pullback to TC level. High probability setup.",
+        e:"₹"+px.toLocaleString(),sl:"₹"+s.cpr.tc,t:"₹"+(atm+step*2).toLocaleString(),rr:"1:2",tf:"Today",p:84});
+    } else if(cprNarrow&&belowBC2){
+      setups.push({k:"cpr",d:"bear",tag:"tcpr",tn:"Narrow CPR",
+        title:"📐 Narrow CPR — Trending Day Breakdown",
+        desc:"CPR width <0.3% — trending day expected. Price below BC ₹"+s.cpr.bc+". Trade PE on any bounce to BC level. High probability setup.",
+        e:"₹"+px.toLocaleString(),sl:"₹"+s.cpr.bc,t:"₹"+(atm-step*2).toLocaleString(),rr:"1:2",tf:"Today",p:84});
+    } else if(cprNarrow){
+      setups.push({k:"cpr",d:"neu",tag:"tcpr",tn:"Narrow CPR",
+        title:"📐 Narrow CPR — Wait for Break",
+        desc:"CPR width <0.3% — trending day expected. Price inside TC ₹"+s.cpr.tc+" / BC ₹"+s.cpr.bc+". Wait for clear break above TC or below BC with volume before entering.",
+        e:"Wait for break",sl:"Other side of CPR",t:"1–2% directional",rr:"1:2+",tf:"Today",p:80});
+    } else {
+      setups.push({k:"cpr",d:"neu",tag:"tcpr",tn:"Wide CPR",
+        title:"📐 Wide CPR — Choppy Day",
+        desc:"CPR width >0.5% — choppy/sideways day expected. Pivot: ₹"+s.cpr.pivot+" | TC: ₹"+s.cpr.tc+" | BC: ₹"+s.cpr.bc+". Reduce directional size. Sell premium at OI walls instead.",
+        e:"Sell premium",sl:"Break of walls",t:"Premium decay",rr:"1:2",tf:"Today",p:74});
+    }
+  }
   // Technical-based setups
   if(s.crossover==="GOLDEN_CROSS")setups.push({k:"bo",d:"bull",tag:"tbo",tn:"Golden Cross",title:s.sym+" Golden Cross Signal",desc:"SMA20 crossed above SMA50 — strongest technical buy signal. Trend confirmed bullish.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.005)).toLocaleString(),t:"₹"+(atm+step*3).toLocaleString(),rr:"1:2",tf:"Daily",p:87});
   if(s.crossover==="DEATH_CROSS")setups.push({k:"bo",d:"bear",tag:"tbo",tn:"Death Cross",title:s.sym+" Death Cross Signal",desc:"SMA20 crossed below SMA50 — strongest technical sell signal. Trend confirmed bearish.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.005)).toLocaleString(),t:"₹"+(atm-step*3).toLocaleString(),rr:"1:2",tf:"Daily",p:87});
