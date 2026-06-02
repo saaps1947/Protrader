@@ -2583,13 +2583,21 @@ function renderJ(){
   var avgPnl = closed.length ? Math.round(totPnl/closed.length) : 0;
 
   // Stats bar
+  var unrealTotal=0;
+  open.forEach(function(e){
+    var liveS=allS().filter(function(x){return x.sym===e.sym;})[0];
+    if(liveS&&liveS.px&&e.entry_px){
+      var diff=e.bias==="BULLISH"?liveS.px-e.entry_px:e.entry_px-liveS.px;
+      unrealTotal+=Math.round(diff*(LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50));
+    }
+  });
   if(jStats) jStats.innerHTML=
     "<div class='j-s'><div class='j-sl'>Win Rate</div><div class='j-sv' style='color:"+(wr>=60?"var(--g)":wr>=40?"var(--y)":"var(--r)")+"'>"+wr+"%</div></div>"+
     "<div class='j-s'><div class='j-sl'>Signals</div><div class='j-sv'>"+SIGNAL_LOG.length+"</div></div>"+
     "<div class='j-s'><div class='j-sl'>Open</div><div class='j-sv' style='color:var(--b)'>"+open.length+"</div></div>"+
     "<div class='j-s'><div class='j-sl'>Closed</div><div class='j-sv'>"+closed.length+"</div></div>"+
-    "<div class='j-s'><div class='j-sl'>Total P&L</div><div class='j-sv' style='color:"+(totPnl>=0?"var(--g)":"var(--r)")+";font-size:.68rem'>"+(totPnl>=0?"+":"")+"₹"+Math.abs(totPnl).toLocaleString("en-IN")+"</div></div>"+
-    "<div class='j-s'><div class='j-sl'>Avg/Trade</div><div class='j-sv' style='color:"+(avgPnl>=0?"var(--g)":"var(--r)")+";font-size:.68rem'>"+(avgPnl>=0?"+":"")+"₹"+Math.abs(avgPnl).toLocaleString("en-IN")+"</div></div>";
+    "<div class='j-s'><div class='j-sl'>Booked P&L</div><div class='j-sv' style='color:"+(totPnl>=0?"var(--g)":"var(--r)")+";font-size:.68rem'>"+(totPnl>=0?"+":"")+"₹"+Math.abs(totPnl).toLocaleString("en-IN")+"</div></div>"+
+    (open.length?"<div class='j-s'><div class='j-sl'>Unrealised</div><div class='j-sv' style='color:"+(unrealTotal>=0?"var(--g)":"var(--r)")+";font-size:.68rem'>"+(unrealTotal>=0?"▲ +":"▼ ")+"₹"+Math.abs(unrealTotal).toLocaleString("en-IN")+"</div></div>":"");
 
   // Signal log entries
   var html = "";
@@ -2632,27 +2640,59 @@ function renderSignalEntry(e, isOpen){
   var bColor = e.bias==="BULLISH"?"var(--g)":"var(--r)";
   var pnlStr = e.pnl!=null ? ((e.pnl>=0?"+":"")+"₹"+Math.abs(e.pnl).toLocaleString("en-IN")) : "–";
 
+  // ── Get live CMP from allS() ──
+  var liveS = allS().filter(function(x){return x.sym===e.sym;})[0];
+  var cmp = liveS&&liveS.px ? liveS.px : 0;
+
+  // ── Unrealised P&L (only for open signals with live price) ──
+  var unrealPnl = null, unrealPct = null;
+  if(isOpen && cmp && e.entry_px){
+    var lotSize = LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
+    var diff = e.bias==="BULLISH" ? cmp-e.entry_px : e.entry_px-cmp;
+    unrealPnl = Math.round(diff*lotSize);
+    unrealPct = Math.round((diff/e.entry_px)*100*10)/10;
+  }
+  // T1_HIT: show combined (booked T1 P&L + unrealised remaining)
+  if(e.status==="T1_HIT" && cmp && e.entry_px){
+    var lotSize2 = LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
+    var diff2 = e.bias==="BULLISH" ? cmp-e.entry_px : e.entry_px-cmp;
+    var remainPnl = Math.round(diff2*lotSize2*0.5);
+    unrealPnl = (e.pnl||0) + remainPnl; // booked + remaining
+    unrealPct = null;
+  }
+
   var h = "<div style='background:var(--bg2);border:1px solid var(--border);border-left:3px solid "+
     (e.bias==="BULLISH"?"var(--g)":"var(--r)")+
     ";border-radius:10px;margin-bottom:8px;overflow:hidden'>";
 
-  // Header
-  h += "<div style='padding:10px 12px 6px;display:flex;align-items:center;gap:8px'>" +
+  // Header row: Symbol | Strategy | Status
+  h += "<div style='padding:10px 12px 4px;display:flex;align-items:center;gap:8px'>" +
     "<span style='font-size:13px;font-weight:800'>"+e.sym+"</span>" +
+    (cmp?"<span style='font-size:11px;font-weight:700;color:var(--t)'>₹"+cmp.toLocaleString("en-IN")+"</span>":"") +
     "<span style='font-size:.58rem;background:var(--bg3);padding:2px 6px;border-radius:4px;color:var(--m)'>"+e.strategy+"</span>" +
     "<span style='margin-left:auto;font-size:.6rem;font-weight:700;color:"+oc+"'>"+statusLabel+"</span></div>";
 
-  // Trade + conviction
+  // Trade row: Direction | Conviction | Date | Unrealised P&L
+  var unrealStr = "";
+  if(unrealPnl!==null){
+    var uColor = unrealPnl>=0?"var(--g)":"var(--r)";
+    var uPrefix = unrealPnl>=0?"▲ +":"▼ ";
+    unrealStr = "<span style='margin-left:auto;font-size:.68rem;font-weight:800;color:"+uColor+"'>"+
+      uPrefix+"₹"+Math.abs(unrealPnl).toLocaleString("en-IN")+
+      (e.status==="T1_HIT"?" (T1+)":"")+
+      "</span>";
+  }
   h += "<div style='padding:2px 12px 8px;display:flex;align-items:center;gap:8px'>" +
     "<span style='font-size:12px;font-weight:700;color:"+bColor+"'>"+
     (e.bias==="BULLISH"?"▲":"▼")+" "+e.trade+"</span>" +
     "<span style='font-size:.6rem;color:var(--m)'>"+e.confidence+"% · "+e.timeframe+"</span>" +
-    "<span style='font-size:.6rem;color:var(--m);margin-left:auto'>"+e.date+"</span></div>";
+    "<span style='font-size:.58rem;color:var(--m)'>"+e.date+"</span>"+
+    unrealStr+"</div>";
 
   // Entry/SL/T1/T2 grid
   h += "<div style='display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--border)'>";
   h += "<div style='padding:7px;text-align:center;border-right:1px solid var(--border)'><div style='font-size:8px;color:var(--m)'>Entry</div><div style='font-size:11px;font-weight:700;color:var(--b)'>₹"+e.entry_px+"</div></div>";
-  h += "<div style='padding:7px;text-align:center;border-right:1px solid var(--border)'><div style='font-size:8px;color:var(--m)'>SL</div><div style='font-size:11px;font-weight:700;color:var(--r)'>₹"+e.sl_px+"</div></div>";
+  h += "<div style='padding:7px;text-align:center;border-right:1px solid var(--border)'><div style='font-size:8px;color:var(--m)'>SL"+(e.sl_px===e.entry_px?" 🔒":"")+"</div><div style='font-size:11px;font-weight:700;color:"+(e.sl_px===e.entry_px?"var(--y)":"var(--r)")+"'>₹"+e.sl_px+"</div></div>";
   h += "<div style='padding:7px;text-align:center;border-right:1px solid var(--border)'><div style='font-size:8px;color:var(--m)'>T1</div><div style='font-size:11px;font-weight:700;color:var(--g)'>₹"+e.t1_px+"</div></div>";
   h += "<div style='padding:7px;text-align:center'><div style='font-size:8px;color:var(--m)'>T2</div><div style='font-size:11px;font-weight:700;color:var(--g)'>₹"+e.t2_px+"</div></div>";
   h += "</div>";
@@ -2662,15 +2702,15 @@ function renderSignalEntry(e, isOpen){
     h += "<div style='padding:6px 12px;font-size:.6rem;color:var(--m);border-top:1px solid var(--border)'>"+e.why.slice(0,120)+"</div>";
   }
 
-  // P&L row (if closed)
+  // P&L row (closed signals)
   if(!isOpen && e.exit_px){
     h += "<div style='padding:6px 12px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between'>" +
-      "<span style='font-size:.6rem;color:var(--m)'>Exit: ₹"+e.exit_px+(e.notes?" · "+e.notes:"")+"</span>" +
+      "<span style='font-size:.6rem;color:var(--m)'>Exit: ₹"+e.exit_px+(e.notes?" · "+e.notes.slice(0,60):"")+"</span>" +
       "<span style='font-size:.75rem;font-weight:800;color:"+oc+"'>"+pnlStr+"</span></div>";
   }
 
-  // Action buttons (open signals only)
-  if(isOpen){
+  // Action buttons
+  if(isOpen||e.status==="T1_HIT"){
     h += "<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:8px 10px;border-top:1px solid var(--border)'>" +
       "<button onclick='markOutcome(\""+e.id+"\",\"SL_HIT\")' style='padding:5px 2px;border-radius:5px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3);color:var(--r);font-size:.55rem;font-weight:700;cursor:pointer'>SL Hit</button>" +
       "<button onclick='markOutcome(\""+e.id+"\",\"T1_HIT\")' style='padding:5px 2px;border-radius:5px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);color:var(--g);font-size:.55rem;font-weight:700;cursor:pointer'>T1 Hit</button>" +
