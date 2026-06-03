@@ -1095,61 +1095,54 @@ function updTicker(){allS().forEach(function(s){var el=document.getElementById("
 function updateOI(s){
   var strip=document.getElementById("oiStrip");
   if(!strip) return;
-
-  // Guard: only render OI strip for CS (the hero symbol) — never for scan results
+  // Only render for currently selected symbol
   if(CS && s.sym !== CS.sym) return;
-
-  // Clear stale content from previous symbol immediately
-  var symEl=document.getElementById("oiSym");
-  if(symEl && symEl.textContent !== s.sym){
-    // Symbol changed — reset strip to loading state for new symbol
-    strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>⏳ Loading OI data for "+s.sym+"…</div>";
-    strip.style.display="block";
-    _oiFirstLoad[s.sym]=false;
-    fetchOI(s.sym);
-    return;
-  }
 
   var hasOIData = s.cOI>0 || s.pcr>0 || s.cW>0 || s.pW>0 || s.mp>0;
 
   if(!hasOIData){
+    // Show loading — always fetch
+    _oiFirstLoad[s.sym]=false;
     fetchOI(s.sym);
     strip.style.display="block";
-    strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>⏳ Loading OI data"+(isSymMCX(s.sym)?" (MCX)":"")+"…</div>";
-    var _retrySymOI=s.sym;
+    strip.innerHTML=
+      "<div style='padding:12px 14px;display:flex;align-items:center;gap:10px'>"+
+      "<div style='font-size:1.1rem'>⏳</div>"+
+      "<div><div style='font-size:.65rem;font-weight:700;color:var(--t1)'>Loading OI data for "+s.sym+(isSymMCX(s.sym)?" (MCX)":"")+"…</div>"+
+      "<div style='font-size:.58rem;color:var(--m);margin-top:2px'>Fetching live option chain from Zerodha</div></div></div>";
+    // Retry after 8s
+    var _rs=s.sym;
     safeTimeout(function(){
-      var sc2=allS().filter(function(x){return x.sym===_retrySymOI;})[0];
-      var stillEmpty=sc2&&!sc2.cOI&&!sc2.pcr&&!sc2.cW;
-      if(stillEmpty){
-        _oiFirstLoad[_retrySymOI]=false;
-        fetchOI(_retrySymOI);
-      }
+      var sc=allS().filter(function(x){return x.sym===_rs;})[0];
+      if(sc&&!sc.cOI&&!sc.pcr&&!sc.cW){_oiFirstLoad[_rs]=false;fetchOI(_rs);}
     },8000);
     return;
   }
-  strip.style.display="block";
-  document.getElementById("oiSym").textContent=s.sym;
-  document.getElementById("oiTime").textContent=istTime()+" IST";
-  document.getElementById("oiPe").textContent=s.pOI>0?(s.pOI/1e7).toFixed(2)+" Cr":"–";
-  document.getElementById("oiCe").textContent=s.cOI>0?(s.cOI/1e7).toFixed(2)+" Cr":"–";
-  document.getElementById("oiPeC").textContent=s.pC?"Chg: "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr":"";
-  document.getElementById("oiCeC").textContent=s.cC?"Chg: "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr":"";
-  var pcr=s.pcr||(s.pOI&&s.cOI?s.pOI/s.cOI:0);
-  var pe=document.getElementById("oiPcr");
-  if(pcr){pe.textContent=pcr.toFixed(2);pe.style.color=pcr>1.1?"var(--g)":pcr<0.9?"var(--r)":"var(--y)";}
-  else{pe.textContent="–";pe.style.color="var(--m)";}
-  // MP on same row as PCR
-  var mpEl=document.getElementById("oiMp");
-  if(mpEl) mpEl.textContent=s.mp?("₹"+s.mp.toLocaleString("en-IN")):"–";
-  // PE Wall and CE Wall on separate row
-  var peWallEl=document.getElementById("oiPeWall");
-  var ceWallEl=document.getElementById("oiCeWall");
-  if(peWallEl) peWallEl.textContent=s.pW?("₹"+s.pW.toLocaleString("en-IN")):"–";
-  if(ceWallEl) ceWallEl.textContent=s.cW?("₹"+s.cW.toLocaleString("en-IN")):"–";
-  // Remove old combined walls display
-  var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"Loading live OI…";
+
+  // Render full OI strip as single innerHTML — never depend on child element existence
+  var pcr=s.pcr||(s.pOI&&s.cOI?+(s.pOI/s.cOI).toFixed(2):0);
+  var pcrCol=pcr>1.1?"var(--g)":pcr<0.9?"var(--r)":"var(--y)";
+  var pcrLbl=pcr>1.1?"Bullish":pcr<0.9?"Bearish":"Neutral";
+  var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"–";
   if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
-  document.getElementById("oiSig").textContent=sig;
+  var peOI=s.pOI>0?"<b>"+(s.pOI/1e7).toFixed(2)+" Cr</b>"+(s.pC?"<br><small>Chg "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr</small>":""):"–";
+  var ceOI=s.cOI>0?"<b>"+(s.cOI/1e7).toFixed(2)+" Cr</b>"+(s.cC?"<br><small>Chg "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr</small>":""):"–";
+
+  strip.style.display="block";
+  strip.innerHTML=
+    "<div class='oi-hdr'><span>📊 OI — <b>"+s.sym+"</b></span><span style='color:var(--m);font-size:.6rem'>"+istTime()+" IST</span></div>"+
+    "<div class='oi-cols'>"+
+      "<div class='oi-side'><div class='oi-sl' style='color:var(--g)'>Put OI (Support)</div><div class='oi-sv' style='color:var(--g)'>"+peOI+"</div></div>"+
+      "<div class='oi-side'><div class='oi-sl' style='color:var(--r)'>Call OI (Resist)</div><div class='oi-sv' style='color:var(--r)'>"+ceOI+"</div></div>"+
+    "</div>"+
+    "<div class='oi-rows'>"+
+      "<div class='oi-row'><span class='oi-rl'>PCR</span><span class='oi-rv' style='color:"+pcrCol+"'>"+(pcr?pcr.toFixed(2):"–")+" <small style='font-weight:400'>"+pcrLbl+"</small></span>"+
+        "<span class='oi-rl' style='margin-left:12px'>Max Pain</span><span class='oi-rv'>"+(s.mp?"₹"+s.mp.toLocaleString("en-IN"):"–")+"</span></div>"+
+      "<div class='oi-row'><span class='oi-rl' style='color:var(--g)'>PE Wall</span><span class='oi-rv' style='color:var(--g)'>"+(s.pW?"₹"+s.pW.toLocaleString("en-IN"):"–")+"</span>"+
+        "<span class='oi-rl' style='margin-left:12px;color:var(--r)'>CE Wall</span><span class='oi-rv' style='color:var(--r)'>"+(s.cW?"₹"+s.cW.toLocaleString("en-IN"):"–")+"</span></div>"+
+      "<div class='oi-row'><span class='oi-rl'>Signal</span><span class='oi-rv' style='font-size:.63rem'>"+sig+"</span></div>"+
+      (s.iv?"<div class='oi-row'><span class='oi-rl'>IV</span><span class='oi-rv' style='color:var(--y)'>"+s.iv+"%</span><span class='oi-rl' style='margin-left:12px'>VIX</span><span class='oi-rv'>"+VIX+"</span></div>":"")+
+    "</div>";
 }
 
 // ═══════════════════════════════════════════
