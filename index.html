@@ -1373,7 +1373,10 @@ function localSigs(){
      Layer 5: IV Context (IV vs VIX + expiry)
   ══════════════════════════════════════════════════════════ */
   var out=[];
-  var mktClosed=!isOpen();
+  var minsNow = istMinsNow();
+  // BTST for NSE: only in the 3:00–3:30 PM closing window (mins 900–930)
+  var nseClosingWindow = minsNow >= 900 && minsNow <= 930;
+  var mktClosed = !isOpen();
 
   allS().forEach(function(s){
     // Use last known price — don't skip just because server is sleeping
@@ -1923,11 +1926,17 @@ function localSigs(){
                 cprNarrow&&aboveTC&&aboveVwap?"Narrow CPR + VWAP Breakout":
                 pcrExtremeBull?"PCR Extreme Reversal (Calls)":
                 pcrStrongBull?"Heavy Put Writing + OI":"Multi-factor Bullish";                regimeCode==="TRENDING_UP"?"Trend Continuation":"Multi-factor Bullish";
-      var isBtst=mktClosed&&bullScore>=4;
+      // BTST: NSE only in 3:00-3:30 PM closing window; MCX never BTST during MCX trading hours
+      var isMCX = isSymMCX(s.sym);
+      var isBtst = isMCX
+        ? false  // MCX trades till 11:30 PM — no BTST concept during live MCX session
+        : nseClosingWindow && bullScore>=4;  // NSE: only in closing 30 min
       var whyText=bullReasons.slice(0,3).join(" | ");
       // Time bucket for performance tracking
-      var timeBucket=nowH<10?"morning":nowH<13?"midday":nowH<15?"afternoon":"closing";
-      if(!isOpen())timeBucket="after_hours";
+      var timeBucket=minsNow<600?"morning":minsNow<780?"midday":minsNow<900?"afternoon":"closing";
+      // MCX evening session (after NSE close, MCX still open)
+      if(isMCX && !isOpen() && isMCXOpen()) timeBucket="mcx_evening";
+      else if(!isOpen()) timeBucket="after_hours";
       sig={
         sym:s.sym, bias:"BULLISH", trade:"Buy "+(atm+step)+" CE", strategy:strat,
         why:whyText, confidence:conf,
@@ -1935,7 +1944,8 @@ function localSigs(){
         rr:rr.rr, urgency:urg,
         timeframe:golden?"Daily":orbBreakout?"5M":cprNarrow?"15M":bullOB?"1H":"5M",
         isBTST:isBtst,
-        btstNote:isBtst?"Hold overnight. Exit if gap-up ≥0.3% at open. SL: ₹"+px:"",
+        btstNote:isBtst?"Hold overnight. Exit if gap-up ≥0.3% at open. SL: ₹"+px:
+                 (isMCX&&!isOpen()&&isMCXOpen())?"MCX evening session — trade active till 11:30 PM. Normal intraday rules apply.":"",
         regime:regimeCode,
         setupKey:bullSetupKey,       // e.g. "OI+Price+Momentum"
         timeBucket:timeBucket,       // "morning"/"midday"/"afternoon"/"closing"
@@ -1963,8 +1973,9 @@ function localSigs(){
                  pcrExtremeBull?"PCR Extreme Reversal (Calls overloaded)":
                  callWriting?"CE Writing — Resistance Building":"Multi-factor Bearish";                 regimeCode==="TRENDING_DOWN"?"Trend Continuation":"Multi-factor Bearish";
       var whyBear=bearReasons.slice(0,3).join(" | ");
-      var timeBucket2=nowH<10?"morning":nowH<13?"midday":nowH<15?"afternoon":"closing";
-      if(!isOpen())timeBucket2="after_hours";
+      var timeBucket2=minsNow<600?"morning":minsNow<780?"midday":minsNow<900?"afternoon":"closing";
+      if(isMCX && !isOpen() && isMCXOpen()) timeBucket2="mcx_evening";
+      else if(!isOpen()) timeBucket2="after_hours";
       sig={
         sym:s.sym, bias:"BEARISH", trade:"Buy "+atm+" PE", strategy:strat2,
         why:whyBear, confidence:conf2,
