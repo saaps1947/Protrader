@@ -1094,26 +1094,37 @@ function updTicker(){allS().forEach(function(s){var el=document.getElementById("
 
 function updateOI(s){
   var strip=document.getElementById("oiStrip");
-  // Consider OI available if ANY of: cOI, pcr, ce wall, pe wall present
+  if(!strip) return;
+
+  // Guard: only render OI strip for CS (the hero symbol) — never for scan results
+  if(CS && s.sym !== CS.sym) return;
+
+  // Clear stale content from previous symbol immediately
+  var symEl=document.getElementById("oiSym");
+  if(symEl && symEl.textContent !== s.sym){
+    // Symbol changed — reset strip to loading state for new symbol
+    strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>⏳ Loading OI data for "+s.sym+"…</div>";
+    strip.style.display="block";
+    _oiFirstLoad[s.sym]=false;
+    fetchOI(s.sym);
+    return;
+  }
+
   var hasOIData = s.cOI>0 || s.pcr>0 || s.cW>0 || s.pW>0 || s.mp>0;
 
-  if(!strip||!hasOIData){
-    if(strip){
-      // MCX (CRUDEOIL/GOLD) OI is now supported via Zerodha MCX instruments
-      // Both MCX and non-MCX symbols go through the same fetchOI path
-      fetchOI(s.sym);
-      strip.style.display="block";
-      strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>⏳ Loading OI data"+(isSymMCX(s.sym)?" (MCX)":"")+"…</div>";
-      var _retrySymOI=s.sym;
-      safeTimeout(function(){
-        var sc2=allS().filter(function(x){return x.sym===_retrySymOI;})[0];
-        var stillEmpty=sc2&&!sc2.cOI&&!sc2.pcr&&!sc2.cW;
-        if(stillEmpty){
-          _oiFirstLoad[_retrySymOI]=false;
-          fetchOI(_retrySymOI);
-        }
-      },8000);
-    }
+  if(!hasOIData){
+    fetchOI(s.sym);
+    strip.style.display="block";
+    strip.innerHTML="<div style='padding:5px 10px;font-size:.68rem;color:var(--m)'>⏳ Loading OI data"+(isSymMCX(s.sym)?" (MCX)":"")+"…</div>";
+    var _retrySymOI=s.sym;
+    safeTimeout(function(){
+      var sc2=allS().filter(function(x){return x.sym===_retrySymOI;})[0];
+      var stillEmpty=sc2&&!sc2.cOI&&!sc2.pcr&&!sc2.cW;
+      if(stillEmpty){
+        _oiFirstLoad[_retrySymOI]=false;
+        fetchOI(_retrySymOI);
+      }
+    },8000);
     return;
   }
   strip.style.display="block";
@@ -3426,10 +3437,14 @@ function applyOIData(sym,o){
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.cW=o.ce_wall||0;s.pW=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
-  // Store actual expiry from OI data — more accurate than computed nextExp()
   if(o.expiry) s.exp=o.expiry;
-  console.log("[OI ✅] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" Exp:"+(o.expiry||"?")+" src:"+(o.source||""));
-  if(CS&&CS.sym===sym){updateHero();updateOI(CS);}
+  console.log("[OI ✅] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" src:"+(o.source||""));
+  // Only update the hero OI strip if this symbol IS currently selected (CS)
+  if(CS&&CS.sym===sym){
+    updateHero();  // refresh PCR/MaxPain tiles
+    updateOI(CS);  // render full OI strip
+  }
+  // Always re-scan signals when OI arrives (affects signal scoring for this sym)
   try{renderScanner();}catch(e){}
 }
 
