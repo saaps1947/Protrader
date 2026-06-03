@@ -1125,15 +1125,17 @@ function updateOI(s){
   var pcrLbl=pcr>1.1?"Bullish":pcr<0.9?"Bearish":"Neutral";
   var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"–";
   if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
-  var peOI=s.pOI>0?"<b>"+(s.pOI/1e7).toFixed(2)+" Cr</b>"+(s.pC?"<br><small>Chg "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr</small>":""):"–";
-  var ceOI=s.cOI>0?"<b>"+(s.cOI/1e7).toFixed(2)+" Cr</b>"+(s.cC?"<br><small>Chg "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr</small>":""):"–";
+  var peChg = s.pC ? "<div class='oi-sc' style='color:var(--g)'>Chg "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr</div>" : "";
+  var ceChg = s.cC ? "<div class='oi-sc' style='color:var(--r)'>Chg "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr</div>" : "";
+  var peOI  = s.pOI>0 ? "<div class='oi-sv' style='color:var(--g)'>"+(s.pOI/1e7).toFixed(2)+" Cr</div>"+peChg : "<div class='oi-sv'>–</div>";
+  var ceOI  = s.cOI>0 ? "<div class='oi-sv' style='color:var(--r)'>"+(s.cOI/1e7).toFixed(2)+" Cr</div>"+ceChg : "<div class='oi-sv'>–</div>";
 
   strip.style.display="block";
   strip.innerHTML=
     "<div class='oi-hdr'><span>📊 OI — <b>"+s.sym+"</b></span><span style='color:var(--m);font-size:.6rem'>"+istTime()+" IST</span></div>"+
     "<div class='oi-grid'>"+
-      "<div class='oi-side'><div class='oi-sl' style='color:var(--g)'>Put OI (Support)</div><div class='oi-sv' style='color:var(--g)'>"+peOI+"</div></div>"+
-      "<div class='oi-side'><div class='oi-sl' style='color:var(--r)'>Call OI (Resist)</div><div class='oi-sv' style='color:var(--r)'>"+ceOI+"</div></div>"+
+      "<div class='oi-side'><div class='oi-sl' style='color:var(--g)'>Put OI (Support)</div>"+peOI+"</div>"+
+      "<div class='oi-side'><div class='oi-sl' style='color:var(--r)'>Call OI (Resist)</div>"+ceOI+"</div>"+
     "</div>"+
     "<div class='oi-rows'>"+
       "<div class='oi-row'><span class='oi-rl'>PCR</span><span class='oi-rv' style='color:"+pcrCol+"'>"+(pcr?pcr.toFixed(2):"–")+" <small style='font-weight:400'>"+pcrLbl+"</small></span>"+
@@ -1141,7 +1143,6 @@ function updateOI(s){
       "<div class='oi-row'><span class='oi-rl' style='color:var(--g)'>PE Wall</span><span class='oi-rv' style='color:var(--g)'>"+(s.pW?"₹"+s.pW.toLocaleString("en-IN"):"–")+"</span>"+
         "<span class='oi-rl' style='margin-left:12px;color:var(--r)'>CE Wall</span><span class='oi-rv' style='color:var(--r)'>"+(s.cW?"₹"+s.cW.toLocaleString("en-IN"):"–")+"</span></div>"+
       "<div class='oi-row'><span class='oi-rl'>Signal</span><span class='oi-rv' style='font-size:.63rem'>"+sig+"</span></div>"+
-      (s.iv?"<div class='oi-row'><span class='oi-rl'>IV</span><span class='oi-rv' style='color:var(--y)'>"+s.iv+"%</span><span class='oi-rl' style='margin-left:12px'>VIX</span><span class='oi-rv'>"+VIX+"</span></div>":"")+
     "</div>";
 }
 
