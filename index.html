@@ -873,6 +873,11 @@ function _doFetchFromServer(){
       if(sd.crossover)sc.crossover=sd.crossover;
       if(sd.breakout!==undefined)sc.breakout=sd.breakout;
       if(sd.breakdown!==undefined)sc.breakdown=sd.breakdown;
+      // 15-day daily trend fields
+      if(sd.trend15)sc.trend15=sd.trend15;
+      if(sd.trend_strength!==undefined)sc.trend_strength=sd.trend_strength;
+      if(sd.hh_hl!==undefined)sc.hh_hl=sd.hh_hl;
+      if(sd.lh_ll!==undefined)sc.lh_ll=sd.lh_ll;
       if(sd.technicals){
         sc.trend=sd.technicals.trend||sc.trend;
         sc.crossover=sd.technicals.crossover||sc.crossover;
@@ -1492,6 +1497,31 @@ function localSigs(){
     var peWriting=writer&&writer.pe_writing;
     var ceUnwinding=writer&&writer.ce_unwinding;
     var peUnwinding=writer&&writer.pe_unwinding;
+
+    // ── 15-DAY DAILY TREND — macro context layer ──
+    var trend15=s.trend15||"UNKNOWN";
+    var hhHl=s.hh_hl||false;
+    var lhLl=s.lh_ll||false;
+    var trendStr15=s.trend_strength||0;
+
+    if(trend15==="STRONG_BULL"||hhHl){
+      bullScore+=3;bullReasons.push("15D trend: STRONG BULL (HH/HL structure, "+trendStr15+"% up-days)");
+    } else if(trend15==="BULL"){
+      bullScore+=2;bullReasons.push("15D trend: BULLISH ("+trendStr15+"% up-days last 15 sessions)");
+    } else if(trend15==="STRONG_BEAR"||lhLl){
+      bearScore+=3;bearReasons.push("15D trend: STRONG BEAR (LH/LL structure)");
+    } else if(trend15==="BEAR"){
+      bearScore+=2;bearReasons.push("15D trend: BEARISH ("+Math.abs(trendStr15)+"% down-days last 15 sessions)");
+    }
+    // Counter-trend penalty: signal against 15D trend loses 2 points
+    if((trend15==="STRONG_BULL"||trend15==="BULL")&&bearScore>bullScore){
+      bearScore=Math.max(0,bearScore-2);
+      bearReasons.push("⚠ Counter-trend: 15D is bullish — bear score reduced");
+    }
+    if((trend15==="STRONG_BEAR"||trend15==="BEAR")&&bullScore>bearScore){
+      bullScore=Math.max(0,bullScore-2);
+      bullReasons.push("⚠ Counter-trend: 15D is bearish — bull score reduced");
+    }
 
     // ── LAYER 10: Market Regime ──
     var regime=s.regime||null;
@@ -2375,21 +2405,48 @@ function stopAT(){
 function atCycle(){
   if(!AT.active)return;
   if(AT.trades>=AT.maxTrades){toast("Limit reached",AT.maxTrades+" trades done","ty");stopAT();return;}
+
   var sym=AT.inst==="AUTO"?CS.sym:AT.inst;
-  var sc=allS().filter(function(s){return s.sym===sym;})[0]||CS;
-  var tech=[sc.crossover&&sc.crossover!=="NONE"?sc.crossover:"",sc.trend||"",sc.rsi?"RSI:"+sc.rsi:"",sc.breakout?"BREAKOUT":"",sc.breakdown?"BREAKDOWN":""].filter(Boolean).join(",");
-  var p="Auto-trade for "+sym+". Spot:₹"+sc.px+" PCR:"+(sc.pcr||.9)+" MP:₹"+(sc.mp||sc.px)+" IV:"+(sc.iv||14)+"% Chg:"+sc.pct+"% SMA20:"+(sc.sma20||"N/A")+" SMA50:"+(sc.sma50||"N/A")+" Technicals:["+tech+"] Direction:"+AT.dir+". Always recommend BUY of CE or PE (defined risk). Return ONLY JSON:{\"confidence\":0-100,\"action\":\"BUY\",\"instrument\":\""+sym+" ATM CE or PE\",\"entry\":\"price\",\"sl\":\"level\",\"target\":\"level\",\"reasoning\":\"one sentence with technical basis\"}";
-  fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:300,messages:[{role:"user",content:p}]})})
-  .then(function(r){return r.json();})
-  .then(function(d){
-    var sig=null;
-    try{var txt=d.content.map(function(i){return i.text||"";}).join("").replace(/```json|```/g,"").trim();sig=JSON.parse(txt);}catch(e){}
-    if(!sig||sig.confidence<AT.conf){addLog({ac:"SKIP",inst:sym,conf:sig?sig.confidence:0,src:"Auto",st:"skip"});return;}
-    if(AT.dir==="long"&&sig.action!=="BUY")return;
-    if(AT.dir==="short"&&sig.action!=="SELL")return;
-    pendingTrade={action:sig.action,instrument:sig.instrument||sym+" ATM CE",confidence:sig.confidence,entry:sig.entry,sl:sig.sl,target:sig.target,why:sig.reasoning,source:"Auto"};
-    showOrd();
-  }).catch(function(){addLog({ac:"SKIP",inst:sym,conf:0,src:"Auto",st:"skip"});});
+
+  // Use the local signal engine — same signals shown on screen
+  // Never call Claude API for signal generation (produces inconsistent results)
+  var candidates=allSigs.filter(function(s){
+    if(s.sym!==sym&&AT.inst!=="AUTO") return false; // symbol filter
+    if(AT.inst==="AUTO"&&s.urgency!=="HIGH") return false; // AUTO mode: HIGH only
+    if((s.confidence||0)<AT.conf) return false; // below threshold
+    if(AT.dir==="long"&&s.bias!=="BULLISH") return false;
+    if(AT.dir==="short"&&s.bias!=="BEARISH") return false;
+    return true;
+  });
+
+  if(!candidates.length){
+    // No qualifying signal right now
+    var best=allSigs.filter(function(s){return s.sym===sym||AT.inst==="AUTO";})[0];
+    addLog({
+      ac:"SKIP",
+      inst:sym,
+      conf:best?best.confidence:0,
+      src:"Local — below threshold ("+(best?""+best.confidence+"%<"+AT.conf+"%":"no signal")+")",
+      st:"skip"
+    });
+    return;
+  }
+
+  // Take highest conviction qualifying signal
+  var sig=candidates.sort(function(a,b){return (b.confidence||0)-(a.confidence||0);})[0];
+  pendingTrade={
+    action:sig.bias==="BULLISH"?"BUY":"SELL",
+    instrument:sig.trade,
+    confidence:sig.confidence,
+    entry:sig.entry,
+    sl:sig.sl,
+    target:sig.target1,
+    why:sig.why,
+    source:"Auto ("+sig.setupKey+")"
+  };
+  addLog({ac:pendingTrade.action,inst:sig.sym+" — "+sig.trade,conf:sig.confidence,src:"Local signal",st:"placed"});
+  AT.trades++;
+  showOrd();
 }
 function qAT(sig){
   if(!AT.active)return;
