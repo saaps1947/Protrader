@@ -878,6 +878,8 @@ function _doFetchFromServer(){
       if(sd.trend_strength!==undefined)sc.trend_strength=sd.trend_strength;
       if(sd.hh_hl!==undefined)sc.hh_hl=sd.hh_hl;
       if(sd.lh_ll!==undefined)sc.lh_ll=sd.lh_ll;
+      if(sd.prev_day_high)sc.pdh=sd.prev_day_high;  // PDH — previous session high
+      if(sd.prev_day_low) sc.pdl=sd.prev_day_low;   // PDL — previous session low
       if(sd.technicals){
         sc.trend=sd.technicals.trend||sc.trend;
         sc.crossover=sd.technicals.crossover||sc.crossover;
@@ -1472,12 +1474,33 @@ function localSigs(){
     var vwapReclaim=aboveVwap&&s.pct>0;
     var vwapReject=belowVwap&&s.pct<0;
 
-    // ── LAYER 7: ORB — only valid 9:30–11:00 AM ──
+    // ── PDH / PDL — Previous Day High & Low ──
+    var pdh=s.pdh||0; var pdl=s.pdl||0;
+    var abovePdh = pdh>0 && px>pdh*1.001;   // price above PDH = bullish breakout
+    var belowPdl = pdl>0 && px<pdl*0.999;   // price below PDL = bearish breakdown
+    var nearPdh  = pdh>0 && Math.abs(px-pdh)/pdh<0.002;  // within 0.2% of PDH = resistance test
+    var nearPdl  = pdl>0 && Math.abs(px-pdl)/pdl<0.002;  // within 0.2% of PDL = support test
+    if(abovePdh&&volExpanding){bullScore+=2;bullReasons.push("Price broke above PDH ₹"+pdh+" with volume — institutional breakout");}
+    else if(abovePdh){bullScore+=1;bullReasons.push("Price above PDH ₹"+pdh+" — watch for volume confirmation");}
+    if(belowPdl&&volExpanding){bearScore+=2;bearReasons.push("Price broke below PDL ₹"+pdl+" with volume — institutional breakdown");}
+    else if(belowPdl){bearScore+=1;bearReasons.push("Price below PDL ₹"+pdl+" — watch for volume confirmation");}
+    // PDH as resistance (near but not through): bearish
+    if(nearPdh&&!abovePdh){bearScore+=1;bearReasons.push("Price at PDH ₹"+pdh+" resistance — rejection risk");}
+    // PDL as support (near but not through): bullish
+    if(nearPdl&&!belowPdl){bullScore+=1;bullReasons.push("Price at PDL ₹"+pdl+" support — bounce zone");}
+
+    // ── ORB — valid ALL DAY (levels set at open, breakout can happen anytime) ──
     var orb=s.orb||null;
-    var orbSessionValid=(nowH===9&&nowM>=30)||(nowH===10&&nowM<=59); // 9:30–10:59 only
-    var orbBreakout=orbSessionValid&&orb&&orb.breakout;
-    var orbBreakdown=orbSessionValid&&orb&&orb.breakdown;
-    var insideOrb=orb&&orb.inside;
+    // Score tier by how late the breakout is — early breaks stronger signal
+    var orbEarly  = (nowH===9&&nowM>=30)||(nowH===10);           // 9:30–10:59: +3/+2
+    var orbMid    = nowH===11||(nowH===12)||(nowH===13);         // 11:00–13:59: +2/+1
+    var orbLate   = nowH>=14;                                     // 14:00+: +1 only
+    var orbAnyTime= orb!=null;                                   // ORB levels always valid
+    var orbBreakout  = orbAnyTime&&orb.breakout;   // clean valid breakout (never returned)
+    var orbBreakdown = orbAnyTime&&orb.breakdown;  // clean valid breakdown
+    var insideOrb    = orb&&orb.inside;
+    var orbFailed    = orb&&(orb.breakout_failed||orb.breakdown_failed);
+    var orbVolOk     = orb&&orb.vol_confirmed;
 
     // ── LAYER 8: Volume ──
     var vol=s.volAnalysis||null;
@@ -1596,10 +1619,24 @@ function localSigs(){
     if(atVwap){bullScore+=1;bearScore+=1;} // at VWAP = decision zone
 
     // ORB confirmations
-    if(orbBreakout&&volExpanding){bullScore+=3;bullReasons.push("ORB breakout above ₹"+orb.high+" with volume expansion");}
-    else if(orbBreakout){bullScore+=2;bullReasons.push("ORB breakout above ₹"+orb.high);}
-    if(orbBreakdown&&volExpanding){bearScore+=3;bearReasons.push("ORB breakdown below ₹"+orb.low+" with volume expansion");}
-    else if(orbBreakdown){bearScore+=2;bearReasons.push("ORB breakdown below ₹"+orb.low);}
+    // ORB scoring — tiered by session (earlier = stronger signal)
+    if(orbBreakout){
+      var bScore = orbEarly?(orbVolOk?3:2): orbMid?(orbVolOk?2:1): 1; // late day = +1 only
+      var bLabel = orbEarly?"early session": orbMid?"mid session":"afternoon";
+      bullScore+=bScore;
+      bullReasons.push("ORB breakout above ₹"+orb.high+" ("+bLabel+(orbVolOk?" ✓vol":"")+") +"+bScore);
+    }
+    if(orbBreakdown){
+      var dScore = orbEarly?(orbVolOk?3:2): orbMid?(orbVolOk?2:1): 1;
+      var dLabel = orbEarly?"early session": orbMid?"mid session":"afternoon";
+      bearScore+=dScore;
+      bearReasons.push("ORB breakdown below ₹"+orb.low+" ("+dLabel+(orbVolOk?" ✓vol":"")+") +"+dScore);
+    }
+    // Failed ORB penalty — sideways trap, active all day
+    if(orb&&orb.breakout_failed&&!orbBreakout){
+      bearScore+=1;bearReasons.push("⚠ ORB breakout failed — price returned inside range, avoid long");}
+    if(orb&&orb.breakdown_failed&&!orbBreakdown){
+      bullScore+=1;bullReasons.push("⚠ ORB breakdown failed — price returned inside range, short squeezable");}
 
     // Volume confirmations
     if(volExpanding&&aboveSma20){bullScore+=1;bullReasons.push("Volume expanding ("+volRatio+"x avg) — move has conviction");}
@@ -2349,16 +2386,61 @@ function showOrd(){
 }
 function doOrd(){
   var t=pendingTrade;if(!t)return;
-  var edge=edgeScore(),mul=edge>=75?1:edge>=50?0.5:0,tc=Math.round((AT.capital||50000)*mul);
-  if(KITE.connected&&KITE.apiKey&&KITE.accessToken){
-    // Real Zerodha order
-    var payload="tradingsymbol="+encodeURIComponent(t.instrument.replace(/\s+/g,""))+"&exchange=NFO&transaction_type="+t.action+"&order_type=MARKET&quantity=75&product=NRML&validity=DAY";
-    fetch("https://api.kite.trade/orders/regular",{method:"POST",headers:{"X-Kite-Version":"3","Authorization":"token "+KITE.apiKey+":"+KITE.accessToken,"Content-Type":"application/x-www-form-urlencoded"},body:payload})
-    .then(function(r){return r.json();})
-    .then(function(d){if(d.status==="success"){toast("✅ Order Placed","Kite: "+d.data.order_id,"tg");}else{toast("❌ Order Failed",d.message||"Check Kite","tr");demoOrd(t,tc);}})
-    .catch(function(){demoOrd(t,tc);});
-  }else demoOrd(t,tc);
   closeOv("ordOv");
+  var edge=edgeScore(),mul=edge>=75?1:edge>=50?0.5:0.25;
+  var cap=Math.round((AT.capital||50000)*mul);
+
+  if(!KITE.connected||!KITE.apiKey||!KITE.accessToken){
+    demoOrd(t,cap); return;
+  }
+  if(!SERVER_URL){
+    toast("⚠ No server","Set server URL in Settings — needed for order routing","tr");
+    demoOrd(t,cap); return;
+  }
+
+  // Route through server — it resolves correct tradingsymbol from instruments CSV
+  // Frontend only knows "Buy 53300 PE" — server converts to "BANKNIFTY24JUN53300PE"
+  var sym=t.sym||CS.sym;
+  var s=allS().filter(function(x){return x.sym===sym;})[0]||CS;
+  var strike=s.atm||0;
+  var optType=(t.action==="BUY"&&t.bias==="BULLISH")||(t.instrument&&t.instrument.indexOf("CE")>=0)?"CE":"PE";
+
+  // Extract strike from instrument name if possible (e.g. "Buy 53300 PE" → 53300)
+  var strikeParsed=parseInt((t.instrument||"").replace(/[^0-9]/g," ").trim().split(" ").pop());
+  if(strikeParsed&&strikeParsed>100) strike=strikeParsed;
+
+  var payload={
+    sym:sym,
+    strike:strike,
+    option_type:optType,
+    action:t.action,
+    key:KITE.apiKey,
+    token:KITE.accessToken,
+    qty:LOT_SIZES[sym]||LOT_SIZES.DEFAULT||50
+  };
+
+  setStatus("fetching","Placing order…");
+  fetch(SERVER_URL+"/place_order",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(payload)
+  })
+  .then(function(r){return r.json();})
+  .then(function(d){
+    setStatus("live");
+    if(d.ok){
+      toast("✅ Order Placed","Kite: "+d.order_id+" — "+d.tradingsymbol,"tg");
+      if(AT.active){AT.trades++;addLog({ac:t.action,inst:d.tradingsymbol,conf:t.confidence,src:"Kite",st:"placed"});}
+    } else {
+      toast("❌ Order Failed",d.error||"Check Kite connection","tr");
+      addLog({ac:"FAIL",inst:sym,conf:t.confidence,src:"Kite",st:"skip"});
+    }
+  })
+  .catch(function(e){
+    setStatus("live");
+    toast("❌ Server error","Order not placed: "+e.message,"tr");
+    demoOrd(t,cap);
+  });
 }
 function demoOrd(t,cap){
   if(AT.active){AT.trades++;addLog({ac:t.action,inst:t.instrument,conf:t.confidence,src:"Demo",st:"placed"});}
@@ -2411,9 +2493,8 @@ function atCycle(){
   // Use the local signal engine — same signals shown on screen
   // Never call Claude API for signal generation (produces inconsistent results)
   var candidates=allSigs.filter(function(s){
-    if(s.sym!==sym&&AT.inst!=="AUTO") return false; // symbol filter
-    if(AT.inst==="AUTO"&&s.urgency!=="HIGH") return false; // AUTO mode: HIGH only
-    if((s.confidence||0)<AT.conf) return false; // below threshold
+    if(AT.inst!=="AUTO"&&s.sym!==AT.inst) return false;
+    if((s.confidence||0)<AT.conf) return false; // only confidence threshold matters
     if(AT.dir==="long"&&s.bias!=="BULLISH") return false;
     if(AT.dir==="short"&&s.bias!=="BEARISH") return false;
     return true;
@@ -2604,33 +2685,31 @@ function checkSignalLevels(){
           changed=true; return;
         }
       }
-      // T1 hit check
+      // T1 hit check — milestone, not an exit. Full qty continues to T2.
       if(e.t1_px>0&&!e._t1Hit){
         var t1Hit = bull ? px>=e.t1_px : px<=e.t1_px;
         if(t1Hit){
           e._t1Hit=true;
           e.status="T1_HIT"; e.outcome="WIN";
-          var t1diff=bull?e.t1_px-e.entry_px:e.entry_px-e.t1_px;
-          e.pnl=Math.round(t1diff*lotSize*0.5);
-          e.exit_px=e.t1_px; e.exitTime=istTime();
-          e.sl_px=e.entry_px; // move to breakeven
-          e.notes=(e.notes||"")+" | ✅ T1 hit ₹"+e.t1_px+" (50% booked)";
+          // No partial booking — full quantity still running to T2
+          // SL moves to entry = risk is now zero, trade is free
+          e.sl_px=e.entry_px;
+          e.exitTime=istTime();
+          e.notes=(e.notes||"")+" | ✅ T1 hit ₹"+e.t1_px+" — SL moved to breakeven, full qty to T2";
           allSigs.forEach(function(a){if(a.sym===e.sym&&a.bias===e.bias){a.sl=""+e.entry_px;a._slMoved=true;}});
-          toast("✅ T1 Hit — "+e.sym,"50% booked ₹"+e.t1_px+" | SL→breakeven","tg");
+          toast("✅ T1 Hit — "+e.sym,"SL at breakeven ₹"+e.entry_px+" | Full qty running to T2","tg");
           changed=true; return;
         }
       }
     }
 
-    // T2 hit — works for both OPEN and T1_HIT status
+    // T2 hit — full position P&L (no partial was booked at T1)
     if(e.t2_px>0){
       var t2Hit = bull ? px>=e.t2_px : px<=e.t2_px;
       if(t2Hit){
         var t2diff=bull?e.t2_px-e.entry_px:e.entry_px-e.t2_px;
-        var prevPnl=e._t1Hit?e.pnl||0:0; // already booked P&L at T1
         e.status="T2_HIT"; e.exit_px=e.t2_px; e.exitTime=istTime();
-        // Full position P&L if no T1 hit, remaining 50% if T1 was hit
-        e.pnl=prevPnl+Math.round(t2diff*lotSize*(e._t1Hit?0.5:1));
+        e.pnl=Math.round(t2diff*lotSize); // full position throughout
         e.outcome="BIG WIN"; e.notes=(e.notes||"")+" | 🏆 T2 hit ₹"+e.t2_px;
         toast("🏆 T2 Hit — "+e.sym,e.trade+" ₹"+e.t2_px+" | Total P&L: ₹"+e.pnl,"tg");
         changed=true;
@@ -2813,22 +2892,20 @@ function markOutcome(id, outcome){
     toast("🔴 SL Hit",""+e.sym+" "+e.bias+" removed from feed","tr");
   }
 
-  // T1 HIT → move SL to entry price (breakeven stop)
+  // T1 HIT → move SL to entry price (breakeven), full qty continues to T2
   if(outcome==="T1_HIT"){
-    // Update the live signal's SL to entry price
     allSigs.forEach(function(s){
       if(s.sym===e.sym&&s.bias===e.bias){
-        s._origSL = s.sl;    // remember original SL
-        s.sl = ""+e.entry_px; // move to entry = breakeven
+        s._origSL = s.sl;
+        s.sl = ""+e.entry_px;
         s._slMoved = true;
       }
     });
-    // Update journal entry too
     e.sl_px = e.entry_px;
-    e.notes = (e.notes||"")+" | SL moved to entry ₹"+e.entry_px+" after T1 hit";
+    e.notes = (e.notes||"")+" | SL moved to breakeven ₹"+e.entry_px+" — full qty running to T2";
     saveSignalLog();
     renderFeed();
-    toast("✅ T1 Hit","SL moved to breakeven ₹"+e.entry_px,"tg");
+    toast("✅ T1 Hit","SL at breakeven ₹"+e.entry_px+" | Full qty to T2","tg");
   } else {
     toast("✅ Updated","Signal outcome saved","tg");
   }
@@ -3442,6 +3519,26 @@ function showSMCStrip(sym){
     if(!fvgMid||Math.abs(s.px-fvgMid)/s.px>0.02)return;
     parts.push("<span style='display:inline-block;padding:2px 8px;border-radius:5px;background:rgba(139,92,246,.1);color:var(--p);font-size:.6rem;font-weight:700;margin-right:4px;border:1px solid rgba(139,92,246,.3)'>FVG "+fvg.type.slice(0,4)+" ₹"+(fvg.bottom||"")+(fvg.top?"-"+fvg.top:"")+"</span>");
   });
+  // PDH / PDL pills
+  if(s.pdh&&s.pdl){
+    var abovePdh=s.px>s.pdh*1.001, belowPdl=s.px<s.pdl*0.999;
+    parts.push("<span style='display:inline-block;padding:2px 8px;border-radius:5px;font-size:.6rem;font-weight:700;margin-right:4px;background:"+(abovePdh?"rgba(34,197,94,.1)":"rgba(239,68,68,.08)")+";color:"+(abovePdh?"var(--g)":"var(--m)")+"'>PDH ₹"+s.pdh+"</span>");
+    parts.push("<span style='display:inline-block;padding:2px 8px;border-radius:5px;font-size:.6rem;font-weight:700;margin-right:4px;background:"+(belowPdl?"rgba(239,68,68,.1)":"rgba(34,197,94,.08)")+";color:"+(belowPdl?"var(--r)":"var(--m)")+"'>PDL ₹"+s.pdl+"</span>");
+  }
+  // ORB state pill
+  if(s.orb&&(s.orb.breakout||s.orb.breakdown||s.orb.breakout_failed||s.orb.breakdown_failed)){
+    var orbTxt, orbBg, orbCol;
+    if(s.orb.breakout_failed&&!s.orb.breakout){
+      orbTxt="⚠ ORB Failed ↑ — sideways"; orbBg="rgba(245,158,11,.12)"; orbCol="var(--y)";
+    } else if(s.orb.breakdown_failed&&!s.orb.breakdown){
+      orbTxt="⚠ ORB Failed ↓ — sideways"; orbBg="rgba(245,158,11,.12)"; orbCol="var(--y)";
+    } else if(s.orb.breakout){
+      orbTxt="ORB Break ↑ ₹"+s.orb.high+(s.orb.vol_confirmed?" ✓vol":""); orbBg="rgba(34,197,94,.1)"; orbCol="var(--g)";
+    } else {
+      orbTxt="ORB Break ↓ ₹"+s.orb.low+(s.orb.vol_confirmed?" ✓vol":""); orbBg="rgba(239,68,68,.1)"; orbCol="var(--r)";
+    }
+    parts.push("<span style='display:inline-block;padding:2px 8px;border-radius:5px;background:"+orbBg+";color:"+orbCol+";font-size:.6rem;font-weight:700;margin-right:4px'>"+orbTxt+"</span>");
+  }
   if(parts.length){el.style.display="block";el.innerHTML=parts.join("");}
   else if(smc.structure){el.style.display="block";el.innerHTML="<span style='display:inline-block;padding:2px 6px;color:#64748b;font-size:.58rem'>|SMC| No zones near price</span>";}
   else el.style.display="none";
