@@ -386,6 +386,14 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
       <button class="ss-btn ss-sec2" onclick="exportJ()">📤 Export Journal</button>
       <button class="ss-btn ss-sec2" onclick="clearAll()">🗑 Clear All Data</button>
     </div>
+    <div class="ss-sec">
+      <div class="ss-sec-title">📊 Market Snapshot Data</div>
+      <div style="font-size:.6rem;color:var(--m);margin-bottom:8px;line-height:1.5">
+        Every 5 min during market hours, all indicators + OI are stored on this device. Export anytime as CSV.<br>
+        <b style="color:var(--b)">File path:</b> Files → On My iPhone → Downloads
+      </div>
+      <div id="snapStatsPanel"></div>
+    </div>
     <div style="text-align:center;font-size:.58rem;color:var(--m);padding:6px 0 20px;line-height:1.7">PRO Trader v9.0 · AI-Powered F&O Terminal<br>⚠ Not SEBI registered · Educational use only</div>
   </div>
 </div>
@@ -983,6 +991,11 @@ function startPolling(){
   safeInterval(function(){
     if(CS&&CS.sym&&serverOk) fetchOI(CS.sym);
   },90000);
+  // Snapshot capture — every 5 min during market hours
+  safeInterval(function(){
+    try{maybeCapture();}catch(e){}
+    try{checkEodExport();}catch(e){}
+  },60000); // check every 60s, maybeCapture throttles itself to 5 min
 }
 
 function manualRefresh(){
@@ -1195,6 +1208,164 @@ function pickSym(sym){
   closeOv("symOv");updateHero();updateOI(CS);fetchSMC(CS.sym);fetchOI(CS.sym);fetchMTF(CS.sym);showSMCStrip(CS.sym);showTech(CS);
   sfFilt=sym;buildSF();renderFeed();
   if(!s.cOI&&s.sym in {"NIFTY":1,"BANKNIFTY":1,"FINNIFTY":1})fetchOI(s.sym);
+}
+
+// ═══════════════════════════════════════════
+// SNAPSHOT DATABASE — IndexedDB 5-min capture
+// ═══════════════════════════════════════════
+var SnapDB=(function(){
+  var DB="protrader_snapshots",VER=1,ST="snaps",_db=null;
+  function open(cb){
+    if(_db){cb(_db);return;}
+    var req=indexedDB.open(DB,VER);
+    req.onupgradeneeded=function(e){
+      var db=e.target.result;
+      if(!db.objectStoreNames.contains(ST)){
+        var s=db.createObjectStore(ST,{keyPath:"id",autoIncrement:true});
+        s.createIndex("date","date",{unique:false});
+        s.createIndex("ts","ts",{unique:false});
+      }
+    };
+    req.onsuccess=function(e){_db=e.target.result;cb(_db);};
+    req.onerror=function(){console.warn("[SnapDB] open failed");};
+  }
+  function save(snap){open(function(db){db.transaction(ST,"readwrite").objectStore(ST).add(snap);});}
+  function getByDate(dt,cb){open(function(db){var r=db.transaction(ST,"readonly").objectStore(ST).index("date").getAll(dt);r.onsuccess=function(){cb(r.result||[]);};r.onerror=function(){cb([]);};});}
+  function getAll(cb){open(function(db){var r=db.transaction(ST,"readonly").objectStore(ST).getAll();r.onsuccess=function(){cb(r.result||[]);};r.onerror=function(){cb([]);};});}
+  function countByDate(dt,cb){open(function(db){var r=db.transaction(ST,"readonly").objectStore(ST).index("date").count(dt);r.onsuccess=function(){cb(r.result||0);};r.onerror=function(){cb(0);};});}
+  function purgeOld(days){open(function(db){
+    var cut=new Date();cut.setDate(cut.getDate()-days);
+    var cutStr=cut.toISOString().slice(0,10);
+    var cur=db.transaction(ST,"readwrite").objectStore(ST).index("date").openCursor(IDBKeyRange.upperBound(cutStr));
+    cur.onsuccess=function(e){var c=e.target.result;if(c){c.delete();c.continue();}};
+  });}
+  function size(cb){getAll(function(r){cb(r.length,JSON.stringify(r).length);});}
+  return {save,getByDate,getAll,countByDate,purgeOld,size};
+})();
+
+function captureSnapshot(s){
+  if(!s||!s.px||!s.sym) return;
+  var ts=new Date().toISOString();
+  var orb=s.orb||null;
+  var orbState="none";
+  if(orb){
+    orbState=orb.breakout_failed?"bull_failed":orb.breakdown_failed?"bear_failed":
+             orb.breakout?"breakout":orb.breakdown?"breakdown":orb.inside?"inside":"building";
+  }
+  var smc=s.smc||{};
+  var curSig=allSigs.filter(function(sg){return sg.sym===s.sym;})[0]||{};
+  SnapDB.save({
+    ts:ts, date:ts.slice(0,10), time:istTime(), sym:s.sym,
+    // Price
+    px:s.px, pct:s.pct||0, high:s.h||0, low:s.l||0, open:s.o||0,
+    // SMA
+    sma20:s.sma20||0, sma50:s.sma50||0,
+    above_sma20:s.px>(s.sma20||0)?1:0, above_sma50:s.px>(s.sma50||0)?1:0,
+    sma_trend:s.trend||"",
+    // RSI / VWAP / Volume
+    rsi:s.rsi||0, vwap:s.vwap||0, above_vwap:(s.vwap&&s.px>s.vwap)?1:0,
+    vol:s.vol||0, avg_vol:s.avg_vol||0,
+    vol_ratio:s.avg_vol>0?+(s.vol/s.avg_vol).toFixed(2):1,
+    // ORB
+    orb_high:orb?orb.high:0, orb_low:orb?orb.low:0,
+    orb_state:orbState, orb_vol_ok:(orb&&orb.vol_confirmed)?1:0,
+    // PDH/PDL
+    pdh:s.pdh||0, pdl:s.pdl||0,
+    // CPR
+    cpr_type:s.cpr?s.cpr.type:"", cpr_tc:s.cpr?s.cpr.tc:0, cpr_bc:s.cpr?s.cpr.bc:0,
+    cpr_position:s.cpr?(s.px>s.cpr.tc?"above_tc":s.px<s.cpr.bc?"below_bc":"inside"):"",
+    // 15D Trend
+    trend15:s.trend15||"", trend_strength:s.trend_strength||0,
+    hh_hl:s.hh_hl?1:0, lh_ll:s.lh_ll?1:0,
+    // SMC
+    smc_structure:smc.structure||"",
+    ob_bull:((smc.orderBlocks||[]).filter(function(b){return b.type==="BULL";})[0]||{}).mid||0,
+    ob_bear:((smc.orderBlocks||[]).filter(function(b){return b.type==="BEAR";})[0]||{}).mid||0,
+    fvg_bull:(smc.fvgZones||[]).filter(function(f){return f.type==="BULL"&&!f.filled;}).length,
+    fvg_bear:(smc.fvgZones||[]).filter(function(f){return f.type==="BEAR"&&!f.filled;}).length,
+    sweeps:(smc.sweeps||[]).length,
+    // OI
+    pcr:s.pcr||0, max_pain:s.mp||0,
+    ce_wall:s.cW||0, pe_wall:s.pW||0,
+    ce_oi:s.cOI?+(s.cOI/1e7).toFixed(2):0, pe_oi:s.pOI?+(s.pOI/1e7).toFixed(2):0,
+    ce_chg:s.cC?+(s.cC/1e7).toFixed(2):0, pe_chg:s.pC?+(s.pC/1e7).toFixed(2):0,
+    buildup:s.buildup||"", iv:s.iv||0,
+    // VIX + Signal state
+    vix:VIX||0,
+    signal_bias:curSig.bias||"", signal_conf:curSig.confidence||0,
+    signal_strategy:curSig.strategy||"", signal_setup:curSig.setupKey||"",
+    signal_bull_score:curSig._bull||0, signal_bear_score:curSig._bear||0,
+  });
+}
+
+var _lastSnapTs=0;
+function maybeCapture(){
+  if(!isOpen()) return;
+  var now=Date.now();
+  if(now-_lastSnapTs<295000) return; // 5 min
+  _lastSnapTs=now;
+  allS().forEach(function(s){try{captureSnapshot(s);}catch(e){}});
+  console.log("[Snap] "+allS().length+" symbols @ "+istTime());
+}
+
+function exportSnapshots(dateStr){
+  var dt=dateStr||new Date().toISOString().slice(0,10);
+  SnapDB.getByDate(dt,function(rows){
+    if(!rows.length){toast("No data","No snapshots for "+dt,"ty");return;}
+    _downloadSnapCSV(rows,"protrader_snapshots_"+dt+".csv");
+    toast("✅ Saved",rows.length+" rows → Files → Downloads","tg");
+  });
+}
+
+function exportAllSnapshots(){
+  SnapDB.getAll(function(rows){
+    if(!rows.length){toast("No data","No snapshots yet","ty");return;}
+    _downloadSnapCSV(rows,"protrader_snapshots_all.csv");
+    toast("✅ Saved",rows.length+" rows → Files → Downloads","tg");
+  });
+}
+
+function _downloadSnapCSV(rows,fname){
+  var cols=Object.keys(rows[0]).filter(function(k){return k!=="id";});
+  var csv=[cols.join(",")];
+  rows.forEach(function(r){
+    csv.push(cols.map(function(c){
+      var v=r[c]==null?"":String(r[c]);
+      return v.indexOf(",")>=0?'"'+v+'"':v;
+    }).join(","));
+  });
+  var a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([csv.join("\n")],{type:"text/csv"}));
+  a.download=fname; document.body.appendChild(a); a.click();
+  setTimeout(function(){a.remove();},2000);
+}
+
+var _eodExportDone=false;
+function checkEodExport(){
+  var now=istMinsNow();
+  if(now>=930&&now<=936&&!_eodExportDone){
+    _eodExportDone=true;
+    setTimeout(function(){exportSnapshots(new Date().toISOString().slice(0,10));},4000);
+  }
+  if(now<900) _eodExportDone=false;
+}
+
+function showSnapshotStats(id){
+  var el=document.getElementById(id); if(!el) return;
+  var today=new Date().toISOString().slice(0,10);
+  SnapDB.countByDate(today,function(td){
+    SnapDB.size(function(total,bytes){
+      el.innerHTML=
+        "<div style='font-size:.6rem;color:var(--m);margin-bottom:6px'>"+
+        "Today: <b style='color:var(--t)'>"+td+" snaps</b> · "+
+        "Total: <b style='color:var(--t)'>"+total+"</b> rows · "+
+        "Size: <b style='color:var(--t)'>"+Math.round(bytes/1024)+"KB</b></div>"+
+        "<div style='display:flex;gap:6px'>"+
+        "<button onclick='exportSnapshots()' style='flex:1;padding:6px;border-radius:6px;background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.3);color:var(--b);font-size:.6rem;font-weight:700;cursor:pointer'>📥 Export Today</button>"+
+        "<button onclick='exportAllSnapshots()' style='flex:1;padding:6px;border-radius:6px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);color:var(--g);font-size:.6rem;font-weight:700;cursor:pointer'>📦 Export All</button></div>";
+    });
+  });
+  SnapDB.purgeOld(90);
 }
 
 // ═══════════════════════════════════════════
@@ -3271,6 +3442,7 @@ function ssLoad(){
     var e=document.getElementById("ss_srv");if(e)e.value=srv;
     if(srv){SERVER_URL=srv;try{localStorage.setItem("pt_server",srv);}catch(ex){}} // save cleaned URL back
     updBadges(KITE.connected);
+    try{showSnapshotStats("snapStatsPanel");}catch(ex){}
   }catch(e){}
 }
 function srvSave(){
