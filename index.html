@@ -1621,15 +1621,124 @@ function localSigs(){
 
     // ── LAYER 5: SMC ──
     var smc=s.smc||null;
-    var smcStruct=smc&&smc.structure||"";
-    var bullOB=smc&&smc.ob&&smc.ob.filter(function(o){return o.type==="BULLISH"&&px>o.low&&px<o.high*1.01;}).length>0;
-    var bearOB=smc&&smc.ob&&smc.ob.filter(function(o){return o.type==="BEARISH"&&px<o.high&&px>o.low*0.99;}).length>0;
-    var bullFVG=smc&&smc.fvg&&smc.fvg.filter(function(f){return f.type==="BULLISH"&&!f.filled&&px>f.bot&&px<f.top*1.02;}).length>0;
-    var bearFVG=smc&&smc.fvg&&smc.fvg.filter(function(f){return f.type==="BEARISH"&&!f.filled&&px<f.top&&px>f.bot*0.98;}).length>0;
-    var bullSweep=smc&&smc.sweep&&smc.sweep.filter(function(sw){return sw.type==="BEAR_SWEEP";}).length>0; // bear sweep = bullish reversal
-    var bearSweep=smc&&smc.sweep&&smc.sweep.filter(function(sw){return sw.type==="BULL_SWEEP";}).length>0; // bull sweep = bearish reversal
-    var bullStructure=smcStruct==="HH_HL"||smcStruct==="BULLISH";
-    var bearStructure=smcStruct==="LH_LL"||smcStruct==="BEARISH";
+
+    // ── Enhanced SMC scoring ──────────────────────────────────────────
+    // Pull all new fields from enhanced calc_smc
+    var smcStruct    = smc&&smc.structure||"";
+    var intTrend     = smc&&smc.int_trend||"";
+    var swgTrend     = smc&&smc.swg_trend||"";
+    var smcEvent     = smc&&smc.structure_event||null;  // primary BOS/CHoCH
+    var allEvents    = smc&&smc.all_events||[];
+    var strongHigh   = smc&&smc.strong_high||0;
+    var weakHigh     = smc&&smc.weak_high||0;
+    var strongLow    = smc&&smc.strong_low||0;
+    var weakLow      = smc&&smc.weak_low||0;
+    var eqhLevels    = smc&&smc.eqh||[];
+    var eqlLevels    = smc&&smc.eql||[];
+    var smcZone      = smc&&smc.zone||"EQUILIBRIUM";   // PREMIUM/DISCOUNT/EQUILIBRIUM
+    var equilibrium  = smc&&smc.equilibrium||0;
+
+    // OBs — only non-mitigated (server already filtered)
+    var bullOB = smc&&smc.ob&&smc.ob.filter(function(o){
+      return o.type==="BULLISH"&&!o.mitigated&&px>o.low&&px<o.high*1.01;
+    }).length>0;
+    var bearOB = smc&&smc.ob&&smc.ob.filter(function(o){
+      return o.type==="BEARISH"&&!o.mitigated&&px<o.high&&px>o.low*0.99;
+    }).length>0;
+    // Near strong OB (within 0.3%) — higher significance
+    var nearStrongBullOB = smc&&smc.ob&&smc.ob.filter(function(o){
+      return o.type==="BULLISH"&&!o.mitigated&&Math.abs(px-o.mid)/o.mid<0.003;
+    }).length>0;
+    var nearStrongBearOB = smc&&smc.ob&&smc.ob.filter(function(o){
+      return o.type==="BEARISH"&&!o.mitigated&&Math.abs(px-o.mid)/o.mid<0.003;
+    }).length>0;
+
+    // FVGs — unfilled only
+    var bullFVG = smc&&smc.fvg&&smc.fvg.filter(function(f){
+      return f.type==="BULLISH"&&!f.filled&&px>f.bot&&px<f.top*1.02;
+    }).length>0;
+    var bearFVG = smc&&smc.fvg&&smc.fvg.filter(function(f){
+      return f.type==="BEARISH"&&!f.filled&&px<f.top&&px>f.bot*0.98;
+    }).length>0;
+
+    // Sweeps (now sourced from EQH/EQL sweeps)
+    var bullSweep=smc&&smc.sweep&&smc.sweep.filter(function(sw){return sw.type==="BEAR_SWEEP";}).length>0;
+    var bearSweep=smc&&smc.sweep&&smc.sweep.filter(function(sw){return sw.type==="BULL_SWEEP";}).length>0;
+
+    // EQH/EQL — unswept = liquidity magnet (price likely to be pulled there)
+    var unsweptEQH=eqhLevels.filter(function(e){return !e.swept&&e.level>px;});
+    var unsweptEQL=eqlLevels.filter(function(e){return !e.swept&&e.level<px;});
+    var sweptEQH=eqhLevels.filter(function(e){return e.swept;});  // already swept = reversal possible
+    var sweptEQL=eqlLevels.filter(function(e){return e.swept;});
+
+    // BOS vs CHoCH — from dual layer analysis
+    // CHoCH = reversal (weight 3), BOS = continuation (weight 1)
+    var bullCHoCH=allEvents.filter(function(e){return e.type==="CHoCH"&&e.bias==="BULLISH";}).length>0;
+    var bearCHoCH=allEvents.filter(function(e){return e.type==="CHoCH"&&e.bias==="BEARISH";}).length>0;
+    var bullBOS  =allEvents.filter(function(e){return e.type==="BOS"  &&e.bias==="BULLISH";}).length>0;
+    var bearBOS  =allEvents.filter(function(e){return e.type==="BOS"  &&e.bias==="BEARISH";}).length>0;
+    // Swing structure alignment
+    var bullStructure=swgTrend==="BULLISH"||smcStruct==="HH_HL"||smcStruct==="BULLISH";
+    var bearStructure=swgTrend==="BEARISH"||smcStruct==="LH_LL"||smcStruct==="BEARISH";
+    // Both layers aligned = stronger signal
+    var dualBull=bullStructure&&(intTrend==="BULLISH");
+    var dualBear=bearStructure&&(intTrend==="BEARISH");
+
+    // Near strong/weak levels
+    var nearStrongHigh = strongHigh>0&&Math.abs(px-strongHigh)/strongHigh<0.003;
+    var nearStrongLow  = strongLow>0&&Math.abs(px-strongLow)/strongLow<0.003;
+
+    // ── SMC SCORING ──────────────────────────────────────────────────
+    // CHoCH (reversal structure break) = +3 — highest quality signal
+    if(bullCHoCH){bullScore+=3;bullReasons.push("CHoCH BULLISH — trend reversal confirmed, institutions buying");}
+    if(bearCHoCH){bearScore+=3;bearReasons.push("CHoCH BEARISH — trend reversal confirmed, institutions selling");}
+
+    // BOS (continuation structure break) = +1 — lower quality
+    if(bullBOS&&!bullCHoCH){bullScore+=1;bullReasons.push("BOS BULLISH — structure continuation, trend intact");}
+    if(bearBOS&&!bearCHoCH){bearScore+=1;bearReasons.push("BOS BEARISH — structure continuation, trend intact");}
+
+    // Dual layer alignment (swing + internal both agree) = extra +1
+    if(dualBull){bullScore+=1;bullReasons.push("Dual structure: Swing+Internal both BULLISH");}
+    if(dualBear){bearScore+=1;bearReasons.push("Dual structure: Swing+Internal both BEARISH");}
+
+    // OB scoring — non-mitigated OBs only (stale ones removed by server)
+    if(nearStrongBullOB){bullScore+=3;bullReasons.push("Price at non-mitigated Bullish OB — strong institutional support zone");}
+    else if(bullOB){bullScore+=2;bullReasons.push("Price inside Bullish OB — institutional support");}
+    if(nearStrongBearOB){bearScore+=3;bearReasons.push("Price at non-mitigated Bearish OB — strong institutional resistance zone");}
+    else if(bearOB){bearScore+=2;bearReasons.push("Price inside Bearish OB — institutional resistance");}
+
+    // FVG scoring
+    if(bullFVG){bullScore+=2;bullReasons.push("Bullish FVG unfilled — imbalance acts as support magnet");}
+    if(bearFVG){bearScore+=2;bearReasons.push("Bearish FVG unfilled — imbalance acts as resistance magnet");}
+
+    // Liquidity sweeps — swept EQH/EQL = institution move complete, reversal likely
+    if(bullSweep){bullScore+=2;bullReasons.push("EQL swept — smart money collected sell-side liquidity, reversal up likely");}
+    if(bearSweep){bearScore+=2;bearReasons.push("EQH swept — smart money collected buy-side liquidity, reversal down likely");}
+
+    // EQH/EQL — unswept levels = where price is likely to be pulled
+    if(unsweptEQL.length>0){
+      bullScore+=1;
+      bullReasons.push("EQL ₹"+unsweptEQL[0].level+" below — liquidity magnet, buy-side sweep target");
+    }
+    if(unsweptEQH.length>0){
+      bearScore+=1;
+      bearReasons.push("EQH ₹"+unsweptEQH[0].level+" above — liquidity magnet, sell-side sweep target");
+    }
+
+    // Strong High/Low near current price — key structural levels
+    if(nearStrongLow){bullScore+=2;bullReasons.push("Near Strong Low ₹"+strongLow+" — key CHoCH support, institutions likely to defend");}
+    if(nearStrongHigh){bearScore+=2;bearReasons.push("Near Strong High ₹"+strongHigh+" — key CHoCH resistance, institutions likely to sell");}
+
+    // Premium/Discount zone scoring
+    // In DISCOUNT zone → institutional buy zone → boost bull, penalise bear
+    // In PREMIUM zone  → institutional sell zone → boost bear, penalise bull
+    if(smcZone==="DISCOUNT"){
+      bullScore+=2;bullReasons.push("Price in DISCOUNT zone (below equilibrium ₹"+equilibrium+") — institutional buy territory");
+      bearScore=Math.max(0,bearScore-1); // counter-zone penalty
+    } else if(smcZone==="PREMIUM"){
+      bearScore+=2;bearReasons.push("Price in PREMIUM zone (above equilibrium ₹"+equilibrium+") — institutional sell territory");
+      bullScore=Math.max(0,bullScore-1); // counter-zone penalty
+    }
     // ── LAYER 3: IV Context ──
     var ivVsVix=iv>0&&VIX>0?iv/VIX:1;
     var ivHigh=ivVsVix>1.3;
@@ -2054,24 +2163,23 @@ function localSigs(){
     }
 
     // ══════════════════════════════════════════════════════════
-    // LAYER DIVERSITY GATE — Phase 1 core change
-    // Count confirmations from INDEPENDENT source categories.
-    // Same market move triggering breakout+aboveSMA20+aboveVWAP
-    // is ONE confirmation, not three.
+    // LAYER DIVERSITY GATE — 5 independent source categories
     // ══════════════════════════════════════════════════════════
-    var hasOI = (pcr>0||ceOI>0||peOI>0||ceWall>0||peWall>0||mp>0); // real OI data present
+    var hasOI = (pcr>0||ceOI>0||peOI>0||ceWall>0||peWall>0||mp>0);
 
-    // OI category: PCR, walls, writer traps (all from option chain)
+    // OI category: PCR, walls, writer traps
     var oiCatBull = (pcrBull?1:0)+(pcrStrongBull?2:0)+(nearPeWall?1:0)+
                     (belowMp?1:0)+(putWriting?1:0)+(trappedCE?1:0)+(ceUnwinding?1:0);
     var oiCatBear = (pcrBear?1:0)+(pcrExtremeBull?1:0)+(nearCeWall?1:0)+
                     (aboveMp?1:0)+(callWriting?1:0)+(trappedPE?1:0)+(peUnwinding?1:0);
 
-    // Price action category: VWAP, ORB, SMC, CPR (all from candles/structure)
+    // Price action category: VWAP, ORB, OB, FVG, CPR
     var priceActBull = (aboveVwap?1:0)+(vwapReclaim?1:0)+(orbBreakout?1:0)+
-                       (bullOB?1:0)+(bullFVG?1:0)+(bullSweep?1:0)+(cprNarrow&&aboveTC?1:0);
+                       (bullOB?1:0)+(bullFVG?1:0)+(bullSweep?1:0)+(cprNarrow&&aboveTC?1:0)+
+                       (smcZone==="DISCOUNT"?1:0);
     var priceActBear = (belowVwap?1:0)+(vwapReject?1:0)+(orbBreakdown?1:0)+
-                       (bearOB?1:0)+(bearFVG?1:0)+(bearSweep?1:0)+(cprNarrow&&belowBC?1:0);
+                       (bearOB?1:0)+(bearFVG?1:0)+(bearSweep?1:0)+(cprNarrow&&belowBC?1:0)+
+                       (smcZone==="PREMIUM"?1:0);
 
     // Momentum category: RSI, SMA crossover, volume, trend
     var momCatBull = (golden?2:0)+(breakout?1:0)+(rsiOS?1:0)+(rsiBull?1:0)+
@@ -2079,31 +2187,41 @@ function localSigs(){
     var momCatBear = (death?2:0)+(breakdown?1:0)+(rsiOB?1:0)+(rsiBear?1:0)+
                      (!aboveSma20&&!aboveSma50?1:0)+(trendBear?1:0)+(volExpanding&&!aboveSma20?1:0);
 
-    // Regime category: market context
+    // SMC Structure category: CHoCH/BOS/EQH/EQL/Strong levels (5th independent layer)
+    var smcCatBull = (bullCHoCH?3:0)+(bullBOS?1:0)+(dualBull?1:0)+
+                     (nearStrongLow?2:0)+(sweptEQL.length?1:0)+(unsweptEQH.length?0:0);
+    var smcCatBear = (bearCHoCH?3:0)+(bearBOS?1:0)+(dualBear?1:0)+
+                     (nearStrongHigh?2:0)+(sweptEQH.length?1:0)+(unsweptEQL.length?0:0);
+
+    // Regime category
     var regimeCat = (isTrending||isBreakoutDay)?1:0;
 
-    // Count independent layers confirmed (≥1 signal each)
+    // Count independent layers (≥1 signal each)
     var bullLayers=0, bearLayers=0;
-    if(oiCatBull>=1)   bullLayers++;
+    if(oiCatBull>=1)    bullLayers++;
     if(priceActBull>=1) bullLayers++;
     if(momCatBull>=1)   bullLayers++;
+    if(smcCatBull>=1)   bullLayers++;   // SMC structure = independent layer
     if(regimeCat>=1&&regimeCode==="TRENDING_UP") bullLayers++;
 
-    if(oiCatBear>=1)   bearLayers++;
+    if(oiCatBear>=1)    bearLayers++;
     if(priceActBear>=1) bearLayers++;
     if(momCatBear>=1)   bearLayers++;
+    if(smcCatBear>=1)   bearLayers++;   // SMC structure = independent layer
     if(regimeCat>=1&&regimeCode==="TRENDING_DOWN") bearLayers++;
 
-    // Store setup key for performance tracking
+    // Setup key for leaderboard
     var bullSetupKey="", bearSetupKey="";
     var bk=[], bbk=[];
     if(oiCatBull>=1)    bk.push("OI");
     if(priceActBull>=1) bk.push("Price");
     if(momCatBull>=1)   bk.push("Momentum");
+    if(smcCatBull>=1)   bk.push(bullCHoCH?"CHoCH":"Structure");
     if(regimeCode==="TRENDING_UP") bk.push("Regime");
     if(oiCatBear>=1)    bbk.push("OI");
     if(priceActBear>=1) bbk.push("Price");
     if(momCatBear>=1)   bbk.push("Momentum");
+    if(smcCatBear>=1)   bbk.push(bearCHoCH?"CHoCH":"Structure");
     if(regimeCode==="TRENDING_DOWN") bbk.push("Regime");
     bullSetupKey = bk.join("+") || "Unconfirmed";
     bearSetupKey = bbk.join("+") || "Unconfirmed";
