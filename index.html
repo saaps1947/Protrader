@@ -1562,7 +1562,15 @@ function localSigs(){
 
     // OI confirmations
     if(putWriting){bullScore+=2;bullReasons.push("Put writing ↑ ("+((peChg/1e6).toFixed(1))+"M new puts = support)");}
-    if(callWriting){bearScore+=2;bearReasons.push("Call writing ↑ ("+((ceChg/1e6).toFixed(1))+"M new calls = resistance)");}
+    // FIX: CE writing alone is NOT enough for bearish signal
+    // Institutions write covered calls as income — not necessarily bearish
+    // Requires BOTH price confirmation: below VWAP + below SMA20
+    if(callWriting&&belowVwap&&!aboveSma20){
+      bearScore+=2;bearReasons.push("Call writing ↑ ("+((ceChg/1e6).toFixed(1))+"M new calls) + below VWAP + below SMA20 — confirmed bearish");
+    } else if(callWriting){
+      // CE writing without price confirmation = just note it, don't score
+      bearReasons.push("⚠ Call writing noted ("+((ceChg/1e6).toFixed(1))+"M) but price not confirming — not scored");
+    }
     if(pcrBull){bullScore+=1;bullReasons.push("PCR "+pcr+" bullish — put writing dominant");}
     if(pcrStrongBull){
       // Heavy put writing is bullish — but check if bearish flow contradicts it
@@ -1793,11 +1801,14 @@ function localSigs(){
 
     // 8. CONVICTION FLOOR — minimum score needed per regime
     var minScore = isChoppy?4 : (isExpiryZone&&pinned)?4 : isPrimetime?2 : 2;
+    // FIX: Higher bar before 10 AM — morning signals had 11% win rate in analysis
+    var morningSession = (nowH===9 && nowM>=30); // 9:30-9:59 AM
+    var minConfThreshold = morningSession ? 87 : 82; // 87% required before 10 AM
 
     // If contradiction warnings exist, raise the bar further
     var hasContradiction = bullReasons.some(function(r){return r.indexOf('⚠')===0;}) ||
                            bearReasons.some(function(r){return r.indexOf('⚠')===0;});
-    if(hasContradiction) minScore = Math.max(minScore, 4); // contradicted signals need stronger confirmation
+    if(hasContradiction) minScore = Math.max(minScore, 4);
 
     // ══════════════════════════════════════════════════════════
     // NO-TRADE FILTER
@@ -1824,7 +1835,22 @@ function localSigs(){
     if(pinned&&isExpiryZone&&Math.abs(bullScore-bearScore)<3){
       noTradeReasons.push("Expiry pinning near Max Pain ₹"+mp+" — directional trade unsafe");
     }
-    // Both bull and bear scores similar = confused market
+    // FIX: No re-entry at same level that stopped you out today
+    // Analysis: NIFTY tried 23500 CE wall 4 times, got stopped each time
+    var todayDate = new Date().toLocaleDateString('en-IN');
+    var levelBlocked = SIGNAL_LOG.some(function(x){
+      if(x.status!=="SL_HIT") return false;
+      if(x.sym!==s.sym) return false;
+      if(!x.sl_px||!x.entry_px) return false;
+      // Same calendar date
+      var entryDate = x.ts ? new Date(x.ts).toLocaleDateString('en-IN') : "";
+      if(entryDate!==todayDate) return false;
+      // Within 0.5% of the previous SL level
+      return Math.abs(px - x.sl_px)/x.sl_px < 0.005;
+    });
+    if(levelBlocked){
+      noTradeReasons.push("Level blocked — SL at this price already hit today, avoiding re-entry");
+    }
     if(Math.abs(bullScore-bearScore)<2&&bullScore>=2&&bearScore>=2){
       noTradeReasons.push("Conflicted signals — bull and bear nearly equal ("+bullScore+" vs "+bearScore+")");
     }
@@ -1980,7 +2006,8 @@ function localSigs(){
       var conf=Math.min(94,Math.max(62,68+bullScore*3-(bearScore*2)));
       if(bullLayers<2) conf=Math.min(conf,74);      // 1 layer = LOW only
       if(!hasOI)       conf=Math.min(conf,79);      // no OI = max MEDIUM
-      // Urgency: HIGH requires 2+ layers AND OI present
+      // Morning session: require 87% minimum before 10 AM
+      if(morningSession && conf<minConfThreshold){return;} // too weak for morning — skip
       var urg=( conf>=82 && bullLayers>=2 && hasOI )?"HIGH":
                conf>=75||bullLayers>=2?"MEDIUM":"LOW";
       var strat=golden?"Golden Cross + OI":
@@ -2027,6 +2054,8 @@ function localSigs(){
       var conf2=Math.min(94,Math.max(62,68+bearScore*3-(bullScore*2)));
       if(bearLayers<2) conf2=Math.min(conf2,74);
       if(!hasOI)       conf2=Math.min(conf2,79);
+      // Morning session: require 87% minimum before 10 AM
+      if(morningSession && conf2<minConfThreshold){return;}
       var urg2=(conf2>=82&&bearLayers>=2&&hasOI)?"HIGH":
                conf2>=75||bearLayers>=2?"MEDIUM":"LOW";
       var strat2=death?"Death Cross + OI":
@@ -2583,11 +2612,18 @@ function autoLogSignal(sig){
   var t1Px = parseFloat(sig.target1)||0;
   if(!slPx||!t1Px) return;
 
-  // Guard 4: if same symbol + same direction already OPEN → skip (dedup)
-  var sameOpen = SIGNAL_LOG.filter(function(x){
-    return x.sym===sig.sym && x.bias===sig.bias && x.status==="OPEN";
-  }).length > 0;
-  if(sameOpen) return;
+  // Guard 4: DEDUP — same symbol + same direction
+  // Check OPEN status AND same-day signals (catches rapid re-entries within minutes)
+  var todaySig = new Date().toLocaleDateString('en-IN');
+  var recentSame = SIGNAL_LOG.filter(function(x){
+    if(x.sym!==sig.sym||x.bias!==sig.bias) return false;
+    if(x.status==="OPEN") return true; // always block if still open
+    // Also block if same direction was already logged today (even if closed)
+    // unless it was SL_HIT (then level block handles re-entry separately)
+    var xDate = x.ts ? new Date(x.ts).toLocaleDateString('en-IN') : "";
+    return xDate===todaySig && x.status!=="SL_HIT";
+  });
+  if(recentSame.length>0) return;
 
   // Guard 5: if opposite direction OPEN for same symbol → auto-close it
   // (NIFTY was bullish, now bearish → close the bullish signal as MANUAL)
