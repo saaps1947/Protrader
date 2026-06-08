@@ -903,8 +903,19 @@ function _doFetchFromServer(){
         sc.pcr=sd.oi.pcr||0;sc.mp=sd.oi.max_pain||0;
         sc.iv=sd.oi.iv||0;sc.cW=sd.oi.ce_wall||0;sc.pW=sd.oi.pe_wall||0;
         sc.buildup=sd.oi.buildup||"";           // LONG_BUILDUP / SHORT_BUILDUP etc
-        sc.pcr_interp=sd.oi.pcr_interp||"";    // BULLISH / BEARISH / NEUTRAL etc
-        sc.mp_dist=sd.oi.mp_dist||0;           // distance from max pain
+      }
+      // CPR — now included in market response from prev day OHLC
+      if(sd.cpr && sd.cpr.pivot){
+        sc.cpr=sd.cpr;
+      }
+      // VWAP approximation — now included in market response
+      if(sd.vwap){
+        sc.vwap=sd.vwap;
+        sc.above_vwap=sd.above_vwap;
+      }
+      if(sd.oi){
+        sc.pcr_interp=sd.oi.pcr_interp||"";
+        sc.mp_dist=sd.oi.mp_dist||0;
       }
     });
     // Update ATM for all instruments based on current price
@@ -1271,10 +1282,14 @@ function captureSnapshot(s){
     orb_state:orbState, orb_vol_ok:(orb&&orb.vol_confirmed)?1:0,
     // PDH/PDL
     pdh:s.pdh||0, pdl:s.pdl||0,
-    // CPR
+    // CPR — now from market response for all symbols
     cpr_type:s.cpr?s.cpr.type:"", cpr_tc:s.cpr?s.cpr.tc:0, cpr_bc:s.cpr?s.cpr.bc:0,
+    cpr_pivot:s.cpr?s.cpr.pivot:0, cpr_width_pct:s.cpr?s.cpr.width_pct:0,
     cpr_position:s.cpr?(s.px>s.cpr.tc?"above_tc":s.px<s.cpr.bc?"below_bc":"inside"):"",
-    // 15D Trend
+    cpr_bias:s.cpr?s.cpr.bias:"",
+    // VWAP — approximate session VWAP from market response
+    vwap_approx:s.vwap||0, above_vwap_approx:s.above_vwap?1:0,
+    // 15D Trend — from market response for all symbols
     trend15:s.trend15||"", trend_strength:s.trend_strength||0,
     hh_hl:s.hh_hl?1:0, lh_ll:s.lh_ll?1:0,
     // SMC
@@ -1299,13 +1314,21 @@ function captureSnapshot(s){
 }
 
 var _lastSnapTs=0;
+var _snapSessions={}; // track which symbols were snapped this scan
 function maybeCapture(){
+  // Fallback: if SMC-triggered capture didn't fire, capture all symbols
   if(!isOpen()) return;
   var now=Date.now();
   if(now-_lastSnapTs<295000) return; // 5 min
   _lastSnapTs=now;
-  allS().forEach(function(s){try{captureSnapshot(s);}catch(e){}});
-  console.log("[Snap] "+allS().length+" symbols @ "+istTime());
+  _snapSessions={};
+  allS().forEach(function(s){
+    if(!_snapSessions[s.sym]){
+      try{captureSnapshot(s);}catch(e){}
+      _snapSessions[s.sym]=true;
+    }
+  });
+  console.log("[Snap fallback] "+allS().length+" symbols @ "+istTime());
 }
 
 function exportSnapshots(dateStr){
@@ -1444,6 +1467,15 @@ function runScan(manual){
           if(d.writer)s.writer=d.writer;
           if(d.narrative)s.narrative=d.narrative;
           if(d.mtf)s.tfAlignment=d.mtf.alignment;
+          // trend15, PDH, PDL — only available after /smc call (not in /market when Zerodha connected)
+          if(d.trend15)s.trend15=d.trend15;
+          if(d.trend_strength!==undefined)s.trend_strength=d.trend_strength;
+          if(d.hh_hl!==undefined)s.hh_hl=d.hh_hl;
+          if(d.lh_ll!==undefined)s.lh_ll=d.lh_ll;
+          if(d.pdh)s.pdh=d.pdh;
+          if(d.pdl)s.pdl=d.pdl;
+          // Capture snapshot NOW — after SMC data is applied (all fields populated)
+          try{captureSnapshot(s);}catch(e){}
         }
         afterSMC();
       }).catch(function(){afterSMC();});
