@@ -1466,79 +1466,19 @@ function runScan(manual){
 }
 
 function doScan(tr){
-  var lines=tr.map(function(s){
-    var tech=[];
-    if(s.sma20)tech.push("SMA20:"+s.sma20);
-    if(s.sma50)tech.push("SMA50:"+s.sma50);
-    if(s.rsi)tech.push("RSI:"+s.rsi);
-    if(s.crossover&&s.crossover!=="NONE")tech.push(s.crossover);
-    if(s.trend)tech.push("Trend:"+s.trend);
-    if(s.breakout)tech.push("BREAKOUT");
-    if(s.breakdown)tech.push("BREAKDOWN");
-    // CPR
-    if(s.cpr){tech.push("CPR:"+s.cpr.type+"(P:"+s.cpr.pivot+" TC:"+s.cpr.tc+" BC:"+s.cpr.bc+" Bias:"+s.cpr.bias+")");}
-    // SMC
-    if(s.smc){
-      if(s.smc.fvg&&s.smc.fvg.length)tech.push("FVG:"+s.smc.fvg.map(function(f){return f.type+"@"+f.top+"-"+f.bot;}).join(","));
-      if(s.smc.ob&&s.smc.ob.length)tech.push("OB:"+s.smc.ob.map(function(o){return o.type+"@"+o.high+"-"+o.low;}).join(","));
-      if(s.smc.structure)tech.push("Structure:"+s.smc.structure);
-      if(s.smc.sweep&&s.smc.sweep.length)tech.push("LiqSweep:"+s.smc.sweep[0].signal);
-    }
-    return s.sym+": ₹"+s.px+" Chg:"+s.pct+"% H:"+s.h+" L:"+s.l+
-      (s.pcr?" PCR:"+s.pcr:"")+
-      (s.mp?" MP:₹"+s.mp:"")+
-      (s.iv?" IV:"+s.iv+"%":"")+
-      (s.cOI?" CE_OI:"+(s.cOI/1e7).toFixed(1)+"Cr PE_OI:"+(s.pOI/1e7).toFixed(1)+"Cr CE_Wall:"+s.cW+" PE_Wall:"+s.pW:"")+
-      (s.buildup?" Buildup:"+s.buildup:"")+
-      (tech.length?" ["+tech.join(" | ")+" ]":"");
-  }).join("\n");
-  var mkt=isOpen()?"OPEN":"CLOSED";
-  var prompt="You are a professional Indian F&O trader using institutional methods. Date:"+new Date().toDateString()+" Market:"+mkt+" VIX:"+VIX+"\n\n"+
-    "LIVE DATA (each line: symbol, price, OI, technicals, CPR, SMC):\n"+lines+"\n\n"+
-    "SIGNAL FRAMEWORK — require minimum 2 confirmations across layers:\n\n"+
-    "LAYER 1 — OI ANALYSIS:\n"+
-    "PCR>1.4=extreme put writing=reversal bullish. PCR<0.6=extreme call writing=reversal bearish.\n"+
-    "PCR 1.1-1.4=bullish bias. PCR 0.7-0.9=bearish bias.\n"+
-    "CE_Wall=strongest resistance (max call OI strike). PE_Wall=strongest support (max put OI strike).\n"+
-    "Buildup: LONG_BUILDUP=bulls entering=bullish. SHORT_BUILDUP=bears entering=bearish.\n"+
-    "SHORT_COVERING=bears exiting=bullish bounce. LONG_UNWINDING=bulls exiting=bearish.\n"+
-    "Price below Max Pain → gravitates up. Price above Max Pain → gravitates down.\n\n"+
-    "LAYER 2 — CPR (Central Pivot Range):\n"+
-    "NARROW CPR (<0.3% of price) = trending day expected. Trade breakout direction.\n"+
-    "WIDE CPR = sideways/choppy day. Wait for range extremes or avoid.\n"+
-    "Price above TC (Top Central) = bullish. Below BC (Bottom Central) = bearish.\n"+
-    "CPR Bias BULLISH + price above pivot = strong long bias.\n\n"+
-    "LAYER 3 — SMC (Smart Money Concepts):\n"+
-    "Order Block (OB): BULLISH_OB below price = strong support/buy zone. BEARISH_OB above = resistance/sell zone.\n"+
-    "FVG (Fair Value Gap): BULLISH_FVG = unfilled demand zone = target for longs. BEARISH_FVG = supply zone.\n"+
-    "Market Structure: HH_HL = uptrend confirmed. LH_LL = downtrend confirmed. BOS = Break of Structure.\n"+
-    "Liquidity Sweep: Price sweeps equal highs then reverses = bearish. Sweeps equal lows then reverses = bullish.\n\n"+
-    "LAYER 4 — TECHNICALS:\n"+
-    "Golden Cross (SMA20>SMA50) = strongest buy. Death Cross = strongest sell.\n"+
-    "RSI<32 oversold + above SMA20 = bullish bounce. RSI>68 overbought + below SMA20 = bearish.\n"+
-    "Breakout above day high = buy CE. Breakdown below day low = buy PE.\n\n"+
-    "TRADE RULES: Buy options only (CE/PE). ATM or 1 strike OTM. Min 2 layer confirmations.\n"+
-    "For BTST: Strong close + bullish OB + NARROW CPR next day = high probability.\n"+
-    "Return ONLY a JSON array, no text:\n"+
-    '[{"sym":"NIFTY","bias":"BULLISH","trade":"Buy 24000 CE","strategy":"OB Support + Narrow CPR + PCR Bullish","why":"L1:PCR 1.2+PE_Wall 23900 | L2:Narrow CPR-price above TC | L3:Bullish OB@23850 + FVG unfilled | L4:Golden Cross+RSI 45","confidence":88,"entry":"23943","sl":"23850","target1":"24100","target2":"24200","rr":"1:2.5","urgency":"HIGH","isBTST":false,"btstNote":""}]';
-  fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,messages:[{role:"user",content:prompt}]})
-  }).then(function(r){return r.json();})
-  .then(function(d){
-    try{
-      var txt=d.content.map(function(i){return i.text||"";}).join("").replace(/```json|```/g,"").trim();
-      var sigs=JSON.parse(txt);
-      if(!Array.isArray(sigs))throw 0;
-      processScan(sigs);
-    }catch(e){processScan(localSigs());}
-  })
-  .catch(function(){try{processScan(localSigs());}catch(e){}})
-  .finally(function(){
+  // Use local signal engine directly — same engine, no API dependency
+  // Claude API was removed from signal generation to ensure reliability
+  try{
+    var sigs = localSigs();
+    processScan(sigs);
+  } catch(e){
+    console.error("[doScan] Error:", e);
+    processScan([]);
+  } finally {
     scanning=false;
     var sp2=document.getElementById("spinWrap");if(sp2)sp2.classList.remove("show");
     document.getElementById("sigSub").textContent="Last: "+istTime()+" · auto 3min";
-  });
+  }
 } // end doScan
 
 function localSigs(){
