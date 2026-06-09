@@ -1440,55 +1440,79 @@ function runScan(manual){
     if(!scanFired){scanFired=true;doScan(tr);}
   },6000);
 
-  // Pre-fetch SMC+CPR for indices (best effort — don't block scan)
-  var smcSyms=["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"];
+  // Pre-fetch SMC+CPR for ALL symbols in priority batches
+  // Batch 1: 4 indices (must complete before scan fires)
+  // Batch 2: 18 liquid stocks (in background, scan fires after 6s anyway)
+  // Batch 3: remaining stocks + MCX (best effort after scan)
+  var smcPrimary=["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"];
+  var smcLiquid=["HDFCBANK","ICICIBANK","SBIN","RELIANCE","KOTAKBANK","AXISBANK",
+                 "TCS","INFY","WIPRO","HCLTECH","TATAMOTORS","BAJFINANCE",
+                 "BAJAJFINSV","INDUSINDBK","MARUTI","LT","ADANIPORTS","BHARTIARTL"];
   var smcDone=0;
-  function afterSMC(){
+
+  function applySmcData(sym,d){
+    var s=allS().filter(function(x){return x.sym===sym;})[0];
+    if(!s||!d) return;
+    if(d.smc)s.smc=d.smc;
+    if(d.cpr)s.cpr=d.cpr;
+    if(d.vwap)s.vwap=d.vwap;
+    if(d.orb)s.orb=d.orb;
+    if(d.volume)s.volAnalysis=d.volume;
+    if(d.regime)s.regime=d.regime;
+    if(d.writer)s.writer=d.writer;
+    if(d.narrative)s.narrative=d.narrative;
+    if(d.mtf)s.tfAlignment=d.mtf.alignment;
+    if(d.trend15)s.trend15=d.trend15;
+    if(d.trend_strength!==undefined)s.trend_strength=d.trend_strength;
+    if(d.hh_hl!==undefined)s.hh_hl=d.hh_hl;
+    if(d.lh_ll!==undefined)s.lh_ll=d.lh_ll;
+    if(d.pdh)s.pdh=d.pdh;
+    if(d.pdl)s.pdl=d.pdl;
+    try{captureSnapshot(s);}catch(e){}
+  }
+
+  function afterPrimarySync(){
     smcDone++;
-    if(smcDone>=smcSyms.length&&!scanFired){
+    if(smcDone>=smcPrimary.length&&!scanFired){
       scanFired=true;
       clearTimeout(safetyTimer);
       doScan(tr);
     }
   }
+
   if(SERVER_URL&&serverOk){
-    smcSyms.forEach(function(sym){
+    // Batch 1: indices — wait for these before scanning
+    smcPrimary.forEach(function(sym){
       fetch(SERVER_URL+"/smc/"+sym,{signal:AbortSignal.timeout(5000)})
       .then(function(r){return r.json();})
-      .then(function(d){
-        var s=allS().filter(function(x){return x.sym===sym;})[0];
-        if(s&&d){
-          if(d.smc)s.smc=d.smc;
-          if(d.cpr)s.cpr=d.cpr;
-          if(d.vwap)s.vwap=d.vwap;
-          if(d.orb)s.orb=d.orb;
-          if(d.volume)s.volAnalysis=d.volume;
-          if(d.regime)s.regime=d.regime;
-          if(d.writer)s.writer=d.writer;
-          if(d.narrative)s.narrative=d.narrative;
-          if(d.mtf)s.tfAlignment=d.mtf.alignment;
-          // trend15, PDH, PDL — only available after /smc call (not in /market when Zerodha connected)
-          if(d.trend15)s.trend15=d.trend15;
-          if(d.trend_strength!==undefined)s.trend_strength=d.trend_strength;
-          if(d.hh_hl!==undefined)s.hh_hl=d.hh_hl;
-          if(d.lh_ll!==undefined)s.lh_ll=d.lh_ll;
-          if(d.pdh)s.pdh=d.pdh;
-          if(d.pdl)s.pdl=d.pdl;
-          // Capture snapshot NOW — after SMC data is applied (all fields populated)
-          try{captureSnapshot(s);}catch(e){}
-        }
-        afterSMC();
-      }).catch(function(){afterSMC();});
+      .then(function(d){applySmcData(sym,d);afterPrimarySync();})
+      .catch(function(){afterPrimarySync();});
     });
-    // Fetch SMC for top movers in background (doesn't block scan)
-    var movers=tr.filter(function(s){return s.pct&&Math.abs(s.pct)>0.5;})
-      .sort(function(a,b){return Math.abs(b.pct)-Math.abs(a.pct);}).slice(0,5);
-    movers.forEach(function(s){
-      fetch(SERVER_URL+"/smc/"+s.sym,{signal:AbortSignal.timeout(5000)})
-      .then(function(r){return r.json();})
-      .then(function(d){if(d){if(d.smc)s.smc=d.smc;if(d.cpr)s.cpr=d.cpr;}})
-      .catch(function(){});
+
+    // Batch 2: liquid stocks — in background (staggered to avoid rate limits)
+    smcLiquid.forEach(function(sym,i){
+      safeTimeout(function(){
+        fetch(SERVER_URL+"/smc/"+sym,{signal:AbortSignal.timeout(8000)})
+        .then(function(r){return r.json();})
+        .then(function(d){applySmcData(sym,d);})
+        .catch(function(){});
+      }, 1000+i*400); // stagger: 1s, 1.4s, 1.8s... avoids hammering server
     });
+
+    // Batch 3: remaining stocks sorted by today's % move (biggest movers first)
+    var remaining=tr.filter(function(s){
+      return smcPrimary.indexOf(s.sym)<0 && smcLiquid.indexOf(s.sym)<0;
+    }).sort(function(a,b){return Math.abs(b.pct||0)-Math.abs(a.pct||0);});
+
+    remaining.forEach(function(s,i){
+      safeTimeout(function(){
+        fetch(SERVER_URL+"/smc/"+s.sym,{signal:AbortSignal.timeout(8000)})
+        .then(function(r){return r.json();})
+        .then(function(d){applySmcData(s.sym,d);})
+        .catch(function(){});
+      }, 8000+i*500); // stagger: starts 8s after scan fires
+    });
+
   } else {
     // Server offline — scan immediately with whatever data we have
     scanFired=true;
@@ -1593,6 +1617,10 @@ function localSigs(){
 
     // ── LAYER 5: SMC ──
     var smc=s.smc||null;
+
+    // ── Score variables — declared here, before ALL scoring layers ──
+    var bullScore=0, bearScore=0, neutralScore=0;
+    var bullReasons=[], bearReasons=[], neutReasons=[];
 
     // ── Enhanced SMC scoring ──────────────────────────────────────────
     // Pull all new fields from enhanced calc_smc
@@ -1806,11 +1834,8 @@ function localSigs(){
     var isExpiryChaos=regimeCode==="EXPIRY_CHAOS";
     var isChoppy=regimeCode==="CHOPPY";
 
-    // ── SCORE ENGINE — count confirmations ──
-    // Each confirmation adds points. Need min 2 to generate signal.
-
-    var bullScore=0, bearScore=0, neutralScore=0;
-    var bullReasons=[], bearReasons=[], neutReasons=[];
+    // ── SCORE ENGINE — OI/SMA/VWAP/ORB confirmations continue below ──
+    // (bullScore/bearScore already initialized above, SMC already scored)
 
     // OI confirmations
     if(putWriting){bullScore+=2;bullReasons.push("Put writing ↑ ("+((peChg/1e6).toFixed(1))+"M new puts = support)");}
