@@ -2331,7 +2331,8 @@ function localSigs(){
         timeBucket:timeBucket,       // "morning"/"midday"/"afternoon"/"closing"
         layers:bullLayers,           // number of independent layers confirmed
         hasOI:hasOI,                 // whether OI data was present
-        _score:bullScore, _reasons:bullReasons
+        _score:bullScore, _reasons:bullReasons,
+        _bull:bullScore, _bear:bearScore        // for snapshot backtest capture
       };
 
     } else if(bearScore>=minScore&&bearScore>bullScore&&bearScore>neutralScore){
@@ -2370,7 +2371,8 @@ function localSigs(){
         timeBucket:timeBucket2,
         layers:bearLayers,
         hasOI:hasOI,
-        _score:bearScore, _reasons:bearReasons
+        _score:bearScore, _reasons:bearReasons,
+        _bull:bullScore, _bear:bearScore        // for snapshot backtest capture
       };
 
     } else if(neutralScore>=3&&ivHigh){
