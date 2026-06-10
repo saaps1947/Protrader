@@ -2716,15 +2716,28 @@ function doOrd(){
   }
 
   // Route through server — it resolves correct tradingsymbol from instruments CSV
-  // Frontend only knows "Buy 53300 PE" — server converts to "BANKNIFTY24JUN53300PE"
-  var sym=t.sym||CS.sym;
-  var s=allS().filter(function(x){return x.sym===sym;})[0]||CS;
-  var strike=s.atm||0;
-  var optType=(t.action==="BUY"&&t.bias==="BULLISH")||(t.instrument&&t.instrument.indexOf("CE")>=0)?"CE":"PE";
+  // CRITICAL: When auto-trading, always use AT.inst — not the signal's symbol
+  // A NIFTY signal should still place on SENSEX if AT.inst=SENSEX
+  var sym = (AT.active && AT.inst && AT.inst!=="AUTO") ? AT.inst : (t.sym||CS.sym);
+  var s   = allS().filter(function(x){return x.sym===sym;})[0] || CS;
+  var strike = s.atm || 0;
+  var optType = (t.action==="BUY" && (t.bias==="BULLISH"||(t.instrument&&t.instrument.indexOf("CE")>=0))) ? "CE" : "PE";
 
-  // Extract strike from instrument name if possible (e.g. "Buy 53300 PE" → 53300)
-  var strikeParsed=parseInt((t.instrument||"").replace(/[^0-9]/g," ").trim().split(" ").pop());
-  if(strikeParsed&&strikeParsed>100) strike=strikeParsed;
+  // Re-calculate ATM from the target instrument's CURRENT price (not from signal's symbol)
+  // This prevents SENSEX-level strikes being placed as NIFTY options
+  if(s.px && s.step){
+    strike = Math.round(s.px / s.step) * s.step;
+    // For CE: ATM or 1 OTM above; for PE: ATM or 1 OTM below
+    if(optType==="CE") strike = strike + s.step;
+  }
+
+  // Override only if instrument string has a plausible strike for THIS symbol
+  // e.g. "Buy 23400 CE" → 23400. Only accept if within 10% of current ATM
+  var strikeParsed = parseInt((t.instrument||"").replace(/[^0-9]/g," ").trim().split(" ").pop());
+  if(strikeParsed && strikeParsed > 100){
+    var ratio = Math.abs(strikeParsed - s.atm) / (s.atm||1);
+    if(ratio < 0.10) strike = strikeParsed; // only accept if within 10% of correct ATM
+  }
 
   var payload={
     sym:sym,
@@ -2808,12 +2821,16 @@ function atCycle(){
   var sym=AT.inst==="AUTO"?CS.sym:AT.inst;
 
   // Use the local signal engine — same signals shown on screen
-  // Never call Claude API for signal generation (produces inconsistent results)
+  // When AT.inst is fixed (e.g. SENSEX), find the best directional signal
+  // from ANY symbol — then place that direction on AT.inst
   var candidates=allSigs.filter(function(s){
-    if(AT.inst!=="AUTO"&&s.sym!==AT.inst) return false;
-    if((s.confidence||0)<AT.conf) return false; // only confidence threshold matters
-    if(AT.dir==="long"&&s.bias!=="BULLISH") return false;
-    if(AT.dir==="short"&&s.bias!=="BEARISH") return false;
+    if(s._noTrade) return false;
+    if((s.confidence||0)<AT.conf) return false;
+    if(AT.dir==="long"  && s.bias!=="BULLISH") return false;
+    if(AT.dir==="short" && s.bias!=="BEARISH") return false;
+    if(s.bias==="NEUTRAL") return false;
+    // If AUTO mode: only consider the currently selected symbol
+    if(AT.inst==="AUTO" && s.sym!==CS.sym) return false;
     return true;
   });
 
@@ -2832,15 +2849,23 @@ function atCycle(){
 
   // Take highest conviction qualifying signal
   var sig=candidates.sort(function(a,b){return (b.confidence||0)-(a.confidence||0);})[0];
+  // Determine actual trading instrument: fixed AT.inst or signal's own symbol
+  var tradeSym = (AT.inst && AT.inst!=="AUTO") ? AT.inst : sig.sym;
+  var tradeS   = allS().filter(function(x){return x.sym===tradeSym;})[0];
+  var tradeAtm = tradeS ? (Math.round(tradeS.px/(tradeS.step||1))*(tradeS.step||1)) : 0;
+  var tradeOpt = sig.bias==="BULLISH" ? "CE" : "PE";
+  var tradeStrike = tradeAtm + (sig.bias==="BULLISH" ? (tradeS&&tradeS.step||100) : 0);
   pendingTrade={
-    action:sig.bias==="BULLISH"?"BUY":"SELL",
-    instrument:sig.trade,
-    confidence:sig.confidence,
-    entry:sig.entry,
-    sl:sig.sl,
-    target:sig.target1,
-    why:sig.why,
-    source:"Auto ("+sig.setupKey+")"
+    action:  sig.bias==="BULLISH" ? "BUY" : "SELL",
+    instrument: "Buy "+tradeStrike+" "+tradeOpt,   // correct strike for AT.inst
+    sym:     tradeSym,                              // always AT.inst when fixed
+    bias:    sig.bias,
+    confidence: sig.confidence,
+    entry:   sig.entry,
+    sl:      sig.sl,
+    target:  sig.target1,
+    why:     "["+sig.sym+" signal → "+tradeSym+"] "+sig.why,  // shows source signal
+    source:  "Auto ("+sig.setupKey+")"
   };
   addLog({ac:pendingTrade.action,inst:sig.sym+" — "+sig.trade,conf:sig.confidence,src:"Local signal",st:"placed"});
   AT.trades++;
