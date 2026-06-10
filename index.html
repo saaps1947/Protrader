@@ -1316,8 +1316,8 @@ function captureSnapshot(s){
 var _lastSnapTs=0;
 var _snapSessions={}; // track which symbols were snapped this scan
 function maybeCapture(){
-  // Fallback: if SMC-triggered capture didn't fire, capture all symbols
-  if(!isOpen()) return;
+  // Capture during NSE hours OR MCX hours (MCX trades 9AM-11:30PM IST)
+  if(!isOpen() && !isMCXOpen()) return;
   var now=Date.now();
   if(now-_lastSnapTs<295000) return; // 5 min
   _lastSnapTs=now;
