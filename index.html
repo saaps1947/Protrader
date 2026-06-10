@@ -1456,7 +1456,9 @@ function runScan(manual){
     if(d.smc)s.smc=d.smc;
     if(d.cpr)s.cpr=d.cpr;
     if(d.vwap)s.vwap=d.vwap;
-    if(d.orb)s.orb=d.orb;
+    if(d.orb){
+      s.orb=d.orb;  // ORB only comes from /smc — must apply here
+    }
     if(d.volume)s.volAnalysis=d.volume;
     if(d.regime)s.regime=d.regime;
     if(d.writer)s.writer=d.writer;
@@ -1468,7 +1470,11 @@ function runScan(manual){
     if(d.lh_ll!==undefined)s.lh_ll=d.lh_ll;
     if(d.pdh)s.pdh=d.pdh;
     if(d.pdl)s.pdl=d.pdl;
-    try{captureSnapshot(s);}catch(e){}
+    // Force snapshot after SMC data applied — bypass throttle for this symbol only
+    // This ensures ORB, SMC structure, OB, FVG all get captured
+    if(!_snapSessions[sym]){
+      try{captureSnapshot(s); _snapSessions[sym]=true;}catch(e){}
+    }
   }
 
   function afterPrimarySync(){
