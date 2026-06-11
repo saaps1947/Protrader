@@ -1314,20 +1314,15 @@ function captureSnapshot(s){
 }
 
 var _lastSnapTs=0;
-var _snapSessions={}; // track which symbols were snapped this scan
+
 function maybeCapture(){
-  // Capture during NSE hours OR MCX hours (MCX trades 9AM-11:30PM IST)
+  // FALLBACK ONLY — fires if runScan hasn't triggered a snapshot in 10 min
+  // Normal snapshot flow is triggered from runScan after SMC batches load
   if(!isOpen() && !isMCXOpen()) return;
   var now=Date.now();
-  if(now-_lastSnapTs<295000) return; // 5 min
+  if(now-_lastSnapTs < 600000) return; // 10 min fallback gap
   _lastSnapTs=now;
-  _snapSessions={};
-  allS().forEach(function(s){
-    if(!_snapSessions[s.sym]){
-      try{captureSnapshot(s);}catch(e){}
-      _snapSessions[s.sym]=true;
-    }
-  });
+  allS().forEach(function(s){ try{captureSnapshot(s);}catch(e){} });
   console.log("[Snap fallback] "+allS().length+" symbols @ "+istTime());
 }
 
@@ -1456,9 +1451,7 @@ function runScan(manual){
     if(d.smc)s.smc=d.smc;
     if(d.cpr)s.cpr=d.cpr;
     if(d.vwap)s.vwap=d.vwap;
-    if(d.orb){
-      s.orb=d.orb;  // ORB only comes from /smc — must apply here
-    }
+    if(d.orb)s.orb=d.orb;
     if(d.volume)s.volAnalysis=d.volume;
     if(d.regime)s.regime=d.regime;
     if(d.writer)s.writer=d.writer;
@@ -1470,11 +1463,8 @@ function runScan(manual){
     if(d.lh_ll!==undefined)s.lh_ll=d.lh_ll;
     if(d.pdh)s.pdh=d.pdh;
     if(d.pdl)s.pdl=d.pdl;
-    // Force snapshot after SMC data applied — bypass throttle for this symbol only
-    // This ensures ORB, SMC structure, OB, FVG all get captured
-    if(!_snapSessions[sym]){
-      try{captureSnapshot(s); _snapSessions[sym]=true;}catch(e){}
-    }
+    // No snapshot here — the 45s delayed bulk snapshot handles all symbols
+    // after all SMC batches have loaded (see runScan delayed snapshot below)
   }
 
   function afterPrimarySync(){
@@ -1502,7 +1492,7 @@ function runScan(manual){
         .then(function(r){return r.json();})
         .then(function(d){applySmcData(sym,d);})
         .catch(function(){});
-      }, 1000+i*400); // stagger: 1s, 1.4s, 1.8s... avoids hammering server
+      }, 1000+i*400);
     });
 
     // Batch 3: remaining stocks sorted by today's % move (biggest movers first)
@@ -1516,8 +1506,28 @@ function runScan(manual){
         .then(function(r){return r.json();})
         .then(function(d){applySmcData(s.sym,d);})
         .catch(function(){});
-      }, 8000+i*500); // stagger: starts 8s after scan fires
+      }, 8000+i*500);
     });
+
+    // ── DELAYED SNAPSHOT — fires 50s after scan ─────────────────────
+    // Batch 2 completes in ~8s, Batch 3 starts at 8s with 32 stocks × 500ms = ~24s
+    // So all SMC batches finish by ~32s. We wait 50s to give full margin.
+    // This ensures every snapshot has ORB, SMC structure, OB, FVG populated.
+    // 5-min throttle prevents duplicate snapshots on back-to-back scans.
+    safeTimeout(function(){
+      if(!isOpen() && !isMCXOpen()) return;
+      var now=Date.now();
+      if(now-_lastSnapTs < 295000) return; // 5-min throttle
+      _lastSnapTs=now;
+      var count=0;
+      allS().forEach(function(s){
+        try{
+          captureSnapshot(s);
+          count++;
+        }catch(e){}
+      });
+      console.log("[Snap] "+count+" symbols @ "+istTime()+" (post-SMC, all layers)");
+    }, 50000); // 50 seconds after scan fires
 
   } else {
     // Server offline — scan immediately with whatever data we have
