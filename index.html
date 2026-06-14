@@ -1221,8 +1221,58 @@ function pickSym(sym){
   if(!s.cOI&&s.sym in {"NIFTY":1,"BANKNIFTY":1,"FINNIFTY":1})fetchOI(s.sym);
 }
 
-// ═══════════════════════════════════════════
-// SNAPSHOT DATABASE — IndexedDB 5-min capture
+// ── deriveRegime: instant regime from market data already available ───────
+// Fallback when /smc hasn't loaded yet (which is most of the time).
+// Uses: trend15, SMA20/50, VWAP, RSI, pct — all in /market response.
+function deriveRegime(s){
+  var px    = s.px||0;
+  var sma20 = s.sma20||0;
+  var sma50 = s.sma50||0;
+  var vwap  = s.vwap||0;
+  var trend15 = s.trend15||"";
+  var rsi   = s.rsi||50;
+  var pct   = s.pct||0;
+  if(!px||!sma20) return {regime:"DEVELOPING",no_trade_for:[],valid_strategies:[],note:""};
+
+  var aboveVwap = vwap ? px>vwap : px>sma20;
+  var smaUp     = sma20>sma50;
+  var strongBull = trend15==="STRONG_BULL";
+  var bull15     = trend15==="BULL"||trend15==="STRONG_BULL";
+  var bear15     = trend15==="BEAR"||trend15==="STRONG_BEAR";
+  var strongBear = trend15==="STRONG_BEAR";
+
+  // STRONG BULL: 15D strong + VWAP + SMA aligned — hard block on PE buying
+  if(strongBull && aboveVwap && smaUp){
+    return {regime:"TRENDING_UP",label:"Strong Bull — "+trend15,confidence:85,
+            no_trade_for:["BUY_PE"],valid_strategies:["BUY_CE_ON_PULLBACK","ORB_BREAKOUT","VWAP_RECLAIM"],
+            note:"STRONG_BULL regime — avoid PE"};
+  }
+  // STRONG BEAR: 15D strong + below VWAP + SMA bearish — hard block on CE buying
+  if(strongBear && !aboveVwap && !smaUp){
+    return {regime:"TRENDING_DOWN",label:"Strong Bear — "+trend15,confidence:85,
+            no_trade_for:["BUY_CE"],valid_strategies:["BUY_PE_ON_BOUNCE","ORB_BREAKDOWN","VWAP_REJECT"],
+            note:"STRONG_BEAR regime — avoid CE"};
+  }
+  // BULL trend (not strong): soft preference, no hard block
+  if(bull15 && aboveVwap && smaUp){
+    return {regime:"TRENDING_UP",label:"Bull trend — "+trend15,confidence:75,
+            no_trade_for:[],valid_strategies:["BUY_CE_ON_PULLBACK","ORB_BREAKOUT"],
+            note:"Bull trend — prefer CE signals"};
+  }
+  // BEAR trend (not strong): soft preference, no hard block
+  if(bear15 && !aboveVwap && !smaUp){
+    return {regime:"TRENDING_DOWN",label:"Bear trend — "+trend15,confidence:75,
+            no_trade_for:[],valid_strategies:["BUY_PE_ON_BOUNCE","ORB_BREAKDOWN"],
+            note:"Bear trend — prefer PE signals"};
+  }
+  // CHOPPY: tiny move + RSI neutral + SMA/VWAP contradicting
+  if(Math.abs(pct)<0.25 && rsi>42 && rsi<58 && smaUp===aboveVwap===false){
+    return {regime:"CHOPPY",label:"Choppy — no edge",confidence:60,no_trade:true,
+            no_trade_for:["ALL_DIRECTIONAL"],valid_strategies:[],
+            note:"Choppy — stay out"};
+  }
+  return {regime:"DEVELOPING",no_trade_for:[],valid_strategies:[],note:""};
+}
 // ═══════════════════════════════════════════
 var SnapDB=(function(){
   var DB="protrader_snapshots",VER=1,ST="snaps",_db=null;
@@ -1843,8 +1893,10 @@ function localSigs(){
     }
 
     // ── LAYER 10: Market Regime ──
-    var regime=s.regime||null;
-    var regimeCode=regime&&regime.regime||"";
+    // Use /smc regime if loaded, else derive instantly from market data
+    // deriveRegime() uses trend15 + SMA + VWAP — available immediately from /market
+    var regime    = s.regime || deriveRegime(s);
+    var regimeCode= regime&&regime.regime||"";
     var isTrending=regimeCode==="TRENDING_UP"||regimeCode==="TRENDING_DOWN";
     var isBreakoutDay=regimeCode==="BREAKOUT_DAY";
     var isExpiryChaos=regimeCode==="EXPIRY_CHAOS";
@@ -2094,9 +2146,13 @@ function localSigs(){
 
     // 8. CONVICTION FLOOR — minimum score needed per regime
     var minScore = isChoppy?4 : (isExpiryZone&&pinned)?4 : isPrimetime?2 : 2;
-    // FIX: Higher bar before 10 AM — morning signals had 11% win rate in analysis
-    var morningSession = (nowH===9 && nowM>=30); // 9:30-9:59 AM
-    var minConfThreshold = morningSession ? 87 : 82; // 87% required before 10 AM
+    // MORNING THRESHOLDS — raised from 87% after performance review
+    // Analysis: morning signals 9:30-9:39 AM had 20% win rate (8 losses, 2 wins)
+    // Root cause: OI data arrives fresh at 9:35 AM → artificial score spike before ORB confirms
+    var earlyMorning  = (nowH===9 && nowM>=30 && nowM<45);  // 9:30-9:44 AM — before ORB confirms
+    var lateMorning   = (nowH===9 && nowM>=45) || (nowH===10 && nowM<1); // 9:45-9:59 AM
+    var morningSession = earlyMorning || lateMorning;
+    var minConfThreshold = earlyMorning ? 92 : lateMorning ? 89 : 82;
 
     // If contradiction warnings exist, raise the bar further
     var hasContradiction = bullReasons.some(function(r){return r.indexOf('⚠')===0;}) ||
@@ -2127,6 +2183,23 @@ function localSigs(){
     }
     if(pinned&&isExpiryZone&&Math.abs(bullScore-bearScore)<3){
       noTradeReasons.push("Expiry pinning near Max Pain ₹"+mp+" — directional trade unsafe");
+    }
+    // FIX: Hard block — STRONG_BULL market should not take bearish signals
+    // Last week: BEARISH signals in bull week = 13% win rate, ₹−61,855 loss
+    var trend15Val = s.trend15||"";
+    if(trend15Val==="STRONG_BULL" && bearScore>bullScore && !trappedPE && !bearSweep){
+      noTradeReasons.push("STRONG_BULL 15D trend — bearish signals suppressed (counter-trend high risk)");
+    }
+    if(trend15Val==="STRONG_BEAR" && bullScore>bearScore && !trappedCE && !bullSweep){
+      noTradeReasons.push("STRONG_BEAR 15D trend — bullish signals suppressed (counter-trend high risk)");
+    }
+    // FIX: Early morning (9:30-9:44 AM) — ORB not confirmed, OI spike is noise
+    // Performance review: 10 signals 9:30-9:39 AM → 2W/8L
+    if(earlyMorning){
+      var orbConfirmed = s.orb&&(s.orb.breakout||s.orb.breakdown);
+      if(!orbConfirmed){
+        noTradeReasons.push("Early morning — ORB direction unconfirmed before 9:45 AM");
+      }
     }
     // FIX: No re-entry at same level that stopped you out today
     // Analysis: NIFTY tried 23500 CE wall 4 times, got stopped each time
@@ -2308,8 +2381,10 @@ function localSigs(){
       var conf=Math.min(94,Math.max(62,68+bullScore*3-(bearScore*2)));
       if(bullLayers<2) conf=Math.min(conf,74);      // 1 layer = LOW only
       if(!hasOI)       conf=Math.min(conf,79);      // no OI = max MEDIUM
-      // Morning session: require 87% minimum before 10 AM
-      if(morningSession && conf<minConfThreshold){return;} // too weak for morning — skip
+      // Morning session: tiered confidence requirements
+      // 9:30-9:44 AM = 92% (ORB unconfirmed, OI spike noise)
+      // 9:45-9:59 AM = 89% (ORB confirmed but session still volatile)
+      if(morningSession && conf<minConfThreshold){return;}
       var urg=( conf>=82 && bullLayers>=2 && hasOI )?"HIGH":
                conf>=75||bullLayers>=2?"MEDIUM":"LOW";
       var strat=golden?"Golden Cross + OI":
@@ -2357,7 +2432,7 @@ function localSigs(){
       var conf2=Math.min(94,Math.max(62,68+bearScore*3-(bullScore*2)));
       if(bearLayers<2) conf2=Math.min(conf2,74);
       if(!hasOI)       conf2=Math.min(conf2,79);
-      // Morning session: require 87% minimum before 10 AM
+      // Morning session: tiered confidence requirements (same as bull)
       if(morningSession && conf2<minConfThreshold){return;}
       var urg2=(conf2>=82&&bearLayers>=2&&hasOI)?"HIGH":
                conf2>=75||bearLayers>=2?"MEDIUM":"LOW";
