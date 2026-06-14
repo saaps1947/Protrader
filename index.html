@@ -1547,16 +1547,20 @@ function _btPoll(){
   .then(function(d){
     _btSetProgress(d.progress||0, d.message||"Running…");
     if(d.status==="done"){
-      clearInterval(_btPollTimer);
+      clearInterval(_btPollTimer); _btPollTimer=null;
       _btData=d.result;
       _btRenderResults(d.result);
       _btReset();
     } else if(d.status==="error"){
-      clearInterval(_btPollTimer);
-      toast("Backtest error",d.message||"Unknown error","tr");
+      clearInterval(_btPollTimer); _btPollTimer=null;
+      var msg=d.message||"Unknown error";
+      _btSetProgress(0,"❌ "+msg);
+      document.getElementById("bt-prog-wrap").style.display="block";
+      toast("Backtest failed",msg,"tr");
       _btReset();
+      console.error("[BT] Job error:",d.trace||msg);
     }
-  }).catch(function(){});
+  }).catch(function(e){console.warn("[BT] Poll error:",e);});
 }
 
 function _btSetProgress(pct, msg){
