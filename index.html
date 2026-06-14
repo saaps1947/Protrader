@@ -201,7 +201,15 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 .tlog-src{font-size:.56rem;color:var(--m)}
 .tlog-st{font-size:.56rem;font-weight:700;padding:2px 5px;border-radius:4px}
 .st-ok{background:rgba(34,197,94,.1);color:var(--g)}.st-sk{background:rgba(245,158,11,.1);color:var(--y)}
-/* JOURNAL */
+/* BACKTEST */
+.bt-dtab{flex:1;padding:8px 4px;background:none;border:none;color:var(--m);font-size:.6rem;font-weight:700;cursor:pointer;letter-spacing:.5px;border-bottom:2px solid transparent}
+.bt-dtab.on{color:var(--b);border-bottom-color:var(--b)}
+.bt-row{display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border);font-size:.7rem}
+.bt-row:last-child{border:none}
+.bt-row .k{color:var(--m);font-weight:600}
+.bt-row .wr-good{color:var(--g);font-weight:700}
+.bt-row .wr-bad{color:var(--r);font-weight:700}
+.bt-row .wr-ok{color:var(--b);font-weight:700}
 .j-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:9px}
 .j-s{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:8px;padding:7px;text-align:center}
 .j-sl{font-size:.52rem;color:var(--m);text-transform:uppercase;letter-spacing:.05em}
@@ -624,12 +632,81 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   <div id="jList"></div>
 </div>
 
+<!-- BACKTEST -->
+<div class="sec" id="sec-bt">
+  <!-- Header -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
+    <div style="font-size:.85rem;font-weight:800;margin-bottom:4px">🔬 Strategy Backtest</div>
+    <div style="font-size:.65rem;color:var(--m)">Runs signal engine on 60 days of real Yahoo Finance data + NSE daily OI archives. Results show what would have happened if you traded every signal.</div>
+  </div>
+  <!-- Config -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+      <div>
+        <div style="font-size:.6rem;color:var(--m);font-weight:600;margin-bottom:5px;letter-spacing:.5px">DAYS BACK</div>
+        <select id="bt-days" style="width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:.75rem">
+          <option value="30">30 days</option>
+          <option value="60" selected>60 days</option>
+        </select>
+      </div>
+      <div>
+        <div style="font-size:.6rem;color:var(--m);font-weight:600;margin-bottom:5px;letter-spacing:.5px">MIN CONFIDENCE</div>
+        <select id="bt-conf" style="width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:.75rem">
+          <option value="74">74% — LOW+</option>
+          <option value="79">79% — MEDIUM+</option>
+          <option value="82" selected>82% — HIGH only</option>
+          <option value="87">87% — Very HIGH</option>
+        </select>
+      </div>
+      <div>
+        <div style="font-size:.6rem;color:var(--m);font-weight:600;margin-bottom:5px;letter-spacing:.5px">SYMBOLS</div>
+        <select id="bt-syms" style="width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:.75rem">
+          <option value="idx">Indices only (4)</option>
+          <option value="stk" selected>All NSE stocks (54)</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:flex-end">
+        <button id="bt-run" onclick="runBacktest()" style="width:100%;padding:10px;background:linear-gradient(135deg,rgba(59,130,246,.3),rgba(99,102,241,.3));border:1px solid rgba(59,130,246,.4);color:var(--b);border-radius:8px;font-size:.78rem;font-weight:800;cursor:pointer;letter-spacing:.5px">▶ RUN</button>
+      </div>
+    </div>
+    <!-- Progress -->
+    <div id="bt-prog-wrap" style="display:none">
+      <div style="height:4px;background:var(--bg3);border-radius:2px;margin-bottom:8px">
+        <div id="bt-prog-bar" style="height:100%;background:var(--b);border-radius:2px;width:0%;transition:width .4s"></div>
+      </div>
+      <div id="bt-prog-msg" style="font-size:.65rem;color:var(--m);text-align:center">Starting…</div>
+    </div>
+  </div>
+  <!-- Results -->
+  <div id="bt-results" style="display:none">
+    <!-- Summary cards -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px" id="bt-cards"></div>
+    <!-- Breakdown tabs -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:10px">
+      <div style="display:flex;border-bottom:1px solid var(--border)">
+        <button class="bt-dtab on" onclick="btTab(this,'session')">Session</button>
+        <button class="bt-dtab" onclick="btTab(this,'trend')">15D Trend</button>
+        <button class="bt-dtab" onclick="btTab(this,'cpr')">CPR</button>
+        <button class="bt-dtab" onclick="btTab(this,'sym')">Symbol</button>
+        <button class="bt-dtab" onclick="btTab(this,'conf')">Conf Band</button>
+      </div>
+      <div id="bt-breakdown" style="padding:12px"></div>
+    </div>
+    <!-- Signal log -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px">
+      <div style="font-size:.72rem;font-weight:700;margin-bottom:8px">📋 Signal Log <span id="bt-sig-count" style="color:var(--m);font-weight:400"></span></div>
+      <div id="bt-siglog"></div>
+    </div>
+  </div>
+</div>
+
 <!-- NAV -->
 <nav class="bnav">
   <div class="nb on" onclick="nav(this,'sig')"><div class="nb-ico">🎯</div><div class="nb-lbl">Signals</div></div>
   <div class="nb" onclick="nav(this,'scan')"><div class="nb-ico">📡</div><div class="nb-lbl">Scanner</div></div>
   <div class="nb" onclick="nav(this,'auto')"><div class="nb-ico">⚡</div><div class="nb-lbl">Auto</div></div>
   <div class="nb" onclick="nav(this,'jour')"><div class="nb-ico">📔</div><div class="nb-lbl">Journal</div></div>
+  <div class="nb" onclick="nav(this,'bt')"><div class="nb-ico">🔬</div><div class="nb-lbl">Backtest</div></div>
 </nav>
 
 <script>
@@ -1434,6 +1511,134 @@ function showSnapshotStats(id){
     });
   });
   SnapDB.purgeOld(90);
+}
+
+// ═══════════════════════════════════════════
+// BACKTEST ENGINE (frontend)
+// ═══════════════════════════════════════════
+var _btJobId=null, _btPollTimer=null, _btData=null;
+
+function runBacktest(){
+  if(!SERVER_URL){toast("No server","Set server URL in Settings ⚙","ty");return;}
+  var days  = document.getElementById("bt-days").value;
+  var conf  = document.getElementById("bt-conf").value;
+  var syms  = document.getElementById("bt-syms").value;
+  var btn   = document.getElementById("bt-run");
+  btn.disabled=true; btn.textContent="Running…";
+  document.getElementById("bt-prog-wrap").style.display="block";
+  document.getElementById("bt-results").style.display="none";
+  _btSetProgress(2,"Sending request…");
+  fetch(SERVER_URL+"/backtest",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({days:parseInt(days),min_conf:parseInt(conf),syms:syms})
+  }).then(function(r){return r.json();})
+  .then(function(d){
+    if(!d.ok){toast("Error",d.error||"Failed","tr");_btReset();return;}
+    _btJobId=d.job_id;
+    _btPollTimer=setInterval(_btPoll,2000);
+  }).catch(function(e){toast("Error",""+e,"tr");_btReset();});
+}
+
+function _btPoll(){
+  if(!_btJobId) return;
+  fetch(SERVER_URL+"/backtest_status/"+_btJobId,{signal:AbortSignal.timeout(8000)})
+  .then(function(r){return r.json();})
+  .then(function(d){
+    _btSetProgress(d.progress||0, d.message||"Running…");
+    if(d.status==="done"){
+      clearInterval(_btPollTimer);
+      _btData=d.result;
+      _btRenderResults(d.result);
+      _btReset();
+    } else if(d.status==="error"){
+      clearInterval(_btPollTimer);
+      toast("Backtest error",d.message||"Unknown error","tr");
+      _btReset();
+    }
+  }).catch(function(){});
+}
+
+function _btSetProgress(pct, msg){
+  var bar=document.getElementById("bt-prog-bar");
+  var txt=document.getElementById("bt-prog-msg");
+  if(bar) bar.style.width=pct+"%";
+  if(txt) txt.textContent=msg;
+}
+
+function _btReset(){
+  var btn=document.getElementById("bt-run");
+  if(btn){btn.disabled=false;btn.textContent="▶ RUN";}
+}
+
+function _btRenderResults(r){
+  document.getElementById("bt-prog-wrap").style.display="none";
+  document.getElementById("bt-results").style.display="block";
+
+  // Summary cards
+  var wr=r.win_rate||0;
+  var wrColor=wr>=55?"var(--g)":wr>=40?"var(--b)":"var(--r)";
+  var pf=r.profit_factor||0;
+  var pfColor=pf>=1.5?"var(--g)":pf>=1?"var(--b)":"var(--r)";
+  document.getElementById("bt-cards").innerHTML=
+    _btCard("Win Rate",""+wr+"%",wrColor)+
+    _btCard("Signals",""+r.closed+" closed","var(--t)")+
+    _btCard("Profit Factor",""+pf,pfColor)+
+    _btCard("Avg Win","+"+r.avg_win+"%","var(--g)")+
+    _btCard("Avg Loss",""+r.avg_loss+"%","var(--r)")+
+    _btCard("Total",""+r.total+" signals","var(--m)");
+
+  // Default breakdown tab
+  _btRenderBreakdown("session");
+
+  // Signal log
+  var sigs=r.signals||[];
+  var logHtml="";
+  document.getElementById("bt-sig-count").textContent="(last "+Math.min(sigs.length,200)+" shown)";
+  sigs.slice(-60).reverse().forEach(function(s){
+    var win=s.pnl_pct>0; var lose=s.pnl_pct<0;
+    var col=win?"var(--g)":lose?"var(--r)":"var(--m)";
+    var icon=s.status==="T2_HIT"?"🎯":s.status==="SL_HIT"?"❌":s.status==="T1_BE_SL"?"💤":s.status==="EOD"?"🔔":"⏳";
+    logHtml+="<div style='display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:.65rem'>"+
+      "<div><span style='color:"+(s.bias==="BULLISH"?"var(--g)":"var(--r))'")+";font-weight:700'>"+s.sym+"</span>"+
+      " <span style='color:var(--m)'>"+s.date+" "+s.time+"</span></div>"+
+      "<div style='text-align:right'><span style='color:"+col+";font-weight:700'>"+icon+" "+(s.pnl_pct>0?"+":"")+s.pnl_pct+"%</span>"+
+      " <span style='color:var(--m)'>"+s.conf+"%</span></div></div>";
+  });
+  document.getElementById("bt-siglog").innerHTML=logHtml||"<div style='color:var(--m);font-size:.7rem;text-align:center;padding:20px'>No signals found for these parameters</div>";
+}
+
+function _btCard(label,val,col){
+  return "<div style='background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center'>"+
+    "<div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:.5px;margin-bottom:4px'>"+label+"</div>"+
+    "<div style='font-size:1.1rem;font-weight:800;color:"+col+"'>"+val+"</div></div>";
+}
+
+function btTab(el,key){
+  document.querySelectorAll(".bt-dtab").forEach(function(b){b.classList.remove("on");});
+  el.classList.add("on");
+  _btRenderBreakdown(key);
+}
+
+function _btRenderBreakdown(key){
+  if(!_btData) return;
+  var data=_btData["by_"+key]||[];
+  var html="";
+  data.forEach(function(row){
+    var wr=row.wr;
+    var col=wr>=55?"wr-good":wr>=40?"wr-ok":"wr-bad";
+    html+="<div class='bt-row'>"+
+      "<div class='k'>"+row.k+"</div>"+
+      "<div style='display:flex;gap:12px;font-size:.65rem;text-align:right'>"+
+      "<span style='color:var(--m)'>"+row.n+" trades</span>"+
+      "<span style='color:var(--g)'>"+row.w+"W</span>"+
+      "<span style='color:var(--r)'>"+row.l+"L</span>"+
+      "<span class='"+col+"'>"+wr+"%</span>"+
+      "<span style='color:"+(row.avg>0?"var(--g)":"var(--r)")+";min-width:42px'>"+(row.avg>0?"+":"")+row.avg+"%</span>"+
+      "</div></div>";
+  });
+  document.getElementById("bt-breakdown").innerHTML=html||
+    "<div style='color:var(--m);font-size:.7rem;padding:12px;text-align:center'>No data</div>";
 }
 
 // ═══════════════════════════════════════════
