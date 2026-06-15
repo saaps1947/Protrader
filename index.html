@@ -637,7 +637,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   <!-- Header -->
   <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
     <div style="font-size:.85rem;font-weight:800;margin-bottom:4px">🔬 Strategy Backtest</div>
-    <div style="font-size:.65rem;color:var(--m)">Runs signal engine on 60 days of real Zerodha historical data + NSE daily OI archives. Same scoring logic as live signals. Results show what would have fired and what the P&L would have been.</div>
+    <div style="font-size:.65rem;color:var(--m)">Tests technical layers only — SMA, RSI, VWAP, ORB, CPR, PDH/PDL, 15D Trend — using 60 days of Zerodha historical data. <span style="color:rgba(251,191,36,.7)">OI layer excluded</span> — requires intraday data. Use snapshot backtest (coming Jul) for full engine validation.</div>
   </div>
   <!-- Config -->
   <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
