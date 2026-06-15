@@ -662,13 +662,13 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
         <div style="font-size:.6rem;color:var(--m);font-weight:600;margin-bottom:5px;letter-spacing:.5px">SYMBOLS</div>
         <select id="bt-syms" style="width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:.75rem">
           <option value="idx">Indices only (4)</option>
-          <option value="stk" selected>All NSE stocks (54)</option>
+          <option value="stk">Stocks only (50)</option>
+          <option value="all" selected>All — Indices + Stocks (54)</option>
         </select>
       </div>
       <div style="display:flex;align-items:flex-end">
         <button id="bt-run" onclick="runBacktest()" style="width:100%;padding:10px;background:linear-gradient(135deg,rgba(59,130,246,.3),rgba(99,102,241,.3));border:1px solid rgba(59,130,246,.4);color:var(--b);border-radius:8px;font-size:.78rem;font-weight:800;cursor:pointer;letter-spacing:.5px">▶ RUN</button>
-      </div>
-    </div>
+      </div>    </div>
     <!-- Progress -->
     <div id="bt-prog-wrap" style="display:none">
       <div style="height:4px;background:var(--bg3);border-radius:2px;margin-bottom:8px">
@@ -679,6 +679,8 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   </div>
   <!-- Results -->
   <div id="bt-results" style="display:none">
+    <!-- Export button -->
+    <button onclick="exportBtReport()" style="width:100%;padding:10px;margin-bottom:10px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);color:var(--g);border-radius:10px;font-size:.75rem;font-weight:700;cursor:pointer">📥 Export Full Report (CSV)</button>
     <!-- Summary cards -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px" id="bt-cards"></div>
     <!-- Breakdown tabs -->
@@ -1645,9 +1647,69 @@ function _btRenderBreakdown(key){
     "<div style='color:var(--m);font-size:.7rem;padding:12px;text-align:center'>No data</div>";
 }
 
-// ═══════════════════════════════════════════
-// SCAN TIMER
-// ═══════════════════════════════════════════
+function exportBtReport(){
+  if(!_btData){toast("No data","Run a backtest first","ty");return;}
+  var r=_btData, now=new Date().toISOString().slice(0,10);
+  var rows=[];
+
+  // ── Section 1: Summary ───────────────────────────────────
+  rows.push(["PRO TRADER — BACKTEST REPORT","","","","","","","",""]);
+  rows.push(["Generated",now]);
+  rows.push([]);
+  rows.push(["SUMMARY"]);
+  rows.push(["Total Signals","Closed","Wins","Losses","Win Rate","Avg Win %","Avg Loss %","Profit Factor"]);
+  rows.push([r.total,r.closed,r.wins,r.losses,(r.win_rate||0)+"%",
+             (r.avg_win||0)+"%",(r.avg_loss||0)+"%",r.profit_factor||0]);
+  rows.push([]);
+
+  // ── Section 2: Breakdowns ────────────────────────────────
+  var sections=[
+    ["BY SESSION","session"],["BY 15D TREND","trend"],
+    ["BY BIAS","bias"],["BY CPR TYPE","cpr"],
+    ["BY CONFIDENCE BAND","conf"],["BY SYMBOL","sym"],
+  ];
+  sections.forEach(function(sec){
+    var data=r["by_"+sec[1]]||[];
+    if(!data.length) return;
+    rows.push([sec[0]]);
+    rows.push(["Category","Trades","Wins","Losses","Win Rate","Avg P&L %"]);
+    data.forEach(function(row){
+      rows.push([row.k,row.n,row.w,row.l,row.wr+"%",row.avg+"%"]);
+    });
+    rows.push([]);
+  });
+
+  // ── Section 3: Full Signal Log ───────────────────────────
+  rows.push(["FULL SIGNAL LOG"]);
+  rows.push(["Date","Time","Symbol","Bias","Confidence","Bull","Bear",
+             "Trend15","CPR","PCR","RSI","Entry","SL","T1","T2",
+             "Status","Exit","P&L %","Bars Held","Session"]);
+  (r.signals||[]).forEach(function(s){
+    rows.push([
+      s.date, s.time, s.sym, s.bias, s.conf+"%",
+      s.bull, s.bear, s.trend15,
+      s.cpr_narrow?"NARROW":"WIDE", s.pcr, s.rsi,
+      s.entry, s.sl, s.t1, s.t2,
+      s.status, s.exit, (s.pnl_pct>0?"+":"")+s.pnl_pct+"%",
+      s.bars, s.session
+    ]);
+  });
+
+  // ── Build CSV ────────────────────────────────────────────
+  var csv=rows.map(function(row){
+    return row.map(function(cell){
+      var v=String(cell==null?"":cell);
+      return v.indexOf(",")>=0||v.indexOf("\n")>=0?'"'+v.replace(/"/g,'""')+'"':v;
+    }).join(",");
+  }).join("\n");
+
+  var a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download="protrader_backtest_"+now+".csv";
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){a.remove();},2000);
+  toast("✅ Exported","Report saved → Files → Downloads","tg");
+}
 function startTimer(){
   if(scanTmr)clearInterval(scanTmr);
   scanCd=180;
