@@ -2187,7 +2187,15 @@ function localSigs(){
       // CE writing without price confirmation = just note it, don't score
       bearReasons.push("⚠ Call writing noted ("+((ceChg/1e6).toFixed(1))+"M) but price not confirming — not scored");
     }
-    if(pcrBull){bullScore+=1;bullReasons.push("PCR "+pcr+" bullish — put writing dominant");}
+    // FIX: PCR alone isn't enough — mirrors the callWriting fix above.
+    // Low PCR / high PCR is ambiguous without price confirmation:
+    // heavy CE writing can be covered-call income (neutral), not bearish.
+    // Requires price to actually confirm the direction before scoring.
+    if(pcrBull&&aboveVwap&&aboveSma20){
+      bullScore+=1;bullReasons.push("PCR "+pcr+" bullish — put writing dominant + price confirms");
+    } else if(pcrBull){
+      bullReasons.push("⚠ PCR "+pcr+" bullish noted but price not confirming — not scored");
+    }
     if(pcrStrongBull){
       // Heavy put writing is bullish — but check if bearish flow contradicts it
       var bearishFlowPresent = (s.buildup==="SHORT_BUILDUP") || belowVwap || callWriting;
@@ -2199,7 +2207,11 @@ function localSigs(){
         bullReasons.push("PCR "+pcr+" strong — heavy institutional put writing, no bearish contradiction");
       }
     }
-    if(pcrBear){bearScore+=1;bearReasons.push("PCR "+pcr+" bearish — call writing dominant");}
+    if(pcrBear&&belowVwap&&!aboveSma20){
+      bearScore+=1;bearReasons.push("PCR "+pcr+" bearish — call writing dominant + below VWAP + below SMA20 — confirmed");
+    } else if(pcrBear){
+      bearReasons.push("⚠ PCR "+pcr+" bearish noted but price not confirming — not scored");
+    }
     if(pcrExtremeBull&&s.pct<0){bearScore+=2;bearReasons.push("PCR "+pcr+" extreme low — crowd buying calls, reversal risk");}
     if(belowMp){bullScore+=1;bullReasons.push("Below Max Pain ₹"+mp+" → gravitates up");}
     if(aboveMp){bearScore+=1;bearReasons.push("Above Max Pain ₹"+mp+" → gravitates down");}
@@ -2226,13 +2238,12 @@ function localSigs(){
     if(cprBullBias&&aboveSma20){bullScore+=1;bullReasons.push("CPR bullish bias + above SMA20");}
     if(cprBearBias&&!aboveSma20){bearScore+=1;bearReasons.push("CPR bearish bias + below SMA20");}
 
-    // SMC confirmations
-    if(bullOB){bullScore+=3;bullReasons.push("Price in Bullish Order Block — institutional demand zone");}
-    if(bearOB){bearScore+=3;bearReasons.push("Price in Bearish Order Block — institutional supply zone");}
-    if(bullFVG){bullScore+=2;bullReasons.push("Bullish FVG unfilled — price likely to respect demand");}
-    if(bearFVG){bearScore+=2;bearReasons.push("Bearish FVG unfilled — price likely to reject from supply");}
-    if(bullSweep){bullScore+=2;bullReasons.push("Liquidity sweep below lows → reversal up likely");}
-    if(bearSweep){bearScore+=2;bearReasons.push("Liquidity sweep above highs → reversal down likely");}
+    // NOTE: OB/FVG/Sweep already scored once in the SMC section above
+    // (nearStrongBullOB/bullOB tiered scoring, bullFVG, bullSweep) —
+    // removed duplicate scoring here that was double-counting the same
+    // signal twice (was inflating bullScore/bearScore by 4-6 extra points
+    // whenever SMC structure was present, artificially pushing confidence
+    // toward the 94% ceiling on setups that didn't deserve it).
     if(bullStructure){bullScore+=1;bullReasons.push("SMC structure: "+smcStruct+" = uptrend intact");}
     if(bearStructure){bearScore+=1;bearReasons.push("SMC structure: "+smcStruct+" = downtrend intact");}
 
@@ -2323,17 +2334,10 @@ function localSigs(){
       neutReasons.push("Expiry zone + price pinned near Max Pain ₹"+mp+" — theta decay dominant");
     }
 
-    // 2. VWAP CONTRADICTION
-    // PCR bullish but price below VWAP = weak signal
-    if(pcrBull&&belowVwap&&!bullSweep){
-      bullScore=Math.max(0,bullScore-2);
-      bullReasons.push("⚠ PCR bullish but below VWAP ₹"+vwap+" — wait for VWAP reclaim");
-    }
-    // PCR bearish but price above VWAP = weak signal
-    if(pcrBear&&aboveVwap&&!bearSweep){
-      bearScore=Math.max(0,bearScore-2);
-      bearReasons.push("⚠ PCR bearish but above VWAP ₹"+vwap+" — wait for VWAP breakdown");
-    }
+    // NOTE: PCR/VWAP contradiction is now handled at the source (see pcrBull/
+    // pcrBear scoring above) — removed the separate post-hoc penalty here
+    // since it would incorrectly subtract from bullScore/bearScore even when
+    // PCR contributed nothing (double-penalizing unrelated score sources).
 
     // 3. VOLUME CONTRADICTION
     // Breakout without volume = fake breakout — heavily penalise
