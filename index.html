@@ -858,6 +858,12 @@ var JOURNAL=[
 // ═══════════════════════════════════════════
 function istNow(){return new Date(Date.now()+(5*60+30)*60000);}
 function istTime(){var d=istNow(),h=d.getUTCHours(),m=d.getUTCMinutes(),ap=h>=12?"PM":"AM",h12=h%12||12;return h12+":"+(m<10?"0":"")+m+" "+ap;}
+function istDateTime(){
+  var d=istNow();
+  var h=d.getUTCHours(),m=d.getUTCMinutes(),ap=h>=12?"PM":"AM",h12=h%12||12;
+  var months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return d.getUTCDate()+" "+months[d.getUTCMonth()]+" "+h12+":"+(m<10?"0":"")+m+" "+ap;
+}
 function istMinsNow(){var d=new Date();return(d.getUTCHours()*60+d.getUTCMinutes()+330)%1440;}
 function istDayNow(){var d=new Date();var u=d.getUTCHours()*60+d.getUTCMinutes();var day=d.getUTCDay();if(u+330>=1440&&day<6)day=(day+1)%7;return day;}
 function isOpen(){var m=istMinsNow(),day=istDayNow();if(day===0||day===6)return false;return m>=555&&m<=930;}
@@ -2782,28 +2788,28 @@ function processScan(sigs){
   var prev={};allSigs.forEach(function(s){prev[s.sym+s.bias]=s;});
   sigs.forEach(function(sig){
     var key=sig.sym+sig.bias;
-    var prevSig=prev[key];
-    var prevAny=allSigs.filter(function(s){return s.sym===sig.sym;})[0];
-    var dirFlip=prevAny&&prevAny.bias!==sig.bias;
 
-    if(dirFlip){
-      // Direction flipped — clear old first-seen
-      delete _sigFirstSeen[key];
-    }
+    // FIX 1: Never delete _sigFirstSeen on direction changes.
+    // The old logic deleted the WRONG key (the new direction's key, not the old one),
+    // which caused the original timestamp to be wiped when the signal returned to the same bias.
+    // Now: _sigFirstSeen[sym+bias] persists as long as that direction is in scope.
+    // A BULLISH signal at 10:00 AM that goes NEUTRAL then returns BULLISH at 10:06 AM
+    // will correctly still show "First: 10:00 AM" — the user wants to know when this
+    // thesis was originally identified, not when it most recently fired.
 
-    if(_sigFirstSeen[key]&&!dirFlip){
-      // Use persistent first-seen — survives Scan Now clicks
+    if(_sigFirstSeen[key]){
+      // Signal already seen in this direction — restore original first-seen
       sig._firstSeen   = _sigFirstSeen[key].time;
       sig._firstSeenTs = _sigFirstSeen[key].ts;
       sig._ts          = _sigFirstSeen[key].ts;
       sig._time        = _sigFirstSeen[key].time;
       sig._isNew       = false;
     } else {
-      // Genuinely new signal
-      sig._firstSeen   = istTime();
+      // Genuinely new signal for this symbol+direction — FIX 2: store date+time, not just time
+      sig._firstSeen   = istDateTime();   // "15 Jun 10:00 AM" — date+time for full context
       sig._firstSeenTs = Date.now();
       sig._ts          = Date.now();
-      sig._time        = istTime();
+      sig._time        = sig._firstSeen;
       sig._isNew       = true;
       _sigFirstSeen[key] = {time:sig._firstSeen, ts:sig._firstSeenTs};
     }
@@ -2811,12 +2817,24 @@ function processScan(sigs){
     // Auto-log HIGH conviction signals
     if(sig.urgency==="HIGH") try{autoLogSignal(sig);}catch(e){}
 
+    // FIX 3: Match slot by sym+bias (not sym alone) — prevents a NEUTRAL refresh
+    // from evicting a BULLISH signal and resetting its firstSeen on return
     var idx=-1;
-    for(var i=0;i<allSigs.length;i++){if(allSigs[i].sym===sig.sym){idx=i;break;}}
+    for(var i=0;i<allSigs.length;i++){
+      if(allSigs[i].sym===sig.sym && allSigs[i].bias===sig.bias){idx=i;break;}
+    }
+    // If no same-direction slot exists, look for any slot for this symbol
+    if(idx<0){
+      for(var i=0;i<allSigs.length;i++){
+        if(allSigs[i].sym===sig.sym){idx=i;break;}
+      }
+    }
     if(idx>=0)allSigs[idx]=sig;else allSigs.unshift(sig);
   });
-  // Remove signals not seen in last 30 min
+  // Remove signals not seen in last 30 min and purge their firstSeen cache
   var cut=Date.now()-30*60*1000;
+  var removed=allSigs.filter(function(s){return s._firstSeenTs&&s._firstSeenTs<=cut;});
+  removed.forEach(function(s){delete _sigFirstSeen[s.sym+s.bias];});
   allSigs=allSigs.filter(function(s){return !s._firstSeenTs||s._firstSeenTs>cut;});
   allSigs.sort(function(a,b){if(a.urgency==="HIGH"&&b.urgency!=="HIGH")return -1;if(b.urgency==="HIGH"&&a.urgency!=="HIGH")return 1;return (b.confidence||0)-(a.confidence||0);});
   renderFeed();buildSF();updateBiasCounts();
@@ -2857,11 +2875,11 @@ function renderFeed(){
     var badge=bt?"<span class='sc-badge bbtst'>🌙 BTST</span>":sig._isNew?"<span class='sc-badge bnew'>NEW</span>":"<span class='sc-badge bupd'>UPD</span>";
     var hbadge=sig.urgency==="HIGH"?"<span class='bhigh'>🔥 HIGH</span>":"";
     var age=sig._firstSeenTs?Math.round((Date.now()-sig._firstSeenTs)/60000):0;
-    var ageStr=age<1?"just now":age<60?age+"m ago":Math.floor(age/60)+"h "+age%60+"m ago";
+    var ageStr=age<1?"just now":age===1?"1 min":age<60?age+" min":Math.floor(age/60)+"h "+(age%60)+"m";
     var firstSeenStr=sig._firstSeen||sig._time||"";
     var timeDisplay=sig._isNew?
-      "🆕 "+firstSeenStr :
-      "⏱ First: "+firstSeenStr+(age>0?" ("+ageStr+")":"");
+      "<span style='color:var(--g);font-weight:700'>🆕 NEW — "+firstSeenStr+"</span>" :
+      "<span style='color:var(--m)'>🕐 First: <span style='color:var(--b);font-weight:700'>"+firstSeenStr+"</span> <span style='color:var(--y)'>("+ageStr+" ago)</span></span>";
     var exSty=bt?"background:rgba(139,92,246,.15);color:var(--p);border:1px solid rgba(139,92,246,.3)":sig.bias==="NEUTRAL"?"background:rgba(245,158,11,.1);color:var(--y);border:1px solid rgba(245,158,11,.2)":"";
 
     // ── Timeframe tags ──
