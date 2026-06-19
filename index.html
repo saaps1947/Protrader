@@ -663,7 +663,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
         <select id="bt-syms" style="width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:8px;font-size:.75rem">
           <option value="idx">Indices only (4)</option>
           <option value="stk">Stocks only (50)</option>
-          <option value="all" selected>All — Indices + Stocks (54)</option>
+          <option value="all" selected>All — Indices + Stocks (55)</option>
         </select>
       </div>
       <div style="display:flex;align-items:flex-end">
@@ -1352,8 +1352,12 @@ function deriveRegime(s){
             no_trade_for:[],valid_strategies:["BUY_PE_ON_BOUNCE","ORB_BREAKDOWN"],
             note:"Bear trend — prefer PE signals"};
   }
-  // CHOPPY: tiny move + RSI neutral + SMA/VWAP contradicting
-  if(Math.abs(pct)<0.25 && rsi>42 && rsi<58 && smaUp===aboveVwap===false){
+  // CHOPPY: tiny move + RSI neutral + SMA and VWAP disagree (no clear direction)
+  // FIX: was 'smaUp===aboveVwap===false' which JS evaluates as
+  // (smaUp===aboveVwap)===false — a logic trap that almost never fired correctly.
+  // Intent: choppy when price has no edge — small move, neutral RSI, and
+  // SMA/VWAP not both pointing the same way.
+  if(Math.abs(pct)<0.25 && rsi>42 && rsi<58 && (smaUp!==aboveVwap)){
     return {regime:"CHOPPY",label:"Choppy — no edge",confidence:60,no_trade:true,
             no_trade_for:["ALL_DIRECTIONAL"],valid_strategies:[],
             note:"Choppy — stay out"};
@@ -1541,7 +1545,7 @@ function runBacktest(){
   fetch(SERVER_URL+"/backtest",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({days:parseInt(days),min_conf:parseInt(conf),syms:syms})
+    body:JSON.stringify({days:parseInt(days,10),min_conf:parseInt(conf,10),syms:syms})
   }).then(function(r){return r.json();})
   .then(function(d){
     if(!d.ok){toast("Error",d.error||"Failed","tr");_btReset();return;}
@@ -1893,6 +1897,12 @@ function localSigs(){
   ══════════════════════════════════════════════════════════ */
   var out=[];
   var minsNow = istMinsNow();
+  // ── TIME OF DAY — computed ONCE for all symbols ──
+  // FIX: was previously defined ~200 lines into the per-symbol loop, AFTER the
+  // ORB tier scoring (orbEarly/orbMid/orbLate) referenced it → nowH was undefined
+  // there → every ORB breakout silently scored the lowest tier. Now defined first.
+  var nowH=0,nowM=0;
+  try{var td=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));nowH=td.getHours();nowM=td.getMinutes();}catch(e){}
   // BTST for NSE: only in the 3:00–3:30 PM closing window (mins 900–930)
   var nseClosingWindow = minsNow >= 900 && minsNow <= 930;
   var mktClosed = !isOpen();
@@ -2117,9 +2127,10 @@ function localSigs(){
     // ── ORB — valid ALL DAY (levels set at open, breakout can happen anytime) ──
     var orb=s.orb||null;
     // Score tier by how late the breakout is — early breaks stronger signal
-    var orbEarly  = (nowH===9&&nowM>=30)||(nowH===10);           // 9:30–10:59: +3/+2
-    var orbMid    = nowH===11||(nowH===12)||(nowH===13);         // 11:00–13:59: +2/+1
-    var orbLate   = nowH>=14;                                     // 14:00+: +1 only
+    // ALIGNED with backtest engine: <11:00 = early(+3), <14:00 = mid(+2), else late(+1)
+    var orbEarly  = nowH<11;                 // before 11:00 AM — strongest
+    var orbMid    = nowH>=11 && nowH<14;     // 11:00–13:59 — medium
+    var orbLate   = nowH>=14;                // 14:00+ — weakest
     var orbAnyTime= orb!=null;                                   // ORB levels always valid
     var orbBreakout  = orbAnyTime&&orb.breakout;   // clean valid breakout (never returned)
     var orbBreakdown = orbAnyTime&&orb.breakdown;  // clean valid breakdown
@@ -2324,9 +2335,7 @@ function localSigs(){
     // When layers contradict, reduce score — don't just average.
     // ══════════════════════════════════════════════════════════
 
-    // 1. TIME OF DAY FILTER
-    var nowH=0,nowM=0;
-    try{var td=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));nowH=td.getHours();nowM=td.getMinutes();}catch(e){}
+    // 1. TIME OF DAY FILTER (nowH/nowM defined at function top)
     var isORBWindow=(nowH===9&&nowM<30);       // 9:00–9:30 = formation, no signals
     var isExpiryZone=(nowH>=14&&nowM>=30);     // 2:30–3:30 = OI walls dominate
     var isPrimetime=(nowH>=9&&nowH<14)||(nowH===14&&nowM<30); // best window
@@ -2814,7 +2823,6 @@ function _saveSigFirstSeen(){
 
 function processScan(sigs){
   window._lastScanTs = Date.now();
-  var prev={};allSigs.forEach(function(s){prev[s.sym+s.bias]=s;});
   sigs.forEach(function(sig){
     var key=sig.sym+sig.bias;
 
@@ -3138,19 +3146,20 @@ function doOrd(){
   var strike = s.atm || 0;
   var optType = (t.action==="BUY" && (t.bias==="BULLISH"||(t.instrument&&t.instrument.indexOf("CE")>=0))) ? "CE" : "PE";
 
-  // Re-calculate ATM from the target instrument's CURRENT price (not from signal's symbol)
+  // Re-calculate ATM from the target instrument's CURRENT price (not stale s.atm)
   // This prevents SENSEX-level strikes being placed as NIFTY options
+  var freshAtm = (s.px && s.step) ? Math.round(s.px / s.step) * s.step : (s.atm || 0);
   if(s.px && s.step){
-    strike = Math.round(s.px / s.step) * s.step;
+    strike = freshAtm;
     // For CE: ATM or 1 OTM above; for PE: ATM or 1 OTM below
     if(optType==="CE") strike = strike + s.step;
   }
 
   // Override only if instrument string has a plausible strike for THIS symbol
-  // e.g. "Buy 23400 CE" → 23400. Only accept if within 10% of current ATM
-  var strikeParsed = parseInt((t.instrument||"").replace(/[^0-9]/g," ").trim().split(" ").pop());
-  if(strikeParsed && strikeParsed > 100){
-    var ratio = Math.abs(strikeParsed - s.atm) / (s.atm||1);
+  // e.g. "Buy 23400 CE" → 23400. Validate against FRESH ATM, not stale s.atm.
+  var strikeParsed = parseInt((t.instrument||"").replace(/[^0-9]/g," ").trim().split(" ").pop(), 10);
+  if(strikeParsed && strikeParsed > 100 && freshAtm > 0){
+    var ratio = Math.abs(strikeParsed - freshAtm) / freshAtm;
     if(ratio < 0.10) strike = strikeParsed; // only accept if within 10% of correct ATM
   }
 
@@ -3195,8 +3204,8 @@ function demoOrd(t,cap){
 // ═══════════════════════════════════════════
 // AUTO TRADE
 // ═══════════════════════════════════════════
-function updConf(v){AT.conf=parseInt(v);var p=((v-70)/25*100).toFixed(0);document.getElementById("at_sld").style.setProperty("--p",p+"%");document.getElementById("at_sv").textContent=v+"%";document.getElementById("at_cl").textContent=v+"%";}
-function updAT(){AT.capital=parseInt(document.getElementById("at_cap").value)||50000;AT.maxTrades=parseInt(document.getElementById("at_max").value)||3;AT.dir=document.getElementById("at_dir").value;AT.inst=document.getElementById("at_inst").value;}
+function updConf(v){AT.conf=parseInt(v,10);var p=((v-70)/25*100).toFixed(0);document.getElementById("at_sld").style.setProperty("--p",p+"%");document.getElementById("at_sv").textContent=v+"%";document.getElementById("at_cl").textContent=v+"%";}
+function updAT(){AT.capital=parseInt(document.getElementById("at_cap").value,10)||50000;AT.maxTrades=parseInt(document.getElementById("at_max").value,10)||3;AT.dir=document.getElementById("at_dir").value;AT.inst=document.getElementById("at_inst").value;}
 function togAT(on){if(on)startAT();else stopAT();}
 function clickAT(){if(AT.active)stopAT();else{document.getElementById("atTog").checked=true;startAT();}}
 function startAT(){
