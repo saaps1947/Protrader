@@ -971,6 +971,7 @@ function _doFetchFromServer(){
       if(sd.trend_strength!==undefined)sc.trend_strength=sd.trend_strength;
     if(sd.trend_up_count!==undefined)sc.trend_up_count=sd.trend_up_count;
     if(sd.trend_sessions!==undefined)sc.trend_sessions=sd.trend_sessions;
+    if(sd.avg_range_pct!==undefined)sc.avg_range_pct=sd.avg_range_pct;
       if(sd.hh_hl!==undefined)sc.hh_hl=sd.hh_hl;
       if(sd.lh_ll!==undefined)sc.lh_ll=sd.lh_ll;
       if(sd.prev_day_high)sc.pdh=sd.prev_day_high;  // PDH — previous session high
@@ -2482,9 +2483,20 @@ function localSigs(){
     if(pinned&&isExpiryZone&&Math.abs(bullScore-bearScore)<3){
       noTradeReasons.push("Expiry pinning near Max Pain ₹"+mp+" — directional trade unsafe");
     }
-    // FIX: Hard block — STRONG_BULL market should not take bearish signals
-    // Last week: BEARISH signals in bull week = 13% win rate, ₹−61,855 loss
-    var trend15Val = s.trend15||"";
+    // ── CHANGE 4: ATR / Average Daily Range filter ──────────────────
+    // Symbols with low intraday range can't reliably reach a 0.75% T1 while
+    // leaving room for a structural SL. From backtest: 23 symbols (POWERGRID,
+    // TCS, LT, defensive PSUs) produced 0 wins across 92 trades — they simply
+    // don't move enough intraday. This is a SETUP filter, not a blacklist:
+    // a stock that's dormant this month but starts moving next month re-qualifies
+    // automatically once its 15-day avg range climbs back above the threshold.
+    var avgRange = s.avg_range_pct||0;
+    // Indices have naturally lower range but tighter spreads — exempt them.
+    // MCX also exempt (different volatility profile). Only filter NSE stocks.
+    var isIndexOrMcx = ["NIFTY","BANKNIFTY","FINNIFTY","SENSEX","MIDCPNIFTY","CRUDEOIL","GOLD"].indexOf(s.sym)>=0;
+    if(!isIndexOrMcx && avgRange>0 && avgRange<1.2){
+      noTradeReasons.push("Low volatility: "+avgRange+"% avg daily range (<1.2% min) — can't reach targets intraday");
+    }
     if(trend15Val==="STRONG_BULL" && bearScore>bullScore && !trappedPE && !bearSweep){
       noTradeReasons.push("STRONG_BULL 15D trend — bearish signals suppressed (counter-trend high risk)");
     }
@@ -2620,55 +2632,121 @@ function localSigs(){
     // ══════════════════════════════════════════════════════════
     function calcRR(direction){
       var entry=px;
-      var sl, t1, t2, rrRatio;
+      var sl, t1, t2, rrRatio, entryNote="";
 
       if(direction==="BULL"){
-        // SL: below nearest support (PE wall, Bullish OB low, or 0.5% below entry)
-        var slLevels=[peWall>0&&peWall<px?peWall:0, vwap>0&&vwap<px?vwap:0, px*0.995];
-        sl=Math.max.apply(null,slLevels.filter(function(x){return x>0&&x<px;}));
-        if(!sl||sl<=0)sl=px-Math.round(px*0.005);
-        var slDist=px-sl;
+        // ── CHANGE 2: PULLBACK ENTRY (not breakout chase) ──────────────
+        // Instead of entering at current price (often the top of an impulse),
+        // anchor entry to the nearest demand structure below: bullish OB high,
+        // VWAP, or strong low. If price is extended >0.4% above that structure,
+        // set entry AT the structure (limit order) rather than chasing.
+        // From backtest: 76% of trades hit SL before T1 because entry was at
+        // the turning point. Entering at the demand zone fixes this.
+        var bullObHigh = bullOB ? (smc&&smc.ob&&smc.ob.filter(function(o){
+          return o.type==="BULLISH"&&!o.mitigated&&o.high<=px;
+        }).map(function(o){return o.high;}).sort(function(a,b){return b-a;})[0]||0) : 0;
+        var demandLevels=[
+          bullObHigh>0&&bullObHigh<px?bullObHigh:0,
+          vwap>0&&vwap<px?vwap:0,
+          strongLow>0&&strongLow<px?strongLow:0
+        ].filter(function(x){return x>0&&x<px;});
+        var nearestDemand = demandLevels.length?Math.max.apply(null,demandLevels):0;
+        // If price extended >0.4% above demand, enter at demand (pullback limit)
+        if(nearestDemand>0 && (px-nearestDemand)/px>0.004){
+          entry = nearestDemand;
+          entryNote = "pullback to ₹"+Math.round(nearestDemand);
+        }
 
-        // T1: nearest resistance (CE wall, Bearish OB high, or 2×SL dist)
+        // ── CHANGE 1: STRUCTURAL SL (below the demand structure) ───────
+        // SL goes below the actual invalidation level — the structure that,
+        // if broken, voids the thesis. Order: bull OB low, strong low, swing low.
+        // Fixed 0.5% is only the LAST resort, not the default.
+        var bullObLow = bullOB ? (smc&&smc.ob&&smc.ob.filter(function(o){
+          return o.type==="BULLISH"&&!o.mitigated&&o.low<entry;
+        }).map(function(o){return o.low;}).sort(function(a,b){return b-a;})[0]||0) : 0;
+        var structSL=[
+          bullObLow>0&&bullObLow<entry?bullObLow*0.999:0,   // just below OB low
+          strongLow>0&&strongLow<entry?strongLow*0.999:0,   // just below strong low
+          weakLow>0&&weakLow<entry?weakLow*0.999:0,         // swing low
+          vwap>0&&vwap<entry?vwap*0.998:0                   // VWAP as soft floor
+        ].filter(function(x){return x>0&&x<entry;});
+        // Pick the HIGHEST structural level below entry (tightest valid stop)
+        sl = structSL.length ? Math.max.apply(null,structSL) : 0;
+        // Guard: SL must be 0.3%–1.5% away. Too tight = noise stop. Too wide = bad R:R.
+        var slPct = sl>0 ? (entry-sl)/entry : 0;
+        if(!sl || slPct<0.003) sl = entry*(1-0.005);   // floor at 0.5% if structure too close
+        if(slPct>0.015)        sl = entry*(1-0.015);   // cap at 1.5% if structure too far
+        var slDist=entry-sl;
+
+        // T1: nearest resistance (CE wall, bearish OB low, bullish FVG top)
         var t1Levels=[
-          ceWall>0&&ceWall>px?ceWall:0,
-          bearOB?smc&&smc.ob&&smc.ob.filter(function(o){return o.type==="BEARISH"&&o.low>px;}).map(function(o){return o.low;})[0]||0:0,
-          bullFVG?smc&&smc.fvg&&smc.fvg.filter(function(f){return f.type==="BULLISH"&&f.top>px;}).map(function(f){return f.top;})[0]||0:0
-        ].filter(function(x){return x>px;});
-        t1=t1Levels.length?Math.min.apply(null,t1Levels):px+slDist*2;
-        // Cap T1 at 2% from entry if CE wall is too far
-        if(t1>px*1.02) t1=Math.round(px+slDist*2);
-        // T2 must ALWAYS be further than T1 for bull trades
-        var t2raw=ceWall>t1&&ceWall<px*1.04?ceWall:Math.round(px+slDist*3);
-        t2=Math.max(t2raw, Math.round(t1+(t1-px)*0.5)); // T2 >= T1 + 50% of T1 distance
+          ceWall>0&&ceWall>entry?ceWall:0,
+          bearOB?smc&&smc.ob&&smc.ob.filter(function(o){return o.type==="BEARISH"&&o.low>entry;}).map(function(o){return o.low;})[0]||0:0,
+          bullFVG?smc&&smc.fvg&&smc.fvg.filter(function(f){return f.type==="BULLISH"&&f.top>entry;}).map(function(f){return f.top;})[0]||0:0
+        ].filter(function(x){return x>entry;});
+        t1=t1Levels.length?Math.min.apply(null,t1Levels):entry+slDist*1.5;
+        // Cap T1 at 2% from entry if resistance is too far
+        if(t1>entry*1.02) t1=Math.round(entry+slDist*1.5);
+        var t2raw=ceWall>t1&&ceWall<entry*1.04?ceWall:Math.round(entry+slDist*2.5);
+        t2=Math.max(t2raw, Math.round(t1+(t1-entry)*0.5));
 
-        rrRatio=slDist>0?Math.round((t1-px)/slDist*10)/10:2;
+        rrRatio=slDist>0?Math.round((t1-entry)/slDist*10)/10:2;
 
       } else {
-        // SL: above nearest resistance
-        var slLevels2=[ceWall>0&&ceWall>px?ceWall:0, vwap>0&&vwap>px?vwap:0, px*1.005];
-        sl=Math.min.apply(null,slLevels2.filter(function(x){return x>0&&x>px;}));
-        if(!sl||sl>=px*2)sl=px+Math.round(px*0.005);
-        var slDist2=sl-px;
+        // ── PULLBACK ENTRY (bearish — to supply structure above) ───────
+        var bearObLow = bearOB ? (smc&&smc.ob&&smc.ob.filter(function(o){
+          return o.type==="BEARISH"&&!o.mitigated&&o.low>=px;
+        }).map(function(o){return o.low;}).sort(function(a,b){return a-b;})[0]||0) : 0;
+        var supplyLevels=[
+          bearObLow>0&&bearObLow>px?bearObLow:0,
+          vwap>0&&vwap>px?vwap:0,
+          strongHigh>0&&strongHigh>px?strongHigh:0
+        ].filter(function(x){return x>px;});
+        var nearestSupply = supplyLevels.length?Math.min.apply(null,supplyLevels):0;
+        if(nearestSupply>0 && (nearestSupply-px)/px>0.004){
+          entry = nearestSupply;
+          entryNote = "pullback to ₹"+Math.round(nearestSupply);
+        }
+
+        // ── STRUCTURAL SL (above the supply structure) ─────────────────
+        var bearObHigh = bearOB ? (smc&&smc.ob&&smc.ob.filter(function(o){
+          return o.type==="BEARISH"&&!o.mitigated&&o.high>entry;
+        }).map(function(o){return o.high;}).sort(function(a,b){return a-b;})[0]||0) : 0;
+        var structSL2=[
+          bearObHigh>entry?bearObHigh*1.001:0,
+          strongHigh>entry?strongHigh*1.001:0,
+          weakHigh>entry?weakHigh*1.001:0,
+          vwap>entry?vwap*1.002:0
+        ].filter(function(x){return x>entry;});
+        sl = structSL2.length ? Math.min.apply(null,structSL2) : 0;
+        var slPct2 = sl>0 ? (sl-entry)/entry : 0;
+        if(!sl || slPct2<0.003) sl = entry*(1+0.005);
+        if(slPct2>0.015)        sl = entry*(1+0.015);
+        var slDist2=sl-entry;
 
         var t1Levels2=[
-          peWall>0&&peWall<px?peWall:0,
-          bullOB?smc&&smc.ob&&smc.ob.filter(function(o){return o.type==="BULLISH"&&o.high<px;}).map(function(o){return o.high;})[0]||0:0
-        ].filter(function(x){return x>0&&x<px;});
-        t1=t1Levels2.length?Math.max.apply(null,t1Levels2):px-slDist2*2;
-        if(t1<px*0.98) t1=Math.round(px-slDist2*2);
-        // T2 must ALWAYS be further than T1 for bear trades (lower price)
-        var t2raw2=peWall<t1&&peWall>px*0.96?peWall:Math.round(px-slDist2*3);
-        t2=Math.min(t2raw2, Math.round(t1-(px-t1)*0.5)); // T2 <= T1 - 50% of T1 distance
+          peWall>0&&peWall<entry?peWall:0,
+          bullOB?smc&&smc.ob&&smc.ob.filter(function(o){return o.type==="BULLISH"&&o.high<entry;}).map(function(o){return o.high;})[0]||0:0
+        ].filter(function(x){return x>0&&x<entry;});
+        t1=t1Levels2.length?Math.max.apply(null,t1Levels2):entry-slDist2*1.5;
+        if(t1<entry*0.98) t1=Math.round(entry-slDist2*1.5);
+        var t2raw2=peWall<t1&&peWall>entry*0.96?peWall:Math.round(entry-slDist2*2.5);
+        t2=Math.min(t2raw2, Math.round(t1-(entry-t1)*0.5));
 
-        rrRatio=slDist2>0?Math.round((px-t1)/slDist2*10)/10:2;
+        rrRatio=slDist2>0?Math.round((entry-t1)/slDist2*10)/10:2;
       }
 
       // Reject if R:R < 1.5 — not worth the risk
       if(rrRatio<1.5){
-        return null; // signal rejected by R:R engine
+        return null;
       }
-      return {sl:Math.round(sl*100)/100, t1:Math.round(t1), t2:Math.round(t2), rr:"1:"+rrRatio};
+      return {
+        entry:Math.round(entry*100)/100,
+        sl:Math.round(sl*100)/100,
+        t1:Math.round(t1), t2:Math.round(t2),
+        rr:"1:"+rrRatio,
+        entryNote:entryNote
+      };
     }
 
     // Minimum score varies by regime
@@ -2701,6 +2779,7 @@ function localSigs(){
         ? false  // MCX trades till 11:30 PM — no BTST concept during live MCX session
         : nseClosingWindow && bullScore>=4;  // NSE: only in closing 30 min
       var whyText=bullReasons.slice(0,3).join(" | ");
+      if(rr.entryNote) whyText += " | Entry: "+rr.entryNote;
       // Time bucket for performance tracking
       var timeBucket=minsNow<600?"morning":minsNow<780?"midday":minsNow<900?"afternoon":"closing";
       // MCX evening session (after NSE close, MCX still open)
@@ -2709,8 +2788,8 @@ function localSigs(){
       sig={
         sym:s.sym, bias:"BULLISH", trade:"Buy "+(atm+step)+" CE", strategy:strat,
         why:whyText, confidence:conf,
-        entry:""+px, sl:""+rr.sl, target1:""+rr.t1, target2:""+rr.t2,
-        rr:rr.rr, urgency:urg,
+        entry:""+rr.entry, sl:""+rr.sl, target1:""+rr.t1, target2:""+rr.t2,
+        rr:rr.rr, urgency:urg, entryNote:rr.entryNote||"",
         timeframe:golden?"Daily":orbBreakout?"5M":cprNarrow?"15M":bullOB?"1H":"5M",
         isBTST:isBtst,
         btstNote:isBtst?"Hold overnight. Exit if gap-up ≥0.3% at open. SL: ₹"+px:
@@ -2745,14 +2824,15 @@ function localSigs(){
                  pcrExtremeBull?"PCR Extreme Reversal (Calls overloaded)":
                  callWriting?"CE Writing — Resistance Building":"Multi-factor Bearish";                 regimeCode==="TRENDING_DOWN"?"Trend Continuation":"Multi-factor Bearish";
       var whyBear=bearReasons.slice(0,3).join(" | ");
+      if(rr2.entryNote) whyBear += " | Entry: "+rr2.entryNote;
       var timeBucket2=minsNow<600?"morning":minsNow<780?"midday":minsNow<900?"afternoon":"closing";
       if(isMCX && !isOpen() && isMCXOpen()) timeBucket2="mcx_evening";
       else if(!isOpen()) timeBucket2="after_hours";
       sig={
         sym:s.sym, bias:"BEARISH", trade:"Buy "+atm+" PE", strategy:strat2,
         why:whyBear, confidence:conf2,
-        entry:""+px, sl:""+rr2.sl, target1:""+rr2.t1, target2:""+rr2.t2,
-        rr:rr2.rr, urgency:urg2,
+        entry:""+rr2.entry, sl:""+rr2.sl, target1:""+rr2.t1, target2:""+rr2.t2,
+        rr:rr2.rr, urgency:urg2, entryNote:rr2.entryNote||"",
         timeframe:death?"Daily":orbBreakdown?"5M":cprNarrow?"15M":bearOB?"1H":"5M",
         isBTST:false, btstNote:"",
         regime:regimeCode,
