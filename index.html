@@ -969,6 +969,8 @@ function _doFetchFromServer(){
       // 15-day daily trend fields
       if(sd.trend15)sc.trend15=sd.trend15;
       if(sd.trend_strength!==undefined)sc.trend_strength=sd.trend_strength;
+    if(sd.trend_up_count!==undefined)sc.trend_up_count=sd.trend_up_count;
+    if(sd.trend_sessions!==undefined)sc.trend_sessions=sd.trend_sessions;
       if(sd.hh_hl!==undefined)sc.hh_hl=sd.hh_hl;
       if(sd.lh_ll!==undefined)sc.lh_ll=sd.lh_ll;
       if(sd.prev_day_high)sc.pdh=sd.prev_day_high;  // PDH — previous session high
@@ -2148,16 +2150,22 @@ function localSigs(){
     var trend15=s.trend15||"UNKNOWN";
     var hhHl=s.hh_hl||false;
     var lhLl=s.lh_ll||false;
-    var trendStr15=s.trend_strength||0;
+    var trendStr15 = s.trend_strength||0;          // % of up-days (e.g. 57)
+    var trendUpCnt = s.trend_up_count||0;          // actual up-day count (e.g. 8)
+    var trendSess  = s.trend_sessions||0;          // total sessions compared (e.g. 14)
+    // Build readable count label: "8W/6L in 14 sessions" or fallback to % if counts missing
+    var trendCountLbl = trendSess>0
+      ? (trendUpCnt+"W/"+(trendSess-trendUpCnt)+"L in "+trendSess+" sessions")
+      : (trendStr15+"% up-days");
 
     if(trend15==="STRONG_BULL"||hhHl){
-      bullScore+=3;bullReasons.push("15D trend: STRONG BULL (HH/HL structure, "+trendStr15+"% up-days)");
+      bullScore+=3;bullReasons.push("15D trend: STRONG BULL — HH/HL structure ("+trendCountLbl+")");
     } else if(trend15==="BULL"){
-      bullScore+=2;bullReasons.push("15D trend: BULLISH ("+trendStr15+"% up-days last 15 sessions)");
+      bullScore+=2;bullReasons.push("15D trend: BULLISH ("+trendCountLbl+")");
     } else if(trend15==="STRONG_BEAR"||lhLl){
-      bearScore+=3;bearReasons.push("15D trend: STRONG BEAR (LH/LL structure)");
+      bearScore+=3;bearReasons.push("15D trend: STRONG BEAR — LH/LL structure ("+trendCountLbl+")");
     } else if(trend15==="BEAR"){
-      bearScore+=2;bearReasons.push("15D trend: BEARISH ("+Math.abs(trendStr15)+"% down-days last 15 sessions)");
+      bearScore+=2;bearReasons.push("15D trend: BEARISH ("+trendCountLbl+")");
     }
     // Counter-trend penalty: signal against 15D trend loses 2 points
     if((trend15==="STRONG_BULL"||trend15==="BULL")&&bearScore>bullScore){
