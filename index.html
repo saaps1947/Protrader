@@ -2680,15 +2680,19 @@ function localSigs(){
         var slDist=entry-sl;
 
         // T1: nearest resistance (CE wall, bearish OB low, bullish FVG top)
+        // But NEVER closer than 1.5×SL — otherwise a nearby wall kills R:R and
+        // the signal gets wrongly rejected. The wall is a target HINT, not a cap.
+        var minT1 = entry + slDist*1.5;
         var t1Levels=[
-          ceWall>0&&ceWall>entry?ceWall:0,
-          bearOB?smc&&smc.ob&&smc.ob.filter(function(o){return o.type==="BEARISH"&&o.low>entry;}).map(function(o){return o.low;})[0]||0:0,
-          bullFVG?smc&&smc.fvg&&smc.fvg.filter(function(f){return f.type==="BULLISH"&&f.top>entry;}).map(function(f){return f.top;})[0]||0:0
-        ].filter(function(x){return x>entry;});
-        t1=t1Levels.length?Math.min.apply(null,t1Levels):entry+slDist*1.5;
-        // Cap T1 at 2% from entry if resistance is too far
-        if(t1>entry*1.02) t1=Math.round(entry+slDist*1.5);
-        var t2raw=ceWall>t1&&ceWall<entry*1.04?ceWall:Math.round(entry+slDist*2.5);
+          ceWall>0&&ceWall>minT1?ceWall:0,  // only use wall if it's beyond min R:R
+          bearOB?smc&&smc.ob&&smc.ob.filter(function(o){return o.type==="BEARISH"&&o.low>minT1;}).map(function(o){return o.low;})[0]||0:0,
+          bullFVG?smc&&smc.fvg&&smc.fvg.filter(function(f){return f.type==="BULLISH"&&f.top>minT1;}).map(function(f){return f.top;})[0]||0:0
+        ].filter(function(x){return x>minT1;});
+        // Use nearest valid resistance beyond min R:R, else default to 1.5R
+        t1=t1Levels.length?Math.min.apply(null,t1Levels):minT1;
+        // Cap T1 at 2.5% from entry if resistance is too far
+        if(t1>entry*1.025) t1=Math.round(minT1);
+        var t2raw=ceWall>t1&&ceWall<entry*1.05?ceWall:Math.round(entry+slDist*2.5);
         t2=Math.max(t2raw, Math.round(t1+(t1-entry)*0.5));
 
         rrRatio=slDist>0?Math.round((t1-entry)/slDist*10)/10:2;
@@ -2725,13 +2729,16 @@ function localSigs(){
         if(slPct2>0.015)        sl = entry*(1+0.015);
         var slDist2=sl-entry;
 
+        // T1: nearest support — but never closer than 1.5×SL (wall is hint, not cap)
+        var minT1b = entry - slDist2*1.5;
         var t1Levels2=[
-          peWall>0&&peWall<entry?peWall:0,
-          bullOB?smc&&smc.ob&&smc.ob.filter(function(o){return o.type==="BULLISH"&&o.high<entry;}).map(function(o){return o.high;})[0]||0:0
-        ].filter(function(x){return x>0&&x<entry;});
-        t1=t1Levels2.length?Math.max.apply(null,t1Levels2):entry-slDist2*1.5;
-        if(t1<entry*0.98) t1=Math.round(entry-slDist2*1.5);
-        var t2raw2=peWall<t1&&peWall>entry*0.96?peWall:Math.round(entry-slDist2*2.5);
+          peWall>0&&peWall<entry&&peWall<minT1b?peWall:0,
+          bullOB?smc&&smc.ob&&smc.ob.filter(function(o){return o.type==="BULLISH"&&o.high<minT1b;}).map(function(o){return o.high;})[0]||0:0
+        ].filter(function(x){return x>0&&x<minT1b;});
+        // Use nearest valid support below min R:R, else default to 1.5R
+        t1=t1Levels2.length?Math.max.apply(null,t1Levels2):minT1b;
+        if(t1<entry*0.975) t1=Math.round(minT1b);
+        var t2raw2=peWall<t1&&peWall>entry*0.95?peWall:Math.round(entry-slDist2*2.5);
         t2=Math.min(t2raw2, Math.round(t1-(entry-t1)*0.5));
 
         rrRatio=slDist2>0?Math.round((entry-t1)/slDist2*10)/10:2;
