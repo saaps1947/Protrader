@@ -2498,10 +2498,10 @@ function localSigs(){
     if(!isIndexOrMcx && avgRange>0 && avgRange<1.2){
       noTradeReasons.push("Low volatility: "+avgRange+"% avg daily range (<1.2% min) — can't reach targets intraday");
     }
-    if(trend15Val==="STRONG_BULL" && bearScore>bullScore && !trappedPE && !bearSweep){
+    if(trend15==="STRONG_BULL" && bearScore>bullScore && !trappedPE && !bearSweep){
       noTradeReasons.push("STRONG_BULL 15D trend — bearish signals suppressed (counter-trend high risk)");
     }
-    if(trend15Val==="STRONG_BEAR" && bullScore>bearScore && !trappedCE && !bullSweep){
+    if(trend15==="STRONG_BEAR" && bullScore>bearScore && !trappedCE && !bullSweep){
       noTradeReasons.push("STRONG_BEAR 15D trend — bullish signals suppressed (counter-trend high risk)");
     }
     // FIX: Early morning (9:30-9:44 AM) — ORB not confirmed, OI spike is noise
