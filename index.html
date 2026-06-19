@@ -2781,7 +2781,28 @@ function localSigs(){
 
 
 // Persistent first-seen timestamps — survives Scan Now button clicks
-var _sigFirstSeen = {}; // key: sym+bias → {time, ts}
+// ── Signal first-seen persistence ─────────────────────────────────────────
+// Survives page reloads via localStorage — so a signal first seen at 9:45 AM
+// still shows "9:45 AM (23m ago)" after the user closes and reopens the app.
+var _sigFirstSeen = (function(){
+  try{
+    var saved = localStorage.getItem('pt_sigFirstSeen');
+    if(saved){
+      var parsed = JSON.parse(saved);
+      // Purge entries older than 24h on load (stale signals from yesterday)
+      var cutoff = Date.now() - 24*60*60*1000;
+      Object.keys(parsed).forEach(function(k){
+        if(parsed[k].ts < cutoff) delete parsed[k];
+      });
+      return parsed;
+    }
+  }catch(e){}
+  return {};
+})();
+
+function _saveSigFirstSeen(){
+  try{ localStorage.setItem('pt_sigFirstSeen', JSON.stringify(_sigFirstSeen)); }catch(e){}
+}
 
 function processScan(sigs){
   window._lastScanTs = Date.now();
@@ -2812,6 +2833,7 @@ function processScan(sigs){
       sig._time        = sig._firstSeen;
       sig._isNew       = true;
       _sigFirstSeen[key] = {time:sig._firstSeen, ts:sig._firstSeenTs};
+      _saveSigFirstSeen(); // persist so page reload keeps original timestamp
     }
 
     // Auto-log HIGH conviction signals
@@ -2835,6 +2857,7 @@ function processScan(sigs){
   var cut=Date.now()-30*60*1000;
   var removed=allSigs.filter(function(s){return s._firstSeenTs&&s._firstSeenTs<=cut;});
   removed.forEach(function(s){delete _sigFirstSeen[s.sym+s.bias];});
+  if(removed.length) _saveSigFirstSeen(); // persist deletions
   allSigs=allSigs.filter(function(s){return !s._firstSeenTs||s._firstSeenTs>cut;});
   allSigs.sort(function(a,b){if(a.urgency==="HIGH"&&b.urgency!=="HIGH")return -1;if(b.urgency==="HIGH"&&a.urgency!=="HIGH")return 1;return (b.confidence||0)-(a.confidence||0);});
   renderFeed();buildSF();updateBiasCounts();
