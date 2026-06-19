@@ -1434,13 +1434,14 @@ function captureSnapshot(s){
     // 15D Trend — from market response for all symbols
     trend15:s.trend15||"", trend_strength:s.trend_strength||0,
     hh_hl:s.hh_hl?1:0, lh_ll:s.lh_ll?1:0,
-    // SMC
+    // SMC — server returns smc.ob/smc.fvg with type "BULLISH"/"BEARISH"
+    // (was reading smc.orderBlocks with type "BULL" — fields that don't exist → always 0)
     smc_structure:smc.structure||"",
-    ob_bull:((smc.orderBlocks||[]).filter(function(b){return b.type==="BULL";})[0]||{}).mid||0,
-    ob_bear:((smc.orderBlocks||[]).filter(function(b){return b.type==="BEAR";})[0]||{}).mid||0,
-    fvg_bull:(smc.fvgZones||[]).filter(function(f){return f.type==="BULL"&&!f.filled;}).length,
-    fvg_bear:(smc.fvgZones||[]).filter(function(f){return f.type==="BEAR"&&!f.filled;}).length,
-    sweeps:(smc.sweeps||[]).length,
+    ob_bull:((smc.ob||[]).filter(function(b){return b.type==="BULLISH"&&!b.mitigated;})[0]||{}).mid||0,
+    ob_bear:((smc.ob||[]).filter(function(b){return b.type==="BEARISH"&&!b.mitigated;})[0]||{}).mid||0,
+    fvg_bull:(smc.fvg||[]).filter(function(f){return f.type==="BULLISH"&&!f.filled;}).length,
+    fvg_bear:(smc.fvg||[]).filter(function(f){return f.type==="BEARISH"&&!f.filled;}).length,
+    sweeps:(smc.sweep||[]).length,
     // OI
     pcr:s.pcr||0, max_pain:s.mp||0,
     ce_wall:s.cW||0, pe_wall:s.pW||0,
