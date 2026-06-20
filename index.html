@@ -685,12 +685,15 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px" id="bt-cards"></div>
     <!-- Breakdown tabs -->
     <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:10px">
-      <div style="display:flex;border-bottom:1px solid var(--border)">
+      <div style="display:flex;border-bottom:1px solid var(--border);flex-wrap:wrap">
         <button class="bt-dtab on" onclick="btTab(this,'session')">Session</button>
         <button class="bt-dtab" onclick="btTab(this,'trend')">15D Trend</button>
         <button class="bt-dtab" onclick="btTab(this,'cpr')">CPR</button>
         <button class="bt-dtab" onclick="btTab(this,'sym')">Symbol</button>
         <button class="bt-dtab" onclick="btTab(this,'conf')">Conf Band</button>
+        <button class="bt-dtab" onclick="btTab(this,'setup')">Setup</button>
+        <button class="bt-dtab" onclick="btTab(this,'regime')">Regime</button>
+        <button class="bt-dtab" style="font-weight:800;color:var(--g)" onclick="btTab(this,'setup_regime')">🏆 Leaderboard</button>
       </div>
       <div id="bt-breakdown" style="padding:12px"></div>
     </div>
@@ -1642,13 +1645,24 @@ function btTab(el,key){
 
 function _btRenderBreakdown(key){
   if(!_btData) return;
-  var data=_btData["by_"+key]||[];
+  var data=(_btData["by_"+key]||[]).slice();
+  // For the actual leaderboard (setup x regime), sort reliable rows first —
+  // otherwise a single lucky trade (100% of n=1) sits above a genuinely
+  // proven setup (55% of n=40), which defeats the point of a leaderboard.
+  // Other tabs keep the server's win-rate sort as-is.
+  if(key==="setup_regime"){
+    data.sort(function(a,b){
+      if(a.reliable!==b.reliable) return a.reliable?-1:1;
+      return b.wr-a.wr;
+    });
+  }
   var html="";
   data.forEach(function(row){
     var wr=row.wr;
     var col=wr>=55?"wr-good":wr>=40?"wr-ok":"wr-bad";
-    html+="<div class='bt-row'>"+
-      "<div class='k'>"+row.k+"</div>"+
+    var lowN = row.n<30; // below this, win rate is noise, not signal
+    html+="<div class='bt-row'"+(lowN?" style='opacity:.6'":"")+">"+
+      "<div class='k'>"+row.k+(lowN?" <span style='color:var(--y);font-size:.6rem'>⚠ n<30</span>":"")+"</div>"+
       "<div style='display:flex;gap:12px;font-size:.65rem;text-align:right'>"+
       "<span style='color:var(--m)'>"+row.n+" trades</span>"+
       "<span style='color:var(--g)'>"+row.w+"W</span>"+
@@ -1657,6 +1671,19 @@ function _btRenderBreakdown(key){
       "<span style='color:"+(row.avg>0?"var(--g)":"var(--r)")+";min-width:42px'>"+(row.avg>0?"+":"")+row.avg+"%</span>"+
       "</div></div>";
   });
+  if(key==="setup" && data.length){
+    html = "<div style='font-size:.62rem;color:var(--m);padding:6px 0 10px;border-bottom:1px solid var(--border);margin-bottom:8px'>"+
+      "Tags: Price (PDH/PDL/CPR break) · Momentum (RSI/SMA/trend) · ORB (opening range breakout — proxy for live's SMC structure, not identical) · Regime (STRONG_BULL/BEAR). "+
+      "OI intentionally excluded — added once intraday OI data is available.</div>" + html;
+  } else if(key==="regime" && data.length){
+    html = "<div style='font-size:.62rem;color:var(--m);padding:6px 0 10px;border-bottom:1px solid var(--border);margin-bottom:8px'>"+
+      "Technical-only regime (same thresholds as live's deriveRegime fallback): TRENDING_UP/DOWN, CHOPPY, DEVELOPING. "+
+      "The live server's OI-based regimes (BREAKOUT_DAY, EXPIRY_PINNING, MEAN_REVERT) need intraday OI and aren't available here yet.</div>" + html;
+  } else if(key==="setup_regime" && data.length){
+    html = "<div style='font-size:.62rem;color:var(--m);padding:6px 0 10px;border-bottom:1px solid var(--border);margin-bottom:8px'>"+
+      "🏆 This is the actual leaderboard — which setup+regime combo makes money, sorted reliable-first. "+
+      "Rows marked ⚠ n&lt;30 are too small to trust yet; treat their win rate as noise, not signal.</div>" + html;
+  }
   document.getElementById("bt-breakdown").innerHTML=html||
     "<div style='color:var(--m);font-size:.7rem;padding:12px;text-align:center'>No data</div>";
 }
@@ -1681,28 +1708,50 @@ function exportBtReport(){
     ["BY SESSION","session"],["BY 15D TREND","trend"],
     ["BY BIAS","bias"],["BY CPR TYPE","cpr"],
     ["BY CONFIDENCE BAND","conf"],["BY SYMBOL","sym"],
+    ["BY SETUP KEY","setup"],["BY REGIME","regime"],
+    ["BY SETUP x REGIME (leaderboard)","setup_regime"],
   ];
   sections.forEach(function(sec){
     var data=r["by_"+sec[1]]||[];
     if(!data.length) return;
     rows.push([sec[0]]);
-    rows.push(["Category","Trades","Wins","Losses","Win Rate","Avg P&L %"]);
-    data.forEach(function(row){
-      rows.push([row.k,row.n,row.w,row.l,row.wr+"%",row.avg+"%"]);
-    });
+    if(sec[1]==="setup"){
+      rows.push(["Setup Tags: Price / Momentum / ORB (proxy for live SMC structure) / Regime. OI intentionally excluded — pending intraday OI data."]);
+      rows.push(["Category","Trades","Wins","Losses","Win Rate","Avg P&L %","Reliable (n>=30)"]);
+      data.forEach(function(row){
+        rows.push([row.k,row.n,row.w,row.l,row.wr+"%",row.avg+"%",row.reliable?"YES":"NO — small sample"]);
+      });
+    } else if(sec[1]==="regime"){
+      rows.push(["Technical-only regime (same thresholds as live deriveRegime fallback). TRENDING_UP/DOWN, CHOPPY, DEVELOPING."]);
+      rows.push(["Category","Trades","Wins","Losses","Win Rate","Avg P&L %","Reliable (n>=30)"]);
+      data.forEach(function(row){
+        rows.push([row.k,row.n,row.w,row.l,row.wr+"%",row.avg+"%",row.reliable?"YES":"NO — small sample"]);
+      });
+    } else if(sec[1]==="setup_regime"){
+      rows.push(["The actual leaderboard: which setup+regime combos make money. Sort by Win Rate; trust only rows marked Reliable."]);
+      rows.push(["Setup / Regime","Trades","Wins","Losses","Win Rate","Avg P&L %","Reliable (n>=30)"]);
+      data.forEach(function(row){
+        rows.push([row.k,row.n,row.w,row.l,row.wr+"%",row.avg+"%",row.reliable?"YES":"NO — small sample"]);
+      });
+    } else {
+      rows.push(["Category","Trades","Wins","Losses","Win Rate","Avg P&L %"]);
+      data.forEach(function(row){
+        rows.push([row.k,row.n,row.w,row.l,row.wr+"%",row.avg+"%"]);
+      });
+    }
     rows.push([]);
   });
 
   // ── Section 3: Full Signal Log ───────────────────────────
   rows.push(["FULL SIGNAL LOG"]);
   rows.push(["Date","Time","Symbol","Bias","Confidence","Bull","Bear",
-             "Trend15","CPR","PCR","RSI","Entry","SL","T1","T2",
+             "Trend15","Regime","CPR","PCR","RSI","SetupKey","Entry","SL","T1","T2",
              "Status","Exit","P&L %","Bars Held","Session"]);
   (r.signals||[]).forEach(function(s){
     rows.push([
       s.date, s.time, s.sym, s.bias, s.conf+"%",
-      s.bull, s.bear, s.trend15,
-      s.cpr_narrow?"NARROW":"WIDE", s.pcr, s.rsi,
+      s.bull, s.bear, s.trend15, s.regime||"",
+      s.cpr_narrow?"NARROW":"WIDE", s.pcr, s.rsi, s.setup_key||"",
       s.entry, s.sl, s.t1, s.t2,
       s.status, s.exit, (s.pnl_pct>0?"+":"")+s.pnl_pct+"%",
       s.bars, s.session
