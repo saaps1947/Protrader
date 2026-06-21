@@ -1482,8 +1482,12 @@ function maybeCapture(){
   var now=Date.now();
   if(now-_lastSnapTs < 600000) return; // 10 min fallback gap
   _lastSnapTs=now;
-  allS().forEach(function(s){ try{captureSnapshot(s);}catch(e){} });
-  console.log("[Snap fallback] "+allS().length+" symbols @ "+istTime());
+  var n=0;
+  allS().forEach(function(s){
+    if(isSymMCX(s.sym)){ if(!isMCXOpen()) return; } else { if(!isOpen()) return; } // same per-symbol hours rule, MCX gets its own closing time too
+    try{captureSnapshot(s);n++;}catch(e){}
+  });
+  console.log("[Snap fallback] "+n+" symbols @ "+istTime());
 }
 
 function exportSnapshots(dateStr){
@@ -1919,6 +1923,10 @@ function runScan(manual){
       _lastSnapTs=now;
       var count=0;
       allS().forEach(function(s){
+        // Same per-symbol hours rule as signal generation: only capture MCX
+        // symbols (CRUDEOIL/GOLD) outside NSE hours. Otherwise NSE snapshots
+        // would keep recording stale closed-market data all evening.
+        if(isSymMCX(s.sym)){ if(!isMCXOpen()) return; } else { if(!isOpen()) return; }
         try{
           captureSnapshot(s);
           count++;
@@ -1977,6 +1985,18 @@ function localSigs(){
     var px=s.px||s._lastPx||0;
     if(px>0&&!s._lastPx)s._lastPx=px; // cache last known price
     if(!px)return;
+
+    // ── HARD MARKET-HOURS GATE — per symbol, no exceptions ──────────
+    // FIX: isMCX used to be computed ~900 lines into this loop, AFTER all
+    // scoring (including the BTST "strong close" bonus at mktClosed) had
+    // already run — it was only used to LABEL the time bucket, never to
+    // actually block signal generation. That let NIFTY/SENSEX/stocks keep
+    // generating signals all evening (7-8 PM+) since nothing stopped them.
+    // Per explicit instruction: ONLY CRUDEOIL/GOLD (MCX) trade outside NSE
+    // hours, until 11:30 PM. Every other symbol — including the BTST/strong-
+    // close bonus — is fully blocked outside 9:15 AM–3:30 PM. No exceptions.
+    var isMCX = isSymMCX(s.sym);
+    if(isMCX){ if(!isMCXOpen()) return; } else { if(!isOpen()) return; }
 
     var px=s.px, atm=s.atm||Math.round(px/(s.step||100))*(s.step||100);
     var step=s.step||(px>10000?100:px>1000?50:px>100?10:5);
@@ -2391,8 +2411,13 @@ function localSigs(){
     if(ivLow&&bearScore>bullScore){bearScore+=1;bearReasons.push("IV cheap vs VIX — good to buy PE");}
 
     // BTST bonus when closed
-    if(mktClosed&&s.pct>0.6){bullScore+=1;bullReasons.push("Strong close +"+s.pct.toFixed(1)+"% — BTST potential");}
-    if(mktClosed&&s.pct<-0.6){bearScore+=1;bearReasons.push("Weak close "+s.pct.toFixed(1)+"% — gap-down risk");}
+    // BTST concept (T+1 settlement) only applies to NSE equities/indices, never
+    // commodity futures. After the market-hours gate above, mktClosed can only
+    // be true here for MCX symbols (since !isMCX implies isOpen()==true past
+    // the gate) — so without this guard, a "BTST potential" label could wrongly
+    // attach to a CRUDEOIL/GOLD signal. Explicit !isMCX keeps intent correct.
+    if(mktClosed&&!isMCX&&s.pct>0.6){bullScore+=1;bullReasons.push("Strong close +"+s.pct.toFixed(1)+"% — BTST potential");}
+    if(mktClosed&&!isMCX&&s.pct<-0.6){bearScore+=1;bearReasons.push("Weak close "+s.pct.toFixed(1)+"% — gap-down risk");}
 
     // ══════════════════════════════════════════════════════════
     // CONTEXT CONTRADICTION ENGINE
@@ -2845,7 +2870,6 @@ function localSigs(){
                 pcrExtremeBull?"PCR Extreme Reversal (Calls)":
                 pcrStrongBull?"Heavy Put Writing + OI":"Multi-factor Bullish";                regimeCode==="TRENDING_UP"?"Trend Continuation":"Multi-factor Bullish";
       // BTST: NSE only in 3:00-3:30 PM closing window; MCX never BTST during MCX trading hours
-      var isMCX = isSymMCX(s.sym);
       var isBtst = isMCX
         ? false  // MCX trades till 11:30 PM — no BTST concept during live MCX session
         : nseClosingWindow && bullScore>=4;  // NSE: only in closing 30 min
@@ -3519,7 +3543,7 @@ function autoLogSignal(sig){
     if(x.sym===sig.sym && x.bias!==sig.bias && x.status==="OPEN"){
       x.status  = "MANUAL";
       x.outcome = "MANUAL";
-      x.exitTime= istTime();
+      x.exitTime= istDateTime();
       x.exit_px = entryPx; // last known price as exit
       x.notes   = "Auto-closed: direction flipped to "+sig.bias;
       if(x.entry_px&&x.exit_px){
@@ -3550,9 +3574,12 @@ function autoLogSignal(sig){
     why: sig.why||"",
     vix: VIX,
     timeframe: sig.timeframe||"",
-    firstSeen: sig._firstSeen||istTime(),
+    firstSeen: sig._firstSeen||istDateTime(),
     ts: new Date().toISOString(),
-    date: istTime(),
+    // FIX: was istTime() (time-only, e.g. "8:10 PM") — this is the field
+    // renderSignalEntry actually displays in the journal, so every entry
+    // showed time with no date. istDateTime() gives "20 Jun 8:10 PM".
+    date: istDateTime(),
     status: "OPEN",
     exit_px: null, pnl: null, outcome: null, exitTime: null, notes: ""
   };
@@ -3567,7 +3594,7 @@ function updateSignalOutcome(id, outcome, exit_px, notes){
   if(!e) return;
   e.status   = outcome;
   e.exit_px  = parseFloat(exit_px)||0;
-  e.exitTime = istTime();
+  e.exitTime = istDateTime();
   e.notes    = notes||"";
   if(e.entry_px && e.exit_px){
     var diff = e.bias==="BULLISH" ?
@@ -3600,7 +3627,7 @@ function checkSignalLevels(){
       if(e.sl_px>0){
         var slBreached = bull ? px<=e.sl_px : px>=e.sl_px;
         if(slBreached){
-          e.status="SL_HIT"; e.exit_px=e.sl_px; e.exitTime=istTime();
+          e.status="SL_HIT"; e.exit_px=e.sl_px; e.exitTime=istDateTime();
           var diff=bull?e.sl_px-e.entry_px:e.entry_px-e.sl_px;
           e.pnl=Math.round(diff*lotSize);
           e.outcome="LOSS"; e.notes="Auto-detected: SL hit at ₹"+e.sl_px;
@@ -3618,7 +3645,7 @@ function checkSignalLevels(){
           // No partial booking — full quantity still running to T2
           // SL moves to entry = risk is now zero, trade is free
           e.sl_px=e.entry_px;
-          e.exitTime=istTime();
+          e.exitTime=istDateTime();
           e.notes=(e.notes||"")+" | ✅ T1 hit ₹"+e.t1_px+" — SL moved to breakeven, full qty to T2";
           allSigs.forEach(function(a){if(a.sym===e.sym&&a.bias===e.bias){a.sl=""+e.entry_px;a._slMoved=true;}});
           toast("✅ T1 Hit — "+e.sym,"SL at breakeven ₹"+e.entry_px+" | Full qty running to T2","tg");
@@ -3632,7 +3659,7 @@ function checkSignalLevels(){
       var t2Hit = bull ? px>=e.t2_px : px<=e.t2_px;
       if(t2Hit){
         var t2diff=bull?e.t2_px-e.entry_px:e.entry_px-e.t2_px;
-        e.status="T2_HIT"; e.exit_px=e.t2_px; e.exitTime=istTime();
+        e.status="T2_HIT"; e.exit_px=e.t2_px; e.exitTime=istDateTime();
         e.pnl=Math.round(t2diff*lotSize); // full position throughout
         e.outcome="BIG WIN"; e.notes=(e.notes||"")+" | 🏆 T2 hit ₹"+e.t2_px;
         toast("🏆 T2 Hit — "+e.sym,e.trade+" ₹"+e.t2_px+" | Total P&L: ₹"+e.pnl,"tg");
@@ -4350,7 +4377,7 @@ function perfBtn(b){
   var id=b.dataset.id,res=b.dataset.r,px=parseFloat(b.dataset.px)||0;
   var e=SIGNAL_LOG.filter(function(x){return x.id===id;})[0];
   if(!e)return;
-  e.status="CLOSED";e.result=res;e.exitPrice=px;e.exitTime=istTime();
+  e.status="CLOSED";e.result=res;e.exitPrice=px;e.exitTime=istDateTime();
   e.pnl=Math.round((e.bias==="BULLISH"?px-e.entry:e.entry-px)*100)/100;
   saveSignalLog();renderPerformance();renderJ();
 }
