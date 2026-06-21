@@ -1451,6 +1451,20 @@ function captureSnapshot(s){
     ce_oi:s.cOI?+(s.cOI/1e7).toFixed(2):0, pe_oi:s.pOI?+(s.pOI/1e7).toFixed(2):0,
     ce_chg:s.cC?+(s.cC/1e7).toFixed(2):0, pe_chg:s.pC?+(s.pC/1e7).toFixed(2):0,
     buildup:s.buildup||"", iv:s.iv||0,
+    // ATR / Average Daily Range — the input to the ATR setup filter.
+    // Was wired server→frontend→symbol object but never actually captured here,
+    // so the filter's underlying data was invisible in every snapshot to date.
+    avg_range_pct:s.avg_range_pct||0,
+    // Trade structure — entry/sl/t1/t2 for THIS symbol's current signal (any
+    // direction, any confidence), not just the HIGH-conviction journal subset.
+    // entryNote flags pullback entries ("pullback to ₹X") vs chase entries.
+    // Needed to evaluate whether structural SL / pullback entry are actually
+    // improving the T1-touch-rate — that data lived nowhere outside the journal
+    // until now, and the journal only covers ~18% of signals (confidence≥82%).
+    sig_entry:curSig.entry||0, sig_sl:curSig.sl||0,
+    sig_t1:curSig.target1||0, sig_t2:curSig.target2||0,
+    sig_rr:curSig.rr||"", sig_entry_note:curSig.entryNote||"",
+    sig_regime:curSig.regime||"",
     // VIX + Signal state
     vix:VIX||0,
     signal_bias:curSig.bias||"", signal_conf:curSig.confidence||0,
