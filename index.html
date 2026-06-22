@@ -4317,8 +4317,26 @@ window.onload=function(){
     try{document.getElementById("srvBanner").classList.add("show");}catch(e){}
   }
 
-  // Scans — use safeInterval to prevent overlap
-  safeTimeout(function(){try{runScan(false);}catch(e){}},8000);
+  // Scans — wait until prices are actually loaded before first scan.
+  // All 55 symbols start with px=0 on load. If scan fires before /market
+  // responds (especially on Render cold-start, which can take 30-60s), every
+  // symbol hits the if(!px)return gate and the scan produces 0 signals.
+  // The /market success handler already rescans when allSigs===0, but this
+  // avoids the confusing "AI scanning markets..." state on the first visit.
+  safeTimeout(function(){
+    var anyPx = allS().some(function(s){return s.px>0;});
+    if(anyPx){
+      try{runScan(false);}catch(e){}
+    } else {
+      // Prices not loaded yet — retry every 2s until we have data
+      var waitForPx = safeInterval(function(){
+        if(allS().some(function(s){return s.px>0;})){
+          clearInterval(waitForPx);
+          try{runScan(false);}catch(e){}
+        }
+      }, 2000);
+    }
+  }, 8000);
   safeInterval(function(){try{runScan(false);}catch(e){}},180000);
 
   // Stock technicals — every 5 min
