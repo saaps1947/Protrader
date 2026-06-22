@@ -1881,7 +1881,12 @@ function runScan(manual){
   if(SERVER_URL&&serverOk){
     // Batch 1: indices — wait for these before scanning
     smcPrimary.forEach(function(sym){
-      fetch(SERVER_URL+"/smc/"+sym,{signal:AbortSignal.timeout(5000)})
+      // FIX: was 5000ms — too short for Render free-tier cold starts which can
+      // take 6-10s just for the Yahoo Finance outbound fetch inside /smc.
+      // Silent timeout → afterPrimarySync fires without orb data → snapshot
+      // captures s.orb=null → ORB always 0% despite server computing correctly.
+      // 12s is still well inside the 50s snapshot window.
+      fetch(SERVER_URL+"/smc/"+sym,{signal:AbortSignal.timeout(12000)})
       .then(function(r){return r.json();})
       .then(function(d){applySmcData(sym,d);afterPrimarySync();})
       .catch(function(){afterPrimarySync();});
