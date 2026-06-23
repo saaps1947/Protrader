@@ -1169,7 +1169,7 @@ function updateHero(){
   mkt.textContent=ms;mkt.className="mkt-tag "+(isOpen()?"open":"closed");
   // Stats
   document.getElementById("stPcr").textContent=s.pcr||"–";
-  document.getElementById("stPcrS").textContent=s.pcr?(s.pcr>1.1?"Bullish":s.pcr<0.9?"Bearish":"Neutral"):"–";
+  document.getElementById("stPcrS").textContent=s.pcr?(s.pcr>1.2?"Bullish":s.pcr<0.8?"Bearish":"Neutral"):"–";
   document.getElementById("stMp").textContent=s.mp?s.mp.toLocaleString("en-IN"):"–";
   document.getElementById("stMpS").textContent=s.mp&&s.px?(s.px-s.mp>0?"+":"")+Math.round(s.px-s.mp)+" pts":"–";
   document.getElementById("stIv").textContent=s.iv?s.iv+"%":"–";
@@ -1242,11 +1242,11 @@ function updateOI(s){
     return;
   }
 
-  // Render full OI strip as single innerHTML — never depend on child element existence
+  // PCR colour/label calibrated for ATM ±30 range (wider = higher PCR baseline)
   var pcr=s.pcr||(s.pOI&&s.cOI?+(s.pOI/s.cOI).toFixed(2):0);
-  var pcrCol=pcr>1.1?"var(--g)":pcr<0.9?"var(--r)":"var(--y)";
-  var pcrLbl=pcr>1.1?"Bullish":pcr<0.9?"Bearish":"Neutral";
-  var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"–";
+  var pcrCol=pcr>1.2?"var(--g)":pcr<0.8?"var(--r)":"var(--y)";
+  var pcrLbl=pcr>1.2?"Bullish":pcr<0.8?"Bearish":"Neutral";
+  var sig=pcr>1.2?"✅ Bullish — Put writing dominant":pcr<0.8?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"–";
   if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
   var peChg = s.pC ? "<div class='oi-sc' style='color:var(--g)'>Chg "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr</div>" : "";
   var ceChg = s.cC ? "<div class='oi-sc' style='color:var(--r)'>Chg "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr</div>" : "";
@@ -2022,10 +2022,14 @@ function localSigs(){
     // Short buildup: OI rising + price falling = bears adding = bearish
     var putWriting=peChg>0&&peChg>ceChg;   // puts being written = support = bullish
     var callWriting=ceChg>0&&ceChg>peChg;  // calls being written = resistance = bearish
-    var pcrStrongBull=pcr>=1.6;              // very heavy put writing = strong institutional support
-    var pcrExtremeBull=pcr>0&&pcr<0.6;      // extreme call buying = crowd overconfident = contrarian BEAR reversal
-    var pcrBull=pcr>0&&pcr>=1.1&&pcr<1.6;  // normal bullish OI PCR
-    var pcrBear=pcr>0&&pcr>=0.7&&pcr<0.9;  // normal bearish OI PCR
+    // PCR thresholds calibrated for ATM ±30 strike range (wider than old ±10).
+    // Full-range PCR is higher because far-OTM hedging puts (22k-23.5k) add
+    // significantly to PE OI. Old thresholds were: bull≥1.1, bear≤0.9.
+    // Sensibull-aligned: bull≥1.2, strongBull≥1.5, bear≤0.8, extremeBull (contrarian) <0.6
+    var pcrStrongBull=pcr>=1.5;              // very heavy put writing = strong institutional support
+    var pcrExtremeBull=pcr>0&&pcr<0.6;      // extreme call buying = crowd overconfident = contrarian BEAR signal
+    var pcrBull=pcr>0&&pcr>=1.2&&pcr<1.5;  // normal bullish OI PCR (wider range baseline)
+    var pcrBear=pcr>0&&pcr>=0.6&&pcr<0.8;  // normal bearish OI PCR
     // NOTE: In Indian OI-based PCR (Zerodha), high PCR = put writing = institutions bullish
     // Extreme high PCR (>1.6) = even stronger bull, NOT a bearish reversal
     // Only extreme LOW PCR (<0.6) signals potential bearish reversal (too many calls)
@@ -3244,8 +3248,8 @@ function renderScannerSetups(){
   if(s.rsi>70)setups.push({k:"sc",d:"bear",tag:"tsc",tn:"RSI Overbought",title:s.sym+" RSI "+s.rsi+" — Overbought",desc:"RSI above 70 signals exhaustion. Sell CE or buy PE for reversal.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.005)).toLocaleString(),t:"₹"+(atm-step).toLocaleString(),rr:"1:1.5",tf:"1H",p:79});
   if(s.rsi<30)setups.push({k:"sc",d:"bull",tag:"tsc",tn:"RSI Oversold",title:s.sym+" RSI "+s.rsi+" — Oversold",desc:"RSI below 30 signals reversal potential. Buy CE on confirmation.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.005)).toLocaleString(),t:"₹"+(atm+step).toLocaleString(),rr:"1:1.5",tf:"1H",p:79});
   if(iv>16&&Math.abs(px-mp)<px*.003)setups.push({k:"sc",d:"neu",tag:"tsc",tn:"Max Pain + IV",title:"Iron Condor — Max Pain ₹"+mp.toLocaleString(),desc:"IV "+iv+"% + near Max Pain. Sell premium inside OI walls.",e:"Sell "+(atm+step)+"CE + "+(atm-step)+"PE",sl:"Break of walls",t:"Premium decay",rr:"1:2.5",tf:"Expiry",p:84});
-  if(pcr>1.1&&(s.trend==="BULLISH"))setups.push({k:"sw",d:"bull",tag:"tsw",tn:"OI + Trend Aligned",title:"OI + SMA Bullish Alignment",desc:"PCR "+pcr+" + "+s.trend+" trend. Both OI and technicals confirm bulls.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.007)).toLocaleString(),t:"₹"+(atm+step*3).toLocaleString(),rr:"1:2.5",tf:"Daily",p:83});
-  if(pcr<0.9&&(s.trend==="BEARISH"))setups.push({k:"sw",d:"bear",tag:"tsw",tn:"OI + Trend Aligned",title:"OI + SMA Bearish Alignment",desc:"PCR "+pcr+" + "+s.trend+" trend. Both OI and technicals confirm bears.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.007)).toLocaleString(),t:"₹"+(atm-step*3).toLocaleString(),rr:"1:2.5",tf:"Daily",p:83});
+  if(pcr>1.2&&(s.trend==="BULLISH"))setups.push({k:"sw",d:"bull",tag:"tsw",tn:"OI + Trend Aligned",title:"OI + SMA Bullish Alignment",desc:"PCR "+pcr+" + "+s.trend+" trend. Both OI and technicals confirm bulls.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.007)).toLocaleString(),t:"₹"+(atm+step*3).toLocaleString(),rr:"1:2.5",tf:"Daily",p:83});
+  if(pcr<0.8&&(s.trend==="BEARISH"))setups.push({k:"sw",d:"bear",tag:"tsw",tn:"OI + Trend Aligned",title:"OI + SMA Bearish Alignment",desc:"PCR "+pcr+" + "+s.trend+" trend. Both OI and technicals confirm bears.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.007)).toLocaleString(),t:"₹"+(atm-step*3).toLocaleString(),rr:"1:2.5",tf:"Daily",p:83});
   if(!isOpen()&&s.pct>1)setups.push({k:"bt",d:"bull",tag:"tbt",tn:"BTST Setup",title:s.sym+" BTST — Strong Close",desc:"Closed +"+s.pct.toFixed(1)+"% with bullish OI. Gap-up expected tomorrow.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.006)).toLocaleString(),t:"₹"+(px+Math.round(px*.015)).toLocaleString(),rr:"1:2.5",tf:"Overnight",p:79});
   // HF strategies always shown
   setups.push({k:"hf",d:"neu",tag:"thf",tn:"HF: BlackRock Buffer",title:"BlackRock Buffer Strategy",desc:"Buy ATM PE + Sell OTM PE + Sell far CE. Asymmetric downside protection with upside.",e:"3-leg spread",sl:"Net debit",t:"Downside protected",rr:"Asymmetric",tf:"Monthly",p:79});
@@ -3285,7 +3289,7 @@ function execSetup(idx){var su=lastSetups[idx];if(!su)return;pendingTrade={actio
 function edgeScore(){
   var s=CS,iv=s.iv||14,pcr=s.pcr||0.9,vix=VIX||17.5,score=0;
   var ivR=iv/vix;if(ivR>1.5)score+=25;else if(ivR>1.2)score+=18;else if(ivR>1.0)score+=12;else score+=5;
-  if(pcr>1.3)score+=20;else if(pcr>1.1)score+=15;else if(pcr>=0.95)score+=8;else if(pcr<0.75)score+=18;else score+=5;
+  if(pcr>1.5)score+=20;else if(pcr>1.2)score+=15;else if(pcr>=0.8)score+=8;else if(pcr<0.65)score+=18;else score+=5;
   var mpD=Math.abs(s.px-(s.mp||s.px))/s.px*100;if(mpD<0.2)score+=15;else if(mpD<0.5)score+=10;else score+=5;
   if(s.cOI&&s.pOI){var oiR=s.pOI/s.cOI;if(oiR>1.3||oiR<0.7)score+=15;else score+=8;}else score+=8;
   var pct=Math.abs(s.pct||0);if(pct>2)score+=10;else if(pct>1)score+=7;else score+=4;
@@ -4639,7 +4643,7 @@ function renderScanner(){
   }).map(function(s){
     var smc=s.smc||{};
     var score=0;
-    if(s.pcr>1.1||(s.pcr>0&&s.pcr<0.9))score++;
+    if(s.pcr>1.2||(s.pcr>0&&s.pcr<0.8))score++;
     if(s.crossover==="GOLDEN_CROSS"||s.crossover==="DEATH_CROSS")score+=2;
     if(s.breakout||s.breakdown)score+=2;
     if(smc.sweep&&smc.sweep.length)score+=2;
@@ -4684,7 +4688,7 @@ function renderScanner(){
     h+="<div style='background:rgba(255,255,255,.03);border-radius:5px;padding:4px 6px'><span style='color:var(--m);font-size:.46rem;text-transform:uppercase;display:block'>SMA</span><span style='color:"+spc+";font-size:.65rem;font-weight:700'>"+sp+"</span></div>";
     h+="<div style='background:rgba(255,255,255,.03);border-radius:5px;padding:4px 6px'><span style='color:var(--m);font-size:.46rem;text-transform:uppercase;display:block'>TF Align</span><span style='color:"+tfCol+";font-size:.65rem;font-weight:700'>"+tfTxt+"</span></div>";
     h+="<div style='background:rgba(255,255,255,.03);border-radius:5px;padding:4px 6px'><span style='color:var(--m);font-size:.46rem;text-transform:uppercase;display:block'>OI Activity</span><span style='color:"+buCol+";font-size:.65rem;font-weight:700'>"+buLabel+"</span></div>";
-    h+="<div style='background:rgba(255,255,255,.03);border-radius:5px;padding:4px 6px'><span style='color:var(--m);font-size:.46rem;text-transform:uppercase;display:block'>PCR</span><span style='color:"+(s.pcr>1.1?"var(--g)":s.pcr>0&&s.pcr<0.9?"var(--r)":"var(--m)")+";font-size:.65rem;font-weight:700'>"+(s.pcr?"PCR "+s.pcr:"–")+"</span></div>";
+    h+="<div style='background:rgba(255,255,255,.03);border-radius:5px;padding:4px 6px'><span style='color:var(--m);font-size:.46rem;text-transform:uppercase;display:block'>PCR</span><span style='color:"+(s.pcr>1.2?"var(--g)":s.pcr>0&&s.pcr<0.8?"var(--r)":"var(--m)")+";font-size:.65rem;font-weight:700'>"+(s.pcr?"PCR "+s.pcr:"–")+"</span></div>";
     h+="</div>";
     if(smcTxt||fvgs.length)h+="<div style='margin-top:4px;font-size:.58rem;color:var(--p)'>🏦 "+(smcTxt||(fvgs.length?"FVG zone nearby":""))+"</div>";
     h+="<div style='font-size:.52rem;color:var(--m);text-align:right;margin-top:3px'>Tap → signals</div></div>";
