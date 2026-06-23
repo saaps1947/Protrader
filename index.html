@@ -2880,7 +2880,13 @@ function localSigs(){
       // 9:30-9:44 AM = 92% (ORB unconfirmed, OI spike noise)
       // 9:45-9:59 AM = 89% (ORB confirmed but session still volatile)
       if(morningSession && conf<minConfThreshold){return;}
-      var urg=( conf>=82 && bullLayers>=2 && hasOI )?"HIGH":
+      // Urgency: HIGH = conf≥82 AND at least 2 independent layers confirming.
+      // OI removed from this gate — it already contributes to confidence score
+      // (PCR, walls, buildup all feed bullScore → conf). Using hasOI as a hard
+      // gate meant a 94%-conf 3-layer signal would show in the signal tab but
+      // NEVER go to journal if OI hadn't loaded yet (~90s delay on startup, and
+      // permanent for non-selected stocks that only get OI when directly viewed).
+      var urg=( conf>=82 && bullLayers>=2 )?"HIGH":
                conf>=75||bullLayers>=2?"MEDIUM":"LOW";
       var strat=golden?"Golden Cross + OI":
                 trappedCE?"CE Writer Squeeze":
@@ -2929,7 +2935,7 @@ function localSigs(){
       if(!hasOI)       conf2=Math.min(conf2,79);
       // Morning session: tiered confidence requirements (same as bull)
       if(morningSession && conf2<minConfThreshold){return;}
-      var urg2=(conf2>=82&&bearLayers>=2&&hasOI)?"HIGH":
+      var urg2=(conf2>=82&&bearLayers>=2)?"HIGH":
                conf2>=75||bearLayers>=2?"MEDIUM":"LOW";
       var strat2=death?"Death Cross + OI":
                  trappedPE?"PE Writer Squeeze":
