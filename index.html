@@ -1078,6 +1078,7 @@ function _doFetchFromServer(){
 // fetchOI → lock prevents duplicate concurrent OI fetches
 // Lock is 30s normally, but bypassed on first load (_hasOILoaded flag)
 var _oiFirstLoad={};
+var _oiRefreshTime={}; // sym → last successful OI refresh time string
 function fetchOI(sym){
   var minInterval = _oiFirstLoad[sym] ? 30000 : 100; // near-instant on first load
   safeFetch("oi_"+sym, function(){return fetchOIMain(sym);}, minInterval);
@@ -1253,8 +1254,9 @@ function updateOI(s){
   var ceOI  = s.cOI>0 ? "<div class='oi-sv' style='color:var(--r)'>"+(s.cOI/1e7).toFixed(2)+" Cr</div>"+ceChg : "<div class='oi-sv'>–</div>";
 
   strip.style.display="block";
+  var oiAge = _oiRefreshTime[s.sym] ? ("OI @ "+_oiRefreshTime[s.sym]) : ("OI @ "+istTime());
   strip.innerHTML=
-    "<div class='oi-hdr'><span>📊 OI — <b>"+s.sym+"</b></span><span style='color:var(--m);font-size:.6rem'>"+istTime()+" IST</span></div>"+
+    "<div class='oi-hdr'><span>📊 OI — <b>"+s.sym+"</b></span><span style='color:var(--m);font-size:.6rem'>"+oiAge+"</span></div>"+
     "<div class='oi-grid'>"+
       "<div class='oi-side'><div class='oi-sl' style='color:var(--g)'>Put OI (Support)</div>"+peOI+"</div>"+
       "<div class='oi-side'><div class='oi-sl' style='color:var(--r)'>Call OI (Resist)</div>"+ceOI+"</div>"+
@@ -4589,7 +4591,10 @@ function applyOIData(sym,o){
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.cW=o.ce_wall||0;s.pW=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
   if(o.expiry) s.exp=o.expiry;
-  console.log("[OI ✅] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" src:"+(o.source||""));
+  console.log("[OI ✅] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" src:"+(o.source||"")+" @ "+istTime());
+  // Track when OI was last successfully refreshed (for display in strip)
+  _oiRefreshTime = _oiRefreshTime || {};
+  _oiRefreshTime[sym] = istTime();
   // Only update the hero OI strip if this symbol IS currently selected (CS)
   if(CS&&CS.sym===sym){
     updateHero();  // refresh PCR/MaxPain tiles
