@@ -2637,8 +2637,14 @@ function localSigs(){
     }
 
     if(noTradeReasons.length>0){
-      // Push a NO-TRADE advisory instead of a signal
-      if(noTradeReasons[0].indexOf("ORB")<0){ // Don't spam ORB messages
+      // Push a NO-TRADE advisory instead of a signal.
+      // FIX: was filtering out ANY reason containing "ORB", which also swallowed
+      // the useful "Early morning — ORB direction unconfirmed before 9:45 AM"
+      // advisory at 9:30-9:44 AM. User saw zero output — no signal AND no
+      // explanation. Now only suppress the exact 9:15-9:30 formation spam
+      // (which fires for all 55 symbols simultaneously, cluttering the feed).
+      var isORBFormationSpam = noTradeReasons[0].indexOf("wait until 9:30 AM")>=0;
+      if(!isORBFormationSpam){
         out.push({
           sym:s.sym, bias:"NEUTRAL", trade:"⛔ No Trade",
           strategy:"NO-TRADE Filter Active",
@@ -2961,7 +2967,7 @@ function localSigs(){
     if(sig)out.push(sig);
   });
 
-  // Sort: HIGH urgency first, then by score, filter out no-trade
+  // Sort: HIGH urgency first, then by score
   var tradeable_sigs = out.filter(function(s){return !s._noTrade;});
   var notrade_sigs   = out.filter(function(s){return s._noTrade;});
 
@@ -2973,7 +2979,18 @@ function localSigs(){
     return (b._score||0)-(a._score||0);
   });
 
-  return tradeable_sigs; // Return only real signals
+  // Deduplicate no-trade advisories — only keep ONE per unique reason.
+  // Without this, 55 symbols all hitting "Early morning — ORB unconfirmed"
+  // would spam 55 identical cards. One card per reason is enough for the user
+  // to understand why no signals are showing at 9:35 AM, during expiry, etc.
+  var seenReasons={};
+  var deduped_notrade=notrade_sigs.filter(function(s){
+    var r=s._reasons&&s._reasons[0]||"";
+    if(seenReasons[r]) return false;
+    seenReasons[r]=true; return true;
+  });
+
+  return tradeable_sigs.concat(deduped_notrade);
 }
 
 
