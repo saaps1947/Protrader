@@ -2764,16 +2764,19 @@ function localSigs(){
         }
 
         // ── CHANGE 1: STRUCTURAL SL (below the demand structure) ───────
-        // SL goes below the actual invalidation level — the structure that,
-        // if broken, voids the thesis. Order: bull OB low, strong low, swing low.
-        // Fixed 0.5% is only the LAST resort, not the default.
+        // Priority: bull OB low → strong low → swing low → PDL → VWAP → 0.5% floor
+        // NOTE: smc.strong_low is only available for the 4 primary indices at scan
+        // time (others load asynchronously). PDH/PDL and VWAP come from /market
+        // and are available for 85% of symbols — use them as the primary fallback.
         var bullObLow = bullOB ? (smc&&smc.ob&&smc.ob.filter(function(o){
           return o.type==="BULLISH"&&!o.mitigated&&o.low<entry;
         }).map(function(o){return o.low;}).sort(function(a,b){return b-a;})[0]||0) : 0;
+        var pdl = s.pdl||0;  // previous day low — key intraday support level
         var structSL=[
           bullObLow>0&&bullObLow<entry?bullObLow*0.999:0,   // just below OB low
-          strongLow>0&&strongLow<entry?strongLow*0.999:0,   // just below strong low
+          strongLow>0&&strongLow<entry?strongLow*0.999:0,   // just below strong low (if SMC loaded)
           weakLow>0&&weakLow<entry?weakLow*0.999:0,         // swing low
+          pdl>0&&pdl<entry?pdl*0.999:0,                     // PDL — reliable structural support
           vwap>0&&vwap<entry?vwap*0.998:0                   // VWAP as soft floor
         ].filter(function(x){return x>0&&x<entry;});
         // Pick the HIGHEST structural level below entry (tightest valid stop)
@@ -2819,13 +2822,16 @@ function localSigs(){
         }
 
         // ── STRUCTURAL SL (above the supply structure) ─────────────────
+        // Uses PDH as reliable structural resistance (from /market, always available)
         var bearObHigh = bearOB ? (smc&&smc.ob&&smc.ob.filter(function(o){
           return o.type==="BEARISH"&&!o.mitigated&&o.high>entry;
         }).map(function(o){return o.high;}).sort(function(a,b){return a-b;})[0]||0) : 0;
+        var pdh = s.pdh||0;  // previous day high — key intraday resistance
         var structSL2=[
           bearObHigh>entry?bearObHigh*1.001:0,
           strongHigh>entry?strongHigh*1.001:0,
           weakHigh>entry?weakHigh*1.001:0,
+          pdh>entry?pdh*1.001:0,                  // PDH — reliable structural resistance
           vwap>entry?vwap*1.002:0
         ].filter(function(x){return x>entry;});
         sl = structSL2.length ? Math.min.apply(null,structSL2) : 0;
