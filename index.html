@@ -1940,7 +1940,7 @@ function runScan(manual){
         }catch(e){}
       });
       console.log("[Snap] "+count+" symbols @ "+istTime()+" (post-SMC, all layers)");
-    }, 50000); // 50 seconds after scan fires
+    }, 70000); // 70s — enough for all Batch3 Kite candles to load before snapshot
 
   } else {
     // Server offline — scan immediately with whatever data we have
@@ -2544,14 +2544,34 @@ function localSigs(){
     }
 
     // 8. CONVICTION FLOOR — minimum score needed per regime
+    // Indices (NIFTY/BANKNIFTY/SENSEX/FINNIFTY) chop heavily intraday — data shows
+    // 55 SL hits vs 9 wins on indices today. Require score 4 for indices (vs 2 for stocks)
+    // to force multi-layer confirmation before firing. This cuts ~60% of index noise.
+    var isIndex = ["NIFTY","BANKNIFTY","FINNIFTY","SENSEX","MIDCPNIFTY"].indexOf(s.sym)>=0;
     var minScore = isChoppy?4 : (isExpiryZone&&pinned)?4 : isPrimetime?2 : 2;
+    if(isIndex) minScore = Math.max(minScore, 4); // indices need 4+ layers — chop filter
     // MORNING THRESHOLDS — raised from 87% after performance review
     // Analysis: morning signals 9:30-9:39 AM had 20% win rate (8 losses, 2 wins)
     // Root cause: OI data arrives fresh at 9:35 AM → artificial score spike before ORB confirms
     var earlyMorning  = (nowH===9 && nowM>=30 && nowM<45);  // 9:30-9:44 AM — before ORB confirms
     var lateMorning   = (nowH===9 && nowM>=45) || (nowH===10 && nowM<1); // 9:45-9:59 AM
     var morningSession = earlyMorning || lateMorning;
-    var minConfThreshold = earlyMorning ? 92 : lateMorning ? 89 : 82;
+    // Indices: even stricter morning thresholds — they need all 4 layers before 10 AM
+    var minConfThreshold = earlyMorning ? (isIndex?95:92) : lateMorning ? (isIndex?92:89) : (isIndex?88:82);
+
+    // Per-symbol signal cooldown — prevents index chop from firing BULL then BEAR
+    // every 5 minutes. Cooldown: 30 min for indices, 15 min for stocks.
+    // Uses _sigCooldown[sym] = last signal timestamp.
+    if(!window._sigCooldown) window._sigCooldown = {};
+    var cooldownMs = isIndex ? 30*60*1000 : 15*60*1000;
+    var lastSigTs  = window._sigCooldown[s.sym] || 0;
+    var inCooldown = (Date.now() - lastSigTs) < cooldownMs;
+    // Exception: direction FLIP (was BULL, now BEAR) always allowed regardless of cooldown
+    var lastSigBias = window._sigCooldownBias && window._sigCooldownBias[s.sym];
+    var existingSig = allSigs.filter(function(x){return x.sym===s.sym;})[0];
+    var isDirectionFlip = existingSig && lastSigBias &&
+                          ((bullScore>bearScore && lastSigBias==="BEARISH") ||
+                           (bearScore>bullScore && lastSigBias==="BULLISH"));
 
     // If contradiction warnings exist, raise the bar further
     var hasContradiction = bullReasons.some(function(r){return r.indexOf('⚠')===0;}) ||
@@ -2870,6 +2890,8 @@ function localSigs(){
 
     // Minimum score varies by regime
     if(bullScore>=minScore&&bullScore>bearScore&&bullScore>neutralScore){
+      // Cooldown gate: skip if same symbol fired recently (unless direction flip)
+      if(inCooldown && !isDirectionFlip) return;
       var rr=calcRR("BULL");
       if(!rr){return;} // R:R engine rejected — skip signal
       // Layer diversity gate: cap confidence based on independent layers
@@ -2886,7 +2908,7 @@ function localSigs(){
       // gate meant a 94%-conf 3-layer signal would show in the signal tab but
       // NEVER go to journal if OI hadn't loaded yet (~90s delay on startup, and
       // permanent for non-selected stocks that only get OI when directly viewed).
-      var urg=( conf>=82 && bullLayers>=2 )?"HIGH":
+      var urg=( conf>=(isIndex?88:82) && bullLayers>=2 )?"HIGH":
                conf>=75||bullLayers>=2?"MEDIUM":"LOW";
       var strat=golden?"Golden Cross + OI":
                 trappedCE?"CE Writer Squeeze":
@@ -2928,6 +2950,8 @@ function localSigs(){
       };
 
     } else if(bearScore>=minScore&&bearScore>bullScore&&bearScore>neutralScore){
+      // Cooldown gate
+      if(inCooldown && !isDirectionFlip) return;
       var rr2=calcRR("BEAR");
       if(!rr2){return;} // R:R engine rejected
       var conf2=Math.min(94,Math.max(62,68+bearScore*3-(bullScore*2)));
@@ -2935,7 +2959,7 @@ function localSigs(){
       if(!hasOI)       conf2=Math.min(conf2,79);
       // Morning session: tiered confidence requirements (same as bull)
       if(morningSession && conf2<minConfThreshold){return;}
-      var urg2=(conf2>=82&&bearLayers>=2)?"HIGH":
+      var urg2=(conf2>=(isIndex?88:82)&&bearLayers>=2)?"HIGH":
                conf2>=75||bearLayers>=2?"MEDIUM":"LOW";
       var strat2=death?"Death Cross + OI":
                  trappedPE?"PE Writer Squeeze":
@@ -2982,7 +3006,14 @@ function localSigs(){
       };
     }
 
-    if(sig)out.push(sig);
+    if(sig){
+      // Stamp cooldown so same symbol won't fire again for 30min (index) or 15min (stock)
+      if(!window._sigCooldown) window._sigCooldown = {};
+      if(!window._sigCooldownBias) window._sigCooldownBias = {};
+      window._sigCooldown[sig.sym] = Date.now();
+      window._sigCooldownBias[sig.sym] = sig.bias;
+      out.push(sig);
+    }
   });
 
   // Sort: HIGH urgency first, then by score
