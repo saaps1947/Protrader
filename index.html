@@ -1925,6 +1925,16 @@ function runScan(manual){
     // 5-min throttle prevents duplicate snapshots on back-to-back scans.
     safeTimeout(function(){
       if(!isOpen() && !isMCXOpen()) return;
+      // D2 FIX: Kite historical API publishes the 9:15 AM candle only AFTER
+      // 9:20 AM (end of the first 5-min bar). Any snapshot before 9:25 AM
+      // will have 0/55 SMA because no completed candles exist yet.
+      // Skip the very first scan snapshot — wait for second scan (9:30+ AM).
+      var ist = new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
+      var mkt_min = (ist.getHours()-9)*60 + ist.getMinutes(); // minutes since 9:00 AM
+      if(mkt_min < 25){ // before 9:25 AM IST — no candles available yet
+        console.log("[Snap] Skipped — too early ("+istTime()+"), Kite candles not ready");
+        return;
+      }
       var now=Date.now();
       if(now-_lastSnapTs < 295000) return; // 5-min throttle
       _lastSnapTs=now;
@@ -2561,17 +2571,27 @@ function localSigs(){
 
     // Per-symbol signal cooldown — prevents index chop from firing BULL then BEAR
     // every 5 minutes. Cooldown: 30 min for indices, 15 min for stocks.
-    // Uses _sigCooldown[sym] = last signal timestamp.
-    if(!window._sigCooldown) window._sigCooldown = {};
-    var cooldownMs = isIndex ? 30*60*1000 : 15*60*1000;
-    var lastSigTs  = window._sigCooldown[s.sym] || 0;
-    var inCooldown = (Date.now() - lastSigTs) < cooldownMs;
-    // Exception: direction FLIP (was BULL, now BEAR) always allowed regardless of cooldown
-    var lastSigBias = window._sigCooldownBias && window._sigCooldownBias[s.sym];
-    var existingSig = allSigs.filter(function(x){return x.sym===s.sym;})[0];
-    var isDirectionFlip = existingSig && lastSigBias &&
-                          ((bullScore>bearScore && lastSigBias==="BEARISH") ||
-                           (bearScore>bullScore && lastSigBias==="BULLISH"));
+    // Per-symbol signal cooldown — prevents chop signals every scan cycle.
+    // Cooldown: 30 min for indices, 15 min for stocks.
+    if(!window._sigCooldown)     window._sigCooldown     = {};
+    if(!window._sigCooldownPx)   window._sigCooldownPx   = {}; // price at last signal
+    if(!window._sigCooldownBias) window._sigCooldownBias = {};
+    var cooldownMs  = isIndex ? 30*60*1000 : 15*60*1000;
+    var lastSigTs   = window._sigCooldown[s.sym]   || 0;
+    var lastSigPx   = window._sigCooldownPx[s.sym] || 0;
+    var inCooldown  = (Date.now() - lastSigTs) < cooldownMs;
+    // Direction-flip exception: ONLY bypass cooldown if price has moved
+    // significantly since last signal (>0.4% for indices, >0.6% for stocks).
+    // Without this check, a single noisy scan fires BULL then BEAR then BULL
+    // in rapid succession as scores oscillate — each counted as a "flip".
+    var lastSigBias  = window._sigCooldownBias[s.sym] || "";
+    var curPx        = s.px || 0;
+    var pxMovePct    = lastSigPx>0 ? Math.abs(curPx-lastSigPx)/lastSigPx*100 : 0;
+    var minFlipMove  = isIndex ? 0.4 : 0.6; // % price move required to allow flip
+    var isFlipDir    = lastSigBias &&
+                       ((bullScore>bearScore && lastSigBias==="BEARISH") ||
+                        (bearScore>bullScore && lastSigBias==="BULLISH"));
+    var isDirectionFlip = isFlipDir && pxMovePct >= minFlipMove;
 
     // If contradiction warnings exist, raise the bar further
     var hasContradiction = bullReasons.some(function(r){return r.indexOf('⚠')===0;}) ||
@@ -2660,6 +2680,27 @@ function localSigs(){
     }
     if(bearScore>bullScore&&noTradeFor.indexOf("BUY_PE")>=0&&!bearSweep&&!trappedPE){
       noTradeReasons.push("Regime ("+regimeCode+") says avoid PE buying — "+regime.note);
+    }
+
+    // S2 FIX: Indices (NIFTY 0%, SENSEX 0% win rate in backtest) require MTF alignment.
+    // Stocks need just 1 confirming timeframe. Indices need ALL 3 (5m+15m+1h) aligned.
+    // Without this, a strong 5-min momentum spike on an index fires a signal even when
+    // the hourly trend is opposite — this is the main cause of index SL hits.
+    if(isIndex){
+      var tfAlign = s.tfAlignment||"";
+      var needsBull = bullScore>bearScore;
+      var needsBear = bearScore>bullScore;
+      var tfOk = (needsBull && (tfAlign==="STRONG_BULL"||tfAlign==="BULL")) ||
+                 (needsBear && (tfAlign==="STRONG_BEAR"||tfAlign==="BEAR"));
+      if(!tfOk && tfAlign && tfAlign!=="MIXED"){
+        noTradeReasons.push("Index MTF conflict: "+tfAlign+" trend vs "+
+          (needsBull?"BULLISH":"BEARISH")+" signal — require all 3 TF aligned");
+      }
+      // Additionally: for indices in choppy/MIXED MTF, require score >= 5
+      if(tfAlign==="MIXED" && Math.max(bullScore,bearScore) < 5){
+        noTradeReasons.push("Index in MIXED MTF — need score 5+ to trade, got "+
+          Math.max(bullScore,bearScore));
+      }
     }
 
     if(noTradeReasons.length>0){
@@ -3007,12 +3048,22 @@ function localSigs(){
     }
 
     if(sig){
-      // Stamp cooldown so same symbol won't fire again for 30min (index) or 15min (stock)
-      if(!window._sigCooldown) window._sigCooldown = {};
-      if(!window._sigCooldownBias) window._sigCooldownBias = {};
-      window._sigCooldown[sig.sym] = Date.now();
-      window._sigCooldownBias[sig.sym] = sig.bias;
-      out.push(sig);
+      // S3 FIX: Validate entry/SL are real numbers before pushing.
+      // calcRR() rarely returns stale/null prices — catch those here.
+      var entryNum = parseFloat(sig.entry);
+      var slNum    = parseFloat(sig.sl);
+      if(!entryNum || !slNum || isNaN(entryNum) || isNaN(slNum)){
+        console.warn("[Sig] "+sig.sym+" dropped — no valid entry/SL (entry="+sig.entry+" sl="+sig.sl+")");
+      } else {
+        // Stamp cooldown — price stored so direction-flip needs real price movement
+        if(!window._sigCooldown)     window._sigCooldown     = {};
+        if(!window._sigCooldownBias) window._sigCooldownBias = {};
+        if(!window._sigCooldownPx)   window._sigCooldownPx   = {};
+        window._sigCooldown[sig.sym]     = Date.now();
+        window._sigCooldownBias[sig.sym] = sig.bias;
+        window._sigCooldownPx[sig.sym]   = sig.px || 0;
+        out.push(sig);
+      }
     }
   });
 
@@ -4381,6 +4432,16 @@ window.onload=function(){
   if(SERVER_URL){
     // Ping first to start waking the server (Render free tier)
     try{fetch(SERVER_URL+"/ping",{signal:AbortSignal.timeout(5000)}).catch(function(){});}catch(e){}
+    // D4 FIX: Keepalive ping every 10 min to prevent Render free-tier sleep.
+    // Render spins down after ~15 min of inactivity. Without this, mid-session
+    // cold starts cause 35-symbol SMA dropouts (seen at 2:08 PM in data).
+    safeInterval(function(){
+      if(!SERVER_URL) return;
+      fetch(SERVER_URL+"/ping",{signal:AbortSignal.timeout(8000)})
+        .then(function(r){return r.json();})
+        .then(function(d){ console.log("[Keepalive] Server alive @ "+istTime()+" cache="+d.cache_keys); })
+        .catch(function(e){ console.warn("[Keepalive] Ping failed: "+e.message); });
+    }, 10*60*1000); // every 10 minutes
     // Fetch data immediately
     try{fetchFromServer();}catch(e){}
     setTimeout(function(){try{startPolling();}catch(e){}},2000);
