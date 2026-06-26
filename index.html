@@ -715,11 +715,21 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
     <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
       <div style="font-size:.72rem;font-weight:700;margin-bottom:6px">📂 Upload Candle CSV</div>
       <div style="font-size:.6rem;color:var(--m);margin-bottom:10px">Format: <span style="color:var(--b);font-family:monospace">timestamp,open,high,low,close,volume,symbol</span></div>
+      <!-- Step 1: Download candles from server -->
+      <div style="margin-bottom:10px">
+        <div style="font-size:.6rem;color:var(--m);font-weight:600;letter-spacing:.5px;margin-bottom:5px">STEP 1 — GET CANDLE FILE FROM YOUR SERVER</div>
+        <button onclick="rpDownloadCandles()" style="width:100%;padding:9px;background:rgba(99,102,241,.2);border:1px solid rgba(99,102,241,.4);color:#a5b4fc;border-radius:8px;font-size:.72rem;font-weight:700;cursor:pointer">
+          📥 Download Candles CSV (60 days · all symbols)
+        </button>
+        <div style="font-size:.58rem;color:var(--m);margin-top:4px">Hits your Render server — requires Kite connected. Takes ~30s. Saves to Files → Downloads.</div>
+      </div>
+      <!-- Step 2: Upload -->
+      <div style="font-size:.6rem;color:var(--m);font-weight:600;letter-spacing:.5px;margin-bottom:5px">STEP 2 — UPLOAD THE DOWNLOADED FILE</div>
       <label style="display:block;background:var(--bg3);border:1px dashed var(--border);border-radius:8px;padding:14px;text-align:center;cursor:pointer;font-size:.72rem;color:var(--m)">
-        <span id="rp-file-lbl">Tap to upload CSV</span>
+        <span id="rp-file-lbl">Tap to upload candle CSV</span>
         <input type="file" id="rp-file" accept=".csv" onchange="rpLoadFile(this)" style="display:none">
       </label>
-      <div id="rp-file-info" style="font-size:.6rem;color:var(--g);margin-top:6px;display:none"></div>
+      <div id="rp-file-info" style="font-size:.6rem;margin-top:6px;display:none"></div>
     </div>
     <!-- Config -->
     <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
@@ -1892,6 +1902,18 @@ function btSetMode(mode){
   document.getElementById("bt-mode-desc").textContent = desc;
 }
 
+// ── Download candles from server ───────────────────────────────
+function rpDownloadCandles(){
+  if(!SERVER_URL){toast("No server","Set server URL in Settings ⚙","ty");return;}
+  toast("Downloading…","Fetching 60-day candles from Kite — takes ~30s","tg");
+  var a=document.createElement("a");
+  a.href=SERVER_URL+"/export_candles";
+  a.download="protrader_candles_60d.csv";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){a.remove();},3000);
+}
+
 // ── File load ───────────────────────────────────────────────────
 function rpLoadFile(input){
   var f = input.files[0];
@@ -1901,6 +1923,18 @@ function rpLoadFile(input){
   reader.onload = function(e){
     var lines = e.target.result.trim().split("\n");
     var hdr = lines[0].split(",").map(function(s){return s.trim().toLowerCase();});
+    // Validate this is a candle CSV not a backtest report
+    var hasTs  = hdr.indexOf("timestamp")>=0 || hdr.indexOf("t")>=0;
+    var hasOHLC= hdr.indexOf("open")>=0 || hdr.indexOf("o")>=0;
+    var infoEl = document.getElementById("rp-file-info");
+    if(!hasTs || !hasOHLC){
+      infoEl.style.color="var(--r)";
+      infoEl.textContent="❌ Wrong file — this looks like a backtest/signal report, not a candle CSV. Use the Download Candles button below to get the right file.";
+      infoEl.style.display="block";
+      document.getElementById("rp-run").disabled=true;
+      _rpCandles=[];
+      return;
+    }
     _rpCandles = lines.slice(1).map(function(l){
       var v = l.split(",");
       var obj = {};
@@ -1915,12 +1949,19 @@ function rpLoadFile(input){
         sym: obj.symbol||obj.sym||"UNKNOWN",
       };
     }).filter(function(r){return r.t&&r.c;});
-    var info = _rpCandles.length.toLocaleString()+" candles · "+
-      new Set(_rpCandles.map(function(r){return r.sym;})).size+" symbols";
-    document.getElementById("rp-file-info").textContent = info;
-    document.getElementById("rp-file-info").style.display = "block";
-    document.getElementById("rp-run").disabled = false;
-    document.getElementById("rp-results").style.display = "none";
+    if(!_rpCandles.length){
+      infoEl.style.color="var(--r)";
+      infoEl.textContent="❌ No valid candle rows found. Check the file format matches: timestamp,open,high,low,close,volume,symbol";
+      infoEl.style.display="block";
+      document.getElementById("rp-run").disabled=true;
+      return;
+    }
+    var syms=new Set(_rpCandles.map(function(r){return r.sym;})).size;
+    infoEl.style.color="var(--g)";
+    infoEl.textContent="✅ "+_rpCandles.length.toLocaleString()+" candles · "+syms+" symbols — ready to replay";
+    infoEl.style.display="block";
+    document.getElementById("rp-run").disabled=false;
+    document.getElementById("rp-results").style.display="none";
   };
   reader.readAsText(f);
 }
