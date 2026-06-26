@@ -634,13 +634,18 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- BACKTEST -->
 <div class="sec" id="sec-bt">
-  <!-- Header -->
+  <!-- Header + mode toggle -->
   <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
-    <div style="font-size:.85rem;font-weight:800;margin-bottom:4px">🔬 Strategy Backtest</div>
-    <div style="font-size:.65rem;color:var(--m)">Tests technical layers only — SMA, RSI, VWAP, ORB, CPR, PDH/PDL, 15D Trend — using 60 days of Zerodha historical data. <span style="color:rgba(251,191,36,.7)">OI layer excluded</span> — requires intraday data. Use snapshot backtest (coming Jul) for full engine validation.</div>
+    <div style="font-size:.85rem;font-weight:800;margin-bottom:8px">🔬 Strategy Backtest</div>
+    <!-- Mode toggle -->
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <button id="bt-mode-server" onclick="btSetMode('server')" style="flex:1;padding:8px 6px;background:rgba(59,130,246,.25);border:1px solid rgba(59,130,246,.5);color:var(--b);border-radius:8px;font-size:.65rem;font-weight:700;cursor:pointer">📡 Server Backtest<br><span style="font-weight:400;opacity:.7">Kite candles · 60 days</span></button>
+      <button id="bt-mode-replay" onclick="btSetMode('replay')" style="flex:1;padding:8px 6px;background:var(--bg3);border:1px solid var(--border);color:var(--m);border-radius:8px;font-size:.65rem;font-weight:700;cursor:pointer">🔁 Local Replay<br><span style="font-weight:400;opacity:.7">Upload CSV · Full engine</span></button>
+    </div>
+    <div id="bt-mode-desc" style="font-size:.65rem;color:var(--m)">Tests technical layers only — SMA, RSI, VWAP, ORB, CPR, PDH/PDL, 15D Trend — using 60 days of Zerodha historical data. <span style="color:rgba(251,191,36,.7)">OI layer excluded</span> — requires intraday data.</div>
   </div>
   <!-- Config -->
-  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
+  <div class="bt-config-wrap"><div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
       <div>
         <div style="font-size:.6rem;color:var(--m);font-weight:600;margin-bottom:5px;letter-spacing:.5px">DAYS BACK</div>
@@ -676,7 +681,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
       </div>
       <div id="bt-prog-msg" style="font-size:.65rem;color:var(--m);text-align:center">Starting…</div>
     </div>
-  </div>
+  </div></div>
   <!-- Results -->
   <div id="bt-results" style="display:none">
     <!-- Export button -->
@@ -701,6 +706,67 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
     <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px">
       <div style="font-size:.72rem;font-weight:700;margin-bottom:8px">📋 Signal Log <span id="bt-sig-count" style="color:var(--m);font-weight:400"></span></div>
       <div id="bt-siglog"></div>
+    </div>
+  </div>
+
+  <!-- LOCAL REPLAY UI -->
+  <div id="bt-replay" style="display:none">
+    <!-- Upload -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
+      <div style="font-size:.72rem;font-weight:700;margin-bottom:6px">📂 Upload Candle CSV</div>
+      <div style="font-size:.6rem;color:var(--m);margin-bottom:10px">Format: <span style="color:var(--b);font-family:monospace">timestamp,open,high,low,close,volume,symbol</span></div>
+      <label style="display:block;background:var(--bg3);border:1px dashed var(--border);border-radius:8px;padding:14px;text-align:center;cursor:pointer;font-size:.72rem;color:var(--m)">
+        <span id="rp-file-lbl">Tap to upload CSV</span>
+        <input type="file" id="rp-file" accept=".csv" onchange="rpLoadFile(this)" style="display:none">
+      </label>
+      <div id="rp-file-info" style="font-size:.6rem;color:var(--g);margin-top:6px;display:none"></div>
+    </div>
+    <!-- Config -->
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <div style="font-size:.6rem;color:var(--m);font-weight:600;margin-bottom:5px;letter-spacing:.5px">MIN SCORE</div>
+          <select id="rp-score" style="width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;font-size:.72rem">
+            <option value="2">2 — Low</option>
+            <option value="3" selected>3 — Medium</option>
+            <option value="4">4 — High (index level)</option>
+            <option value="5">5 — Very High</option>
+          </select>
+        </div>
+        <div>
+          <div style="font-size:.6rem;color:var(--m);font-weight:600;margin-bottom:5px;letter-spacing:.5px">MIN CONFIDENCE</div>
+          <select id="rp-conf" style="width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px;border-radius:8px;font-size:.72rem">
+            <option value="62">62% — All signals</option>
+            <option value="74">74% — LOW+</option>
+            <option value="79" selected>79% — MEDIUM+</option>
+            <option value="82">82% — HIGH only</option>
+          </select>
+        </div>
+      </div>
+      <button id="rp-run" onclick="rpRun()" disabled style="width:100%;padding:10px;background:linear-gradient(135deg,rgba(34,197,94,.25),rgba(16,185,129,.25));border:1px solid rgba(34,197,94,.35);color:var(--g);border-radius:8px;font-size:.75rem;font-weight:800;cursor:pointer;letter-spacing:.5px">🔁 RUN REPLAY</button>
+      <!-- Progress -->
+      <div id="rp-prog-wrap" style="display:none;margin-top:10px">
+        <div style="height:4px;background:var(--bg3);border-radius:2px;margin-bottom:6px">
+          <div id="rp-prog-bar" style="height:100%;background:var(--g);border-radius:2px;width:0%;transition:width .3s"></div>
+        </div>
+        <div id="rp-prog-msg" style="font-size:.6rem;color:var(--m);text-align:center">Replaying…</div>
+      </div>
+    </div>
+    <!-- Results -->
+    <div id="rp-results" style="display:none">
+      <!-- Summary cards -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px" id="rp-cards"></div>
+      <!-- Sub-tabs -->
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:10px">
+        <div style="display:flex;border-bottom:1px solid var(--border);flex-wrap:wrap">
+          <button class="bt-dtab on" onclick="rpTab(this,'components')">Components</button>
+          <button class="bt-dtab" onclick="rpTab(this,'smc')">SMC</button>
+          <button class="bt-dtab" onclick="rpTab(this,'combos')">Combos</button>
+          <button class="bt-dtab" onclick="rpTab(this,'symbols')">Symbols</button>
+          <button class="bt-dtab" onclick="rpTab(this,'confidence')">Confidence</button>
+        </div>
+        <div id="rp-breakdown" style="padding:12px"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1793,6 +1859,681 @@ function exportBtReport(){
   setTimeout(function(){a.remove();},2000);
   toast("✅ Exported","Report saved → Files → Downloads","tg");
 }
+
+// ═══════════════════════════════════════════════════════════════
+// LOCAL REPLAY ENGINE
+// Mirrors live signal logic exactly — same scoring, same layers.
+// Runs entirely in the browser on uploaded candle CSV.
+// ═══════════════════════════════════════════════════════════════
+
+var _rpCandles = [];   // parsed candle rows
+var _rpResults = [];   // scored signal results
+var _rpRunning = false;
+
+// ── Mode toggle ─────────────────────────────────────────────────
+function btSetMode(mode){
+  var isServer = mode === "server";
+  // Config panels
+  document.querySelector(".bt-config-wrap").style.display = isServer ? "block" : "none";
+  document.getElementById("bt-results").style.display = "none";
+  document.getElementById("bt-replay").style.display = isServer ? "none" : "block";
+  // Button styles
+  var sBtn = document.getElementById("bt-mode-server");
+  var rBtn = document.getElementById("bt-mode-replay");
+  sBtn.style.background = isServer ? "rgba(59,130,246,.25)" : "var(--bg3)";
+  sBtn.style.borderColor = isServer ? "rgba(59,130,246,.5)" : "var(--border)";
+  sBtn.style.color = isServer ? "var(--b)" : "var(--m)";
+  rBtn.style.background = !isServer ? "rgba(34,197,94,.15)" : "var(--bg3)";
+  rBtn.style.borderColor = !isServer ? "rgba(34,197,94,.4)" : "var(--border)";
+  rBtn.style.color = !isServer ? "var(--g)" : "var(--m)";
+  var desc = isServer
+    ? "Tests technical layers only — SMA, RSI, VWAP, ORB, CPR, PDH/PDL, 15D Trend — using 60 days of Zerodha historical data. OI layer excluded."
+    : "Runs the FULL signal engine (SMC + all technical layers) locally on your uploaded candle CSV. No server needed. OI excluded — no historical OI available.";
+  document.getElementById("bt-mode-desc").textContent = desc;
+}
+
+// ── File load ───────────────────────────────────────────────────
+function rpLoadFile(input){
+  var f = input.files[0];
+  if(!f) return;
+  document.getElementById("rp-file-lbl").textContent = f.name;
+  var reader = new FileReader();
+  reader.onload = function(e){
+    var lines = e.target.result.trim().split("\n");
+    var hdr = lines[0].split(",").map(function(s){return s.trim().toLowerCase();});
+    _rpCandles = lines.slice(1).map(function(l){
+      var v = l.split(",");
+      var obj = {};
+      hdr.forEach(function(h,i){obj[h]=v[i]?v[i].trim():"";});
+      return {
+        t:   parseInt(obj.timestamp||obj.t||obj.date)||0,
+        o:   parseFloat(obj.open||obj.o)||0,
+        h:   parseFloat(obj.high||obj.h)||0,
+        l:   parseFloat(obj.low||obj.l)||0,
+        c:   parseFloat(obj.close||obj.c)||0,
+        v:   parseInt(obj.volume||obj.v)||0,
+        sym: obj.symbol||obj.sym||"UNKNOWN",
+      };
+    }).filter(function(r){return r.t&&r.c;});
+    var info = _rpCandles.length.toLocaleString()+" candles · "+
+      new Set(_rpCandles.map(function(r){return r.sym;})).size+" symbols";
+    document.getElementById("rp-file-info").textContent = info;
+    document.getElementById("rp-file-info").style.display = "block";
+    document.getElementById("rp-run").disabled = false;
+    document.getElementById("rp-results").style.display = "none";
+  };
+  reader.readAsText(f);
+}
+
+// ── Calc helpers ────────────────────────────────────────────────
+function _rpSMA(closes,n){
+  if(closes.length<n) return null;
+  return closes.slice(-n).reduce(function(a,b){return a+b;},0)/n;
+}
+function _rpRSI(closes,n){
+  n=n||14;
+  if(closes.length<n+1) return null;
+  var sl=closes.slice(-(n+1)), g=0, l=0;
+  for(var i=1;i<sl.length;i++){var d=sl[i]-sl[i-1]; if(d>0)g+=d; else l-=d;}
+  var ag=g/n, al=l/n;
+  return al===0?100:100-100/(1+ag/al);
+}
+function _rpVWAP(bars){
+  if(!bars.length) return null;
+  var last=bars[bars.length-1];
+  var dt=new Date(last.t*1000);
+  var ds=new Date(dt); ds.setUTCHours(3,45,0,0); // 9:15 IST
+  var today=bars.filter(function(b){return b.t*1000>=ds.getTime();});
+  if(!today.length) today=bars.slice(-30);
+  var spv=0,sv=0;
+  today.forEach(function(b){var tp=(b.h+b.l+b.c)/3; spv+=tp*b.v; sv+=b.v;});
+  return sv>0?spv/sv:null;
+}
+function _rpORB(bars){
+  if(!bars.length) return null;
+  var last=bars[bars.length-1];
+  var dt=new Date(last.t*1000);
+  var s=new Date(dt); s.setUTCHours(3,45,0,0);
+  var e=new Date(dt); e.setUTCHours(4,0,0,0);
+  var day=dt.toDateString();
+  var oc=bars.filter(function(b){
+    var d=new Date(b.t*1000);
+    return d>=s&&d<e&&d.toDateString()===day;
+  });
+  if(!oc.length) return null;
+  return {high:Math.max.apply(null,oc.map(function(b){return b.h;})),
+          low:Math.min.apply(null,oc.map(function(b){return b.l;}))};
+}
+function _rpCPR(prevBars){
+  if(!prevBars.length) return null;
+  var h=Math.max.apply(null,prevBars.map(function(b){return b.h;}));
+  var l=Math.min.apply(null,prevBars.map(function(b){return b.l;}));
+  var c=prevBars[prevBars.length-1].c;
+  var pivot=(h+l+c)/3, bc=(h+l)/2, tc=pivot*2-bc;
+  var w=Math.abs(tc-bc)/pivot*100;
+  return {pivot:pivot,bc:Math.min(tc,bc),tc:Math.max(tc,bc),width:w,type:w<0.2?"NARROW":"WIDE"};
+}
+
+// ── calc_smc (full port from server.py) ─────────────────────────
+function _rpCalcSMC(candles){
+  var n=candles.length;
+  if(n<15) return {};
+  var hs=candles.map(function(c){return c.h;});
+  var ls=candles.map(function(c){return c.l;});
+  var cs=candles.map(function(c){return c.c;});
+  var curr=cs[n-1];
+  // ATR
+  var trs=[];
+  for(var i=1;i<Math.min(21,n);i++)
+    trs.push(Math.max(hs[n-i]-ls[n-i],Math.abs(hs[n-i]-cs[n-i-1]),Math.abs(ls[n-i]-cs[n-i-1])));
+  var atr=trs.length?trs.reduce(function(a,b){return a+b;})/trs.length:1;
+  // Pivots
+  function findPvt(sz){
+    var ph=[],pl=[];
+    for(var i=sz;i<n-sz;i++){
+      var isH=true,isL=true;
+      for(var j=1;j<=sz;j++){
+        if(hs[i]<hs[i-j]||hs[i]<hs[i+j])isH=false;
+        if(ls[i]>ls[i-j]||ls[i]>ls[i+j])isL=false;
+      }
+      if(isH)ph.push([i,hs[i]]);
+      if(isL)pl.push([i,ls[i]]);
+    }
+    return [ph,pl];
+  }
+  var intPvt=findPvt(5), swgPvt=findPvt(20);
+  var intH=intPvt[0],intL=intPvt[1],swgH=swgPvt[0],swgL=swgPvt[1];
+  // Structure
+  function detectStruct(ph,pl){
+    var evts=[];
+    if(!ph.length||!pl.length) return [evts,"UNKNOWN"];
+    var lsh=ph[ph.length-1][1],psh=ph.length>=2?ph[ph.length-2][1]:0;
+    var lsl=pl[pl.length-1][1],psl=pl.length>=2?pl[pl.length-2][1]:0;
+    var trend=(lsh>psh&&lsl>psl)?"BULLISH":(lsh<psh&&lsl<psl)?"BEARISH":"NEUTRAL";
+    ph.slice(-3).forEach(function(p){
+      if(curr>p[1]){var t=trend==="BULLISH"?"BOS":"CHoCH";evts.push({type:t,bias:"BULLISH",level:Math.round(p[1]*100)/100,significance:t==="CHoCH"?3:1});}
+    });
+    pl.slice(-3).forEach(function(p){
+      if(curr<p[1]){var t=trend==="BEARISH"?"BOS":"CHoCH";evts.push({type:t,bias:"BEARISH",level:Math.round(p[1]*100)/100,significance:t==="CHoCH"?3:1});}
+    });
+    return [evts,trend];
+  }
+  var ir=detectStruct(intH,intL),sr=detectStruct(swgH,swgL);
+  var allEvts=ir[0].concat(sr[0]);
+  var swgTrend=sr[1],intTrend=ir[1];
+  var structure=swgTrend!=="NEUTRAL"?swgTrend:intTrend;
+  // Strong/Weak levels
+  var strongHigh=null,strongLow=null;
+  if(swgH.length){var p=swgH[swgH.length-1][1]; if(swgTrend==="BEARISH")strongHigh=Math.round(p*100)/100;}
+  if(swgL.length){var p=swgL[swgL.length-1][1]; if(swgTrend==="BULLISH")strongLow=Math.round(p*100)/100;}
+  // EQH/EQL
+  var eqT=atr*0.5,eqh=[],eql=[];
+  for(var i=1;i<swgH.length;i++){
+    var p1=swgH[i-1][1],p2=swgH[i][1];
+    if(Math.abs(p1-p2)<eqT){var lv=Math.max(p1,p2);var sw=hs.slice(swgH[i][0]).some(function(h){return h>lv*1.001;});eqh.push({level:Math.round(lv*100)/100,swept:sw});}
+  }
+  for(var i=1;i<swgL.length;i++){
+    var p1=swgL[i-1][1],p2=swgL[i][1];
+    if(Math.abs(p1-p2)<eqT){var lv=Math.min(p1,p2);var sw=ls.slice(swgL[i][0]).some(function(l){return l<lv*0.999;});eql.push({level:Math.round(lv*100)/100,swept:sw});}
+  }
+  // FVGs
+  var fvgs=[];
+  for(var i=1;i<n-1;i++){
+    var prev=candles[i-1],c=candles[i],nxt=candles[i+1];
+    if(prev.h<nxt.l){var sz=(nxt.l-prev.h)/c.c*100;if(sz>0.05){var filled=candles.slice(i+1).some(function(b){return b.l<=prev.h;});if(!filled)fvgs.push({type:"BULLISH",top:Math.round(nxt.l*100)/100,bot:Math.round(prev.h*100)/100,mid:Math.round((nxt.l+prev.h)/2*100)/100,filled:false});}}
+    if(prev.l>nxt.h){var sz=(prev.l-nxt.h)/c.c*100;if(sz>0.05){var filled=candles.slice(i+1).some(function(b){return b.h>=prev.l;});if(!filled)fvgs.push({type:"BEARISH",top:Math.round(prev.l*100)/100,bot:Math.round(nxt.h*100)/100,mid:Math.round((prev.l+nxt.h)/2*100)/100,filled:false});}}
+  }
+  // OBs
+  var obs=[];
+  for(var i=2;i<n-3;i++){
+    var c=candles[i],cn=candles[i+1];
+    var bc=Math.abs(c.c-c.o),bcn=Math.abs(cn.c-cn.o);
+    if(!bc) continue;
+    if(c.c<c.o&&cn.c>cn.o&&bcn>bc*1.3){var hi=Math.round(Math.max(c.o,c.c)*100)/100,lo=Math.round(Math.min(c.o,c.c)*100)/100;var mit=candles.slice(i+2).some(function(b){return b.l<lo;});if(!mit)obs.push({type:"BULLISH",high:hi,low:lo,mid:Math.round((hi+lo)/2*100)/100,mitigated:false});}
+    if(c.c>c.o&&cn.c<cn.o&&bcn>bc*1.3){var hi=Math.round(Math.max(c.o,c.c)*100)/100,lo=Math.round(Math.min(c.o,c.c)*100)/100;var mit=candles.slice(i+2).some(function(b){return b.h>hi;});if(!mit)obs.push({type:"BEARISH",high:hi,low:lo,mid:Math.round((hi+lo)/2*100)/100,mitigated:false});}
+  }
+  // Sweeps
+  var sweeps=eqh.filter(function(e){return e.swept;}).map(function(e){return{type:"BULL_SWEEP",level:e.level};})
+    .concat(eql.filter(function(e){return e.swept;}).map(function(e){return{type:"BEAR_SWEEP",level:e.level};}));
+  // Zone
+  var shv=swgH.length?Math.max.apply(null,swgH.map(function(p){return p[1];})):Math.max.apply(null,hs);
+  var slv=swgL.length?Math.min.apply(null,swgL.map(function(p){return p[1];})):Math.min.apply(null,ls);
+  var eq=(shv+slv)/2;
+  var zone=curr>eq*1.005?"PREMIUM":curr<eq*0.995?"DISCOUNT":"EQUILIBRIUM";
+  return {
+    structure:structure,int_trend:intTrend,swg_trend:swgTrend,all_events:allEvts,
+    strong_high:strongHigh,strong_low:strongLow,eqh:eqh,eql:eql,
+    fvg:fvgs.filter(function(f){return f.type==="BULLISH";}).slice(-3).concat(fvgs.filter(function(f){return f.type==="BEARISH";}).slice(-3)),
+    ob:obs.filter(function(o){return o.type==="BULLISH";}).slice(-3).concat(obs.filter(function(o){return o.type==="BEARISH";}).slice(-3)),
+    sweep:sweeps,zone:zone,equilibrium:Math.round(eq*100)/100,
+  };
+}
+
+// ── scoreBar — EXACT mirror of live localSigs scoring ────────────
+function _rpScoreBar(bar, prevBars, prevDayBars){
+  var closes=prevBars.map(function(b){return b.c;}).concat([bar.c]);
+  var px=bar.c;
+  var sma20=_rpSMA(closes,20), sma50=_rpSMA(closes,50);
+  var rsi=_rpRSI(closes);
+  var vwap=_rpVWAP(prevBars.concat([bar]));
+  var orb=_rpORB(prevBars.concat([bar]));
+  var cpr=_rpCPR(prevDayBars);
+  var aboveSma20=sma20&&px>sma20, aboveSma50=sma50&&px>sma50;
+  var aboveVwap=vwap&&px>vwap, belowVwap=vwap&&px<vwap, atVwap=vwap&&Math.abs(px-vwap)/vwap<0.001;
+  var vwapReclaim=aboveVwap&&bar.c>bar.o, vwapReject=belowVwap&&bar.c<bar.o;
+  var orbBreakout=orb&&px>orb.high, orbBreakdown=orb&&px<orb.low;
+  var dt=new Date(bar.t*1000);
+  var istH=Math.floor(((bar.t%86400)+19800)/3600)%24; // IST hour
+  var orbEarly=istH<11, orbMid=istH>=11&&istH<14;
+  var cprNarrow=cpr&&cpr.type==="NARROW", aboveTC=cpr&&px>cpr.tc, belowBC=cpr&&px<cpr.bc;
+  // 15D trend from prevDayBars daily closes
+  var dCloses=prevDayBars.map(function(b){return b.c;}).slice(-15);
+  var trend15="NEUTRAL";
+  if(dCloses.length>=5){
+    var s5=dCloses.slice(-5).reduce(function(a,b){return a+b;})/5;
+    var s10=dCloses.slice(-10).reduce(function(a,b){return a+b;})/Math.min(10,dCloses.length);
+    var up=dCloses.slice(1).filter(function(c,i){return c>dCloses[i];}).length;
+    var pct=up/(dCloses.length-1)*100;
+    trend15=s5>s10&&pct>60?"STRONG_BULL":s5>s10?"BULL":s5<s10&&pct<40?"STRONG_BEAR":s5<s10?"BEAR":"NEUTRAL";
+  }
+  var hhHl=trend15==="STRONG_BULL", lhLl=trend15==="STRONG_BEAR";
+  // Volume
+  var vols=prevBars.slice(-20).map(function(b){return b.v;});
+  var avgVol=vols.length?vols.reduce(function(a,b){return a+b;})/vols.length:1;
+  var volRatio=bar.v/avgVol;
+  var volExpanding=volRatio>1.2, volDrying=volRatio<0.5;
+  // Crossover
+  var prevC22=closes.slice(-22,-2);
+  var ps20=prevC22.length>=20?prevC22.slice(-20).reduce(function(a,b){return a+b;})/20:null;
+  var golden=sma20&&sma50&&ps20&&ps20<sma50&&sma20>sma50;
+  var death=sma20&&sma50&&ps20&&ps20>sma50&&sma20<sma50;
+  var trendBull=sma20&&sma50&&sma20>sma50, trendBear=sma20&&sma50&&sma20<sma50;
+  // RSI zones
+  var rsiOS=rsi&&rsi<32, rsiOB=rsi&&rsi>68;
+  var rsiBull=rsi&&rsi>=35&&rsi<=55&&aboveSma20, rsiBear=rsi&&rsi>=45&&rsi<=65&&!aboveSma20;
+  // Breakout/down (today range)
+  var todayH=Math.max.apply(null,prevBars.slice(-78).map(function(b){return b.h;}));
+  var todayL=Math.min.apply(null,prevBars.slice(-78).map(function(b){return b.l;}));
+  var breakout=todayH>0&&px>=todayH*0.998&&aboveSma20;
+  var breakdown=todayL>0&&px<=todayL*1.002&&!aboveSma20;
+  // PDH/PDL from prev day
+  var pdh=prevDayBars.length?Math.max.apply(null,prevDayBars.map(function(b){return b.h;})):0;
+  var pdl=prevDayBars.length?Math.min.apply(null,prevDayBars.map(function(b){return b.l;})):0;
+  var abovePdh=pdh&&px>pdh*1.001, belowPdl=pdl&&px<pdl*0.999;
+  var nearPdh=pdh&&Math.abs(px-pdh)/pdh<0.002, nearPdl=pdl&&Math.abs(px-pdl)/pdl<0.002;
+  // ATR wall proximity
+  var atrPct=1.5; // default — avg_range_pct not available from candle CSV
+  var wallProxPct=Math.min(1.5,Math.max(0.3,atrPct*0.2))/100;
+  // SMC
+  var smcBars=prevBars.slice(-99).concat([bar]);
+  var smc=_rpCalcSMC(smcBars);
+  var allEvts=smc.all_events||[];
+  var bullCHoCH=allEvts.some(function(e){return e.type==="CHoCH"&&e.bias==="BULLISH";});
+  var bearCHoCH=allEvts.some(function(e){return e.type==="CHoCH"&&e.bias==="BEARISH";});
+  var bullBOS=allEvts.some(function(e){return e.type==="BOS"&&e.bias==="BULLISH";})&&!bullCHoCH;
+  var bearBOS=allEvts.some(function(e){return e.type==="BOS"&&e.bias==="BEARISH";})&&!bearCHoCH;
+  var swgTrend=smc.swg_trend||"", intTrend=smc.int_trend||"";
+  var bullStructure=swgTrend==="BULLISH"||smc.structure==="BULLISH";
+  var bearStructure=swgTrend==="BEARISH"||smc.structure==="BEARISH";
+  var dualBull=bullStructure&&intTrend==="BULLISH", dualBear=bearStructure&&intTrend==="BEARISH";
+  var obs=smc.ob||[];
+  var bullOB=obs.some(function(o){return o.type==="BULLISH"&&!o.mitigated&&px>o.low&&px<o.high*1.01;});
+  var bearOB=obs.some(function(o){return o.type==="BEARISH"&&!o.mitigated&&px<o.high&&px>o.low*0.99;});
+  var nsBullOB=obs.some(function(o){return o.type==="BULLISH"&&!o.mitigated&&Math.abs(px-o.mid)/o.mid<0.003;});
+  var nsBearOB=obs.some(function(o){return o.type==="BEARISH"&&!o.mitigated&&Math.abs(px-o.mid)/o.mid<0.003;});
+  var fvgs=smc.fvg||[];
+  var bullFVG=fvgs.some(function(f){return f.type==="BULLISH"&&!f.filled&&px>f.bot&&px<f.top*1.02;});
+  var bearFVG=fvgs.some(function(f){return f.type==="BEARISH"&&!f.filled&&px<f.top&&px>f.bot*0.98;});
+  var sweeps=smc.sweep||[];
+  var bullSweep=sweeps.some(function(s){return s.type==="BEAR_SWEEP";});
+  var bearSweep=sweeps.some(function(s){return s.type==="BULL_SWEEP";});
+  var eqh=smc.eqh||[], eql=smc.eql||[];
+  var unswEQL=eql.filter(function(e){return !e.swept&&e.level<px;});
+  var unswEQH=eqh.filter(function(e){return !e.swept&&e.level>px;});
+  var nearStrLow=smc.strong_low&&Math.abs(px-smc.strong_low)/smc.strong_low<0.003;
+  var nearStrHigh=smc.strong_high&&Math.abs(px-smc.strong_high)/smc.strong_high<0.003;
+  var smcZone=smc.zone||"EQUILIBRIUM", eq=smc.equilibrium||0;
+
+  var bull=0,bear=0;
+  var comp={};
+
+  // ── SMC scoring (capped at 5) ──
+  var smcB=0,smcBr=0;
+  if(bullCHoCH){smcB+=3;} if(bearCHoCH){smcBr+=3;}
+  if(bullBOS){smcB+=1;}    if(bearBOS){smcBr+=1;}
+  if(dualBull){smcB+=1;}   if(dualBear){smcBr+=1;}
+  if(nsBullOB){smcB+=3;} else if(bullOB){smcB+=2;}
+  if(nsBearOB){smcBr+=3;} else if(bearOB){smcBr+=2;}
+  if(bullFVG){smcB+=2;}    if(bearFVG){smcBr+=2;}
+  if(bullSweep){smcB+=2;}  if(bearSweep){smcBr+=2;}
+  if(unswEQL.length){smcB+=1;} if(unswEQH.length){smcBr+=1;}
+  if(nearStrLow){smcB+=2;} if(nearStrHigh){smcBr+=2;}
+  if(smcZone==="DISCOUNT"){smcB+=2;smcBr=Math.max(0,smcBr-1);}
+  else if(smcZone==="PREMIUM"){smcBr+=2;smcB=Math.max(0,smcB-1);}
+  smcB=Math.min(smcB,5); smcBr=Math.min(smcBr,5);
+  bull+=smcB; bear+=smcBr;
+  comp.smcChoch=bullCHoCH?3:bearCHoCH?-3:0;
+  comp.smcOB=nsBullOB?3:bullOB?2:nsBearOB?-3:bearOB?-2:0;
+  comp.smcFVG=bullFVG?2:bearFVG?-2:0;
+  comp.smcSweep=bullSweep?2:bearSweep?-2:0;
+  comp.smcZone=smcZone==="DISCOUNT"?2:smcZone==="PREMIUM"?-2:0;
+  comp.smcBOS=bullBOS?1:bearBOS?-1:0;
+
+  // ── 15D Trend (+3/+2, counter-trend -2) ──
+  if(trend15==="STRONG_BULL"||hhHl){bull+=3;comp.trend15=3;}
+  else if(trend15==="BULL"){bull+=2;comp.trend15=2;}
+  else if(trend15==="STRONG_BEAR"||lhLl){bear+=3;comp.trend15=-3;}
+  else if(trend15==="BEAR"){bear+=2;comp.trend15=-2;}
+  else comp.trend15=0;
+
+  // ── OI confirmations (no historical OI — skipped) ──
+  comp.pcr=0; comp.ceWall=0; comp.peWall=0; comp.writer=0;
+
+  // ── Technicals ──
+  // Golden/Death Cross (+2 each — FIX 2)
+  if(golden){bull+=2;comp.golden=2;} else comp.golden=0;
+  if(death){bear+=2;comp.death=2;}  else comp.death=0;
+  // Breakout/breakdown (+3)
+  if(breakout){bull+=3;comp.breakout=3;} else comp.breakout=0;
+  if(breakdown){bear+=3;comp.breakdown=3;} else comp.breakdown=0;
+  // SMA trend
+  if(trendBull&&aboveSma50){bull+=1;comp.smaTrend=1;}
+  else if(trendBear&&!aboveSma50){bear+=1;comp.smaTrend=-1;}
+  else comp.smaTrend=0;
+  // Above both SMAs
+  if(aboveSma20&&aboveSma50){bull+=1;comp.aboveBothSma=1;}
+  else if(!aboveSma20&&!aboveSma50){bear+=1;comp.aboveBothSma=-1;}
+  else comp.aboveBothSma=0;
+  // RSI
+  if(rsiOS&&aboveSma20){bull+=2;comp.rsi=2;}
+  else if(rsiBull){bull+=1;comp.rsi=1;}
+  else if(rsiOB&&!aboveSma20){bear+=2;comp.rsi=-2;}
+  else if(rsiBear){bear+=1;comp.rsi=-1;}
+  else comp.rsi=0;
+  // SMC structure label
+  if(bullStructure){bull+=1;} if(bearStructure){bear+=1;}
+
+  // ── VWAP (FIX 3: above/below +1, reclaim/reject +2) ──
+  if(aboveVwap&&!atVwap){bull+=1;comp.vwap=1;}
+  else if(belowVwap&&!atVwap){bear+=1;comp.vwap=-1;}
+  else comp.vwap=0;
+  if(vwapReclaim){bull+=2;comp.vwapEvent=2;}
+  else if(vwapReject){bear+=2;comp.vwapEvent=-2;}
+  else comp.vwapEvent=0;
+  if(atVwap){bull+=1;bear+=1;}
+
+  // ── CPR ──
+  if(cprNarrow&&aboveTC){bull+=2;comp.cpr=2;}
+  else if(cprNarrow&&belowBC){bear+=2;comp.cpr=-2;}
+  else comp.cpr=0;
+
+  // ── ORB (tiered) ──
+  if(orbBreakout){
+    var s=orbEarly?(volExpanding?3:2):orbMid?(volExpanding?2:1):1;
+    bull+=s; comp.orb=s;
+  } else if(orbBreakdown){
+    var s=orbEarly?(volExpanding?3:2):orbMid?(volExpanding?2:1):1;
+    bear+=s; comp.orb=-s;
+  } else comp.orb=0;
+  // Failed ORB
+  if(orb&&!orbBreakout&&!orbBreakdown&&px>orb.low&&px<orb.high){comp.orbFail=0;}
+
+  // ── PDH/PDL ──
+  if(abovePdh&&volExpanding){bull+=2;comp.pdh=2;}
+  else if(abovePdh){bull+=1;comp.pdh=1;}
+  else if(nearPdh&&!abovePdh){bear+=1;comp.pdh=-1;}
+  else comp.pdh=0;
+  if(belowPdl&&volExpanding){bear+=2;comp.pdl=2;}
+  else if(belowPdl){bear+=1;comp.pdl=1;}
+  else if(nearPdl&&!belowPdl){bull+=1;comp.pdl=-1;}
+  else comp.pdl=0;
+
+  // ── Volume ──
+  if(volExpanding&&aboveSma20){bull+=1;comp.vol=1;}
+  else if(volExpanding&&!aboveSma20){bear+=1;comp.vol=-1;}
+  else comp.vol=0;
+  // Contradiction: breakout on drying volume
+  if(breakout&&volDrying){bull=Math.max(0,bull-4);}
+  if(breakdown&&volDrying){bear=Math.max(0,bear-4);}
+  // ORB break low volume
+  if(orbBreakout&&!volExpanding&&volRatio<0.8){bull=Math.max(0,bull-3);}
+  if(orbBreakdown&&!volExpanding&&volRatio<0.8){bear=Math.max(0,bear-3);}
+
+  // ── Counter-trend penalty ──
+  if((trend15==="STRONG_BULL"||trend15==="BULL")&&bear>bull) bear=Math.max(0,bear-2);
+  if((trend15==="STRONG_BEAR"||trend15==="BEAR")&&bull>bear) bull=Math.max(0,bull-2);
+
+  // ── Triple alignment bonus (+3) ──
+  var oiBull=false; // no OI in replay
+  var vwapBull=aboveVwap||vwapReclaim, vwapBear=belowVwap||vwapReject;
+  var structBull=bullStructure||bullOB||bullSweep, structBear=bearStructure||bearOB||bearSweep;
+  if(vwapBull&&structBull){bull+=1;}  // double (no OI available)
+  if(vwapBear&&structBear){bear+=1;}
+
+  // ── Regime boost (simplified — no server regime in replay) ──
+  // Derive basic regime from trend15 + SMA
+  var regBull=trend15==="STRONG_BULL"||trend15==="BULL";
+  var regBear=trend15==="STRONG_BEAR"||trend15==="BEAR";
+  if(regBull&&aboveSma20&&aboveSma50){bull+=1;}
+  if(regBear&&!aboveSma20&&!aboveSma50){bear+=1;}
+
+  // ── RSI contradiction penalties ──
+  if(rsiOB&&trendBull&&!bullSweep) bull=Math.max(0,bull-2);
+  if(rsiOS&&trendBear&&!bearSweep) bear=Math.max(0,bear-2);
+
+  // ── Choppy detection (simple: trend neutral + both RSI zones absent) ──
+  var isChoppy=trend15==="NEUTRAL"&&!rsiOS&&!rsiOB&&!trendBull&&!trendBear;
+  if(isChoppy){bull=Math.max(0,bull-2);bear=Math.max(0,bear-2);}
+
+  // ── Direction & confidence (FIX 4 formula: ×2.5, cap 97) ──
+  var minSc=3;
+  var bias="NEUTRAL";
+  if(bull>bear&&bull>=minSc) bias="BULL";
+  else if(bear>bull&&bear>=minSc) bias="BEAR";
+  var winSc=bias==="BULL"?bull:bear, loseSc=bias==="BULL"?bear:bull;
+  var conf=Math.min(97,Math.max(62,68+winSc*2.5-loseSc*2));
+  // Category diversity cap (no OI → max 82)
+  var bullLayers=0,bearLayers=0;
+  if(comp.smcChoch||comp.smcOB||comp.smcFVG||comp.smcSweep||comp.smcZone){bullLayers++;bearLayers++;}
+  if(aboveVwap||orbBreakout||bullOB){bullLayers++;} if(belowVwap||orbBreakdown||bearOB){bearLayers++;}
+  if(golden||breakout||rsiOS||trendBull){bullLayers++;} if(death||breakdown||rsiOB||trendBear){bearLayers++;}
+  var layers=bias==="BULL"?bullLayers:bearLayers;
+  if(layers<2) conf=Math.min(conf,74);
+  conf=Math.min(conf,82); // no OI → max 82 (FIX 4 category gate)
+
+  return {t:bar.t,px:px,bias:bias,bull:bull,bear:bear,score:winSc,conf:Math.round(conf),
+    comp:comp,trend15:trend15,smcZone:smcZone,orbBreakout:orbBreakout,orbBreakdown:orbBreakdown,
+    vwapState:aboveVwap?"ABOVE":belowVwap?"BELOW":"AT",volRatio:Math.round(volRatio*100)/100};
+}
+
+// ── Outcome checker ─────────────────────────────────────────────
+function _rpOutcome(bias, entryBar, futureBars){
+  if(!futureBars.length||bias==="NEUTRAL") return {result:"OPEN",pct:0};
+  var e=entryBar.c, sl=0.005, t1=0.008;
+  for(var i=0;i<Math.min(futureBars.length,24);i++){
+    var b=futureBars[i];
+    if(bias==="BULL"){if(b.l<=e*(1-sl))return{result:"LOSS",pct:-sl*100};if(b.h>=e*(1+t1))return{result:"WIN",pct:+t1*100};}
+    else{if(b.h>=e*(1+sl))return{result:"LOSS",pct:-sl*100};if(b.l<=e*(1-t1))return{result:"WIN",pct:+t1*100};}
+  }
+  var fin=futureBars[Math.min(23,futureBars.length-1)].c;
+  var pct=bias==="BULL"?(fin-e)/e*100:(e-fin)/e*100;
+  return{result:pct>0?"WIN":"LOSS",pct:Math.round(pct*100)/100};
+}
+
+// ── Main replay runner ──────────────────────────────────────────
+function rpRun(){
+  if(!_rpCandles.length||_rpRunning) return;
+  var minScore=parseInt(document.getElementById("rp-score").value);
+  var minConf=parseInt(document.getElementById("rp-conf").value);
+  _rpRunning=true; _rpResults=[];
+  document.getElementById("rp-run").disabled=true;
+  document.getElementById("rp-prog-wrap").style.display="block";
+  document.getElementById("rp-results").style.display="none";
+  document.getElementById("rp-prog-bar").style.width="0%";
+
+  var syms=[...new Set(_rpCandles.map(function(c){return c.sym;}))];
+  var total=syms.length, done=0;
+
+  function processSym(si){
+    if(si>=syms.length){
+      _rpRunning=false;
+      document.getElementById("rp-run").disabled=false;
+      document.getElementById("rp-prog-wrap").style.display="none";
+      _rpRenderResults();
+      return;
+    }
+    var sym=syms[si];
+    var sc=_rpCandles.filter(function(c){return c.sym===sym;}).sort(function(a,b){return a.t-b.t;});
+    // Group by day
+    var dayMap={};
+    sc.forEach(function(c){
+      var d=new Date(c.t*1000); d.setUTCHours(0,0,0,0);
+      var dk=d.toISOString().slice(0,10);
+      if(!dayMap[dk])dayMap[dk]=[];
+      dayMap[dk].push(c);
+    });
+    var days=Object.keys(dayMap).sort();
+    for(var di=1;di<days.length;di++){
+      var prevDay=dayMap[days[di-1]];
+      var today=dayMap[days[di]];
+      for(var bi=50;bi<today.length;bi++){
+        var bar=today[bi];
+        var prev=prevDay.slice(-30).concat(today.slice(0,bi));
+        var scored=_rpScoreBar(bar,prev,prevDay);
+        if(scored.bias==="NEUTRAL") continue;
+        if(scored.score<minScore) continue;
+        if(scored.conf<minConf) continue;
+        var outcome=_rpOutcome(scored.bias,bar,today.slice(bi+1));
+        _rpResults.push(Object.assign({sym:sym,day:days[di]},scored,outcome));
+      }
+    }
+    done++;
+    document.getElementById("rp-prog-bar").style.width=Math.round(done/total*100)+"%";
+    document.getElementById("rp-prog-msg").textContent="Replaying "+sym+"… ("+done+"/"+total+")";
+    setTimeout(function(){processSym(si+1);},0);
+  }
+  processSym(0);
+}
+
+// ── Render results ──────────────────────────────────────────────
+function _rpWR(arr){
+  var cl=arr.filter(function(r){return r.result!=="OPEN";});
+  return cl.length?Math.round(cl.filter(function(r){return r.result==="WIN";}).length/cl.length*100):0;
+}
+function _rpWRColor(wr){return wr>=30?"var(--g)":wr>=20?"var(--y)":"var(--r)";}
+function _rpCard(lbl,val,col){
+  return "<div style='background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center'>"+
+    "<div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:.5px;margin-bottom:4px'>"+lbl+"</div>"+
+    "<div style='font-size:1rem;font-weight:800;color:"+col+"'>"+val+"</div></div>";
+}
+
+function _rpRenderResults(){
+  document.getElementById("rp-results").style.display="block";
+  var r=_rpResults;
+  var cl=r.filter(function(x){return x.result!=="OPEN";});
+  var wr=_rpWR(r);
+  var wins=cl.filter(function(x){return x.result==="WIN";}).length;
+  var losses=cl.filter(function(x){return x.result==="LOSS";}).length;
+  var avgPnl=cl.length?Math.round(cl.reduce(function(a,b){return a+b.pct;},0)/cl.length*100)/100:0;
+  document.getElementById("rp-cards").innerHTML=
+    _rpCard("Signals",r.length,"var(--b)")+
+    _rpCard("Win Rate",wr+"%",_rpWRColor(wr))+
+    _rpCard("W/L",wins+"/"+losses,"var(--t)")+
+    _rpCard("Avg P&L",avgPnl+"%",avgPnl>0?"var(--g)":"var(--r)")+
+    _rpCard("Bull",r.filter(function(x){return x.bias==="BULL";}).length+" ("+_rpWR(r.filter(function(x){return x.bias==="BULL";}))+"%)","var(--g)")+
+    _rpCard("Bear",r.filter(function(x){return x.bias==="BEAR";}).length+" ("+_rpWR(r.filter(function(x){return x.bias==="BEAR";}))+"%)","var(--r)");
+  rpTab(document.querySelector(".bt-dtab.on")||document.querySelector(".bt-dtab"),"components");
+}
+
+function rpTab(el,key){
+  document.querySelectorAll("#bt-replay .bt-dtab").forEach(function(b){b.classList.remove("on");});
+  if(el) el.classList.add("on");
+  _rpRenderBreakdown(key);
+}
+
+function _rpRenderBreakdown(key){
+  var r=_rpResults;
+  if(!r.length){document.getElementById("rp-breakdown").innerHTML="<div style='color:var(--m);font-size:.7rem;padding:12px;text-align:center'>Run replay first</div>";return;}
+  var html="";
+
+  if(key==="components"){
+    var comps=[
+      ["trend15","15D Trend"],["rsi","RSI"],["vwap","VWAP (state)"],
+      ["vwapEvent","VWAP Reclaim/Reject"],["orb","ORB"],["cpr","CPR"],
+      ["smaTrend","SMA Trend"],["breakout","Breakout/down"],["vol","Volume"],
+      ["golden","Golden/Death Cross"],["pdh","PDH/PDL"],
+      ["smcChoch","SMC CHoCH"],["smcOB","SMC Order Block"],
+      ["smcFVG","SMC FVG"],["smcSweep","SMC Sweep"],
+      ["smcZone","SMC Zone"],["smcBOS","SMC BOS"],
+    ];
+    html="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>Edge = Win Rate WITH − WITHOUT. Higher = genuinely predictive. Negative = noise or hurts.</div>";
+    comps.forEach(function(c){
+      var k=c[0],lbl=c[1];
+      var with_=r.filter(function(x){return Math.abs(x.comp[k]||0)>0;});
+      var without_=r.filter(function(x){return !x.comp[k];});
+      if(with_.length<5) return;
+      var ww=_rpWR(with_),wo=_rpWR(without_),edge=ww-wo;
+      var ec=edge>5?"var(--g)":edge>0?"var(--y)":"var(--r)";
+      html+="<div class='bt-row'><div class='k'>"+lbl+"</div>"+
+        "<div style='display:flex;gap:10px;font-size:.62rem;text-align:right'>"+
+        "<span style='color:var(--m)'>n="+with_.length+"</span>"+
+        "<span style='color:"+_rpWRColor(ww)+"'>with:"+ww+"%</span>"+
+        "<span style='color:var(--m)'>wo:"+wo+"%</span>"+
+        "<span style='color:"+ec+";font-weight:700'>"+(edge>0?"+":"")+edge+"pp</span>"+
+        "<span style='font-size:.55rem;color:var(--m)'>"+(edge>8?"🟢 Strong":edge>3?"🟡 Moderate":edge>0?"⚪ Weak":"🔴 Noise")+"</span>"+
+        "</div></div>";
+    });
+  } else if(key==="smc"){
+    var zones=["DISCOUNT","EQUILIBRIUM","PREMIUM"];
+    html="<div style='font-size:.6rem;color:var(--m);margin-bottom:10px'>SMC zone distribution and per-component edge.</div>";
+    html+="<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px'>";
+    zones.forEach(function(z){
+      var arr=r.filter(function(x){return x.smcZone===z;});
+      var wr=_rpWR(arr);
+      var col=z==="DISCOUNT"?"var(--g)":z==="PREMIUM"?"var(--r)":"var(--y)";
+      html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'>"+
+        "<div style='font-weight:700;font-size:.6rem;color:"+col+"'>"+z+"</div>"+
+        "<div style='font-size:1.2rem;font-weight:800;color:"+_rpWRColor(wr)+"'>"+wr+"%</div>"+
+        "<div style='color:var(--m);font-size:.55rem'>n="+arr.length+"</div></div>";
+    });
+    html+="</div>";
+    var smcComps=[["smcChoch","CHoCH (reversal)"],["smcOB","Order Block"],["smcFVG","FVG"],["smcSweep","Liq Sweep"],["smcZone","Premium/Discount"],["smcBOS","BOS (continuation)"]];
+    smcComps.forEach(function(c){
+      var k=c[0],lbl=c[1];
+      var with_=r.filter(function(x){return Math.abs(x.comp[k]||0)>0;});
+      var without_=r.filter(function(x){return !x.comp[k];});
+      if(with_.length<5) return;
+      var ww=_rpWR(with_),wo=_rpWR(without_),edge=ww-wo;
+      var ec=edge>5?"var(--g)":edge>0?"var(--y)":"var(--r)";
+      html+="<div class='bt-row'><div class='k'>"+lbl+"</div>"+
+        "<div style='display:flex;gap:10px;font-size:.62rem;text-align:right'>"+
+        "<span style='color:var(--m)'>n="+with_.length+"</span>"+
+        "<span style='color:"+_rpWRColor(ww)+"'>with:"+ww+"%</span>"+
+        "<span style='color:var(--m)'>wo:"+wo+"%</span>"+
+        "<span style='color:"+ec+";font-weight:700'>"+(edge>0?"+":"")+edge+"pp</span>"+
+        "</div></div>";
+    });
+  } else if(key==="combos"){
+    var combMap={};
+    r.forEach(function(x){
+      var fires=[];
+      if(Math.abs(x.comp.trend15||0)>0) fires.push("TREND");
+      if(Math.abs(x.comp.vwap||0)>0||Math.abs(x.comp.vwapEvent||0)>0) fires.push("VWAP");
+      if(Math.abs(x.comp.orb||0)>0) fires.push("ORB");
+      if(Math.abs(x.comp.rsi||0)>0) fires.push("RSI");
+      if(Math.abs(x.comp.cpr||0)>0) fires.push("CPR");
+      if(Math.abs(x.comp.smcChoch||0)>0) fires.push("CHoCH");
+      if(Math.abs(x.comp.smcOB||0)>0) fires.push("OB");
+      if(Math.abs(x.comp.smcFVG||0)>0) fires.push("FVG");
+      if(Math.abs(x.comp.smcSweep||0)>0) fires.push("SWEEP");
+      var k=fires.sort().join("+")||"NONE";
+      if(!combMap[k])combMap[k]=[];
+      combMap[k].push(x);
+    });
+    var rows=Object.entries(combMap).filter(function(e){return e[1].length>=8;})
+      .map(function(e){return{k:e[0],n:e[1].length,wr:_rpWR(e[1])};})
+      .sort(function(a,b){return b.wr-a.wr;});
+    html="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>Layer combinations (min 8 signals). Best combos tell you what to require for HIGH urgency.</div>";
+    rows.forEach(function(row){
+      html+="<div class='bt-row'><div class='k' style='font-family:monospace;font-size:.65rem'>"+row.k+"</div>"+
+        "<div style='display:flex;gap:10px;font-size:.65rem;text-align:right'>"+
+        "<span style='color:var(--m)'>"+row.n+"</span>"+
+        "<span style='color:"+_rpWRColor(row.wr)+";font-weight:700'>"+row.wr+"%</span>"+
+        "</div></div>";
+    });
+  } else if(key==="symbols"){
+    var symMap={};
+    r.forEach(function(x){if(!symMap[x.sym])symMap[x.sym]=[];symMap[x.sym].push(x);});
+    var rows=Object.entries(symMap).filter(function(e){return e[1].length>=5;})
+      .map(function(e){return{k:e[0],n:e[1].length,wr:_rpWR(e[1])};})
+      .sort(function(a,b){return b.wr-a.wr;});
+    rows.forEach(function(row){
+      html+="<div class='bt-row'><div class='k'>"+row.k+"</div>"+
+        "<div style='display:flex;gap:12px;font-size:.65rem;text-align:right'>"+
+        "<span style='color:var(--m)'>"+row.n+"</span>"+
+        "<span style='color:"+_rpWRColor(row.wr)+";font-weight:700'>"+row.wr+"%</span>"+
+        "</div></div>";
+    });
+  } else if(key==="confidence"){
+    var bands=[
+      {lbl:"62–74%",arr:r.filter(function(x){return x.conf<75;})},
+      {lbl:"75–79%",arr:r.filter(function(x){return x.conf>=75&&x.conf<80;})},
+      {lbl:"80–82%",arr:r.filter(function(x){return x.conf>=80&&x.conf<=82;})},
+    ];
+    html="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>Does higher confidence = higher win rate? It should. If not, recalibrate the formula.</div>";
+    bands.forEach(function(b){
+      var wr=_rpWR(b.arr);
+      html+="<div class='bt-row'><div class='k'>"+b.lbl+"</div>"+
+        "<div style='display:flex;gap:12px;font-size:.65rem;text-align:right'>"+
+        "<span style='color:var(--m)'>"+b.arr.length+"</span>"+
+        "<span style='color:"+_rpWRColor(wr)+";font-weight:700'>"+wr+"%</span>"+
+        "<span style='font-size:.55rem;color:var(--m)'>"+(wr>=30?"✅ calibrated":wr>=20?"⚠️ ok":"❌ not predicting")+"</span>"+
+        "</div></div>";
+    });
+  }
+  document.getElementById("rp-breakdown").innerHTML=html||"<div style='color:var(--m);font-size:.7rem;padding:12px;text-align:center'>No data</div>";
+}
+
 function startTimer(){
   if(scanTmr)clearInterval(scanTmr);
   scanCd=180;
