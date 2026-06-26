@@ -699,6 +699,11 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
         <button class="bt-dtab" onclick="btTab(this,'setup')">Setup</button>
         <button class="bt-dtab" onclick="btTab(this,'regime')">Regime</button>
         <button class="bt-dtab" style="font-weight:800;color:var(--g)" onclick="btTab(this,'setup_regime')">🏆 Leaderboard</button>
+        <button class="bt-dtab" style="color:var(--b)" onclick="btTab(this,'score')">📊 Score</button>
+        <button class="bt-dtab" style="color:var(--y)" onclick="btTab(this,'layer')">🔬 Layers</button>
+        <button class="bt-dtab" style="color:#a78bfa" onclick="btTab(this,'mfe')">📈 MFE/MAE</button>
+        <button class="bt-dtab" onclick="btTab(this,'time')">🕐 Time</button>
+        <button class="bt-dtab" onclick="btTab(this,'combo')">🔗 Combos</button>
       </div>
       <div id="bt-breakdown" style="padding:12px"></div>
     </div>
@@ -1707,6 +1712,24 @@ function _btRenderResults(r){
     _btCard("Avg Loss",""+r.avg_loss+"%","var(--r)")+
     _btCard("Total",""+r.total+" signals","var(--m)");
 
+  // MFE/MAE summary banner
+  var mfe=r.mfe_stats||{};
+  if(mfe.avg_mfe_win){
+    var mfeBanner="<div style='background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px'>"+
+      "<div style='font-size:.65rem;font-weight:700;margin-bottom:8px;color:var(--b)'>📈 MFE / MAE — Trade Path Analysis</div>"+
+      "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px'>"+
+      _btCard("Win MFE avg","+"+mfe.avg_mfe_win+"%","var(--g)")+
+      _btCard("Win MAE avg","-"+mfe.avg_mae_win+"%","var(--y)")+
+      _btCard("Fast wins (≤30m)",mfe.wins_fast_pct+"%","var(--g)")+
+      _btCard("Loss MFE avg","+"+mfe.avg_mfe_loss+"%","var(--r)")+
+      _btCard("Loss MAE avg","-"+mfe.avg_mae_loss+"%","var(--r)")+
+      _btCard("Never went +ve",mfe.losses_never_positive_pct+"%","var(--r)")+
+      "</div>"+
+      "<div style='font-size:.58rem;color:var(--m);margin-top:8px;line-height:1.5'>"+
+      "<b>Win MFE</b> = avg best price in winners. <b>Loss MFE</b> = avg best price in losers — if near 0%, the entry was wrong (not the SL). "+
+      "<b>Never went +ve</b> = losses that never turned green — these are pure bad setups, not bad exits.</div></div>";
+    document.getElementById("bt-results").insertAdjacentHTML("afterbegin",mfeBanner);
+  }
   // Default breakdown tab
   _btRenderBreakdown("session");
 
@@ -1780,6 +1803,80 @@ function _btRenderBreakdown(key){
       "🏆 This is the actual leaderboard — which setup+regime combo makes money, sorted reliable-first. "+
       "Rows marked ⚠ n&lt;30 are too small to trust yet; treat their win rate as noise, not signal.</div>" + html;
   }
+  // ── New tabs ────────────────────────────────────────────────────────────
+  if(key==="score"){
+    var rows=(_btData["by_score"]||[]);
+    html="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>Does higher raw score = higher win rate? If yes, the scoring formula is well-calibrated.</div>";
+    rows.forEach(function(row){
+      var col=row.wr>=35?"wr-good":row.wr>=25?"wr-ok":"wr-bad";
+      html+="<div class='bt-row'><div class='k'>Score "+row.k+"</div>"+
+        "<div style='display:flex;gap:12px;font-size:.65rem;text-align:right'>"+
+        "<span style='color:var(--m)'>"+row.n+" signals</span>"+
+        "<span style='color:var(--g)'>"+row.w+"W</span><span style='color:var(--r)'>"+row.l+"L</span>"+
+        "<span class='"+col+"'>"+row.wr+"%</span>"+
+        "<span style='color:"+(row.avg>0?"var(--g)":"var(--r)")+"'>"+(row.avg>0?"+":"")+row.avg+"%</span>"+
+        "</div></div>";
+    });
+  } else if(key==="layer"){
+    var rows=(_btData["by_layer"]||[]);
+    html="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>"+
+      "Edge = WR when layer fired − WR when it didn't. Negative edge = layer hurts more than helps. Sort: highest edge first.</div>";
+    rows.forEach(function(row){
+      if(!row.reliable) return; // skip small samples
+      var ec=row.edge>=5?"var(--g)":row.edge>=0?"var(--y)":"var(--r)";
+      var v=row.verdict==="KEEP"?"✅ Keep":row.verdict==="MONITOR"?"⚠️ Monitor":"🔴 Remove?";
+      html+="<div class='bt-row'><div class='k'>"+row.k+"</div>"+
+        "<div style='display:flex;gap:8px;font-size:.62rem;text-align:right'>"+
+        "<span style='color:var(--m)'>n="+row.n+"</span>"+
+        "<span style='color:var(--g)'>with:"+row.wr_with+"%</span>"+
+        "<span style='color:var(--m)'>wo:"+row.wr_without+"%</span>"+
+        "<span style='color:"+ec+";font-weight:700'>"+(row.edge>0?"+":"")+row.edge+"pp</span>"+
+        "<span style='font-size:.58rem;color:var(--m)'>"+v+"</span>"+
+        "</div></div>";
+    });
+    html+="<div style='font-size:.58rem;color:var(--m);margin-top:10px'>Only showing reliable rows (n≥30). Small samples hidden.</div>";
+  } else if(key==="mfe"){
+    var rows=(_btData["by_mfe"]||[]);
+    html="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>"+
+      "MFE = Maximum Favorable Excursion. Tells you how far the trade moved in your direction before outcome. "+
+      "High WR in 'never moved' bucket = entries are systematically wrong.</div>";
+    rows.forEach(function(row){
+      var col=row.wr>=35?"wr-good":row.wr>=20?"wr-ok":"wr-bad";
+      html+="<div class='bt-row'><div class='k'>"+row.k+"</div>"+
+        "<div style='display:flex;gap:12px;font-size:.65rem;text-align:right'>"+
+        "<span style='color:var(--m)'>"+row.n+"</span>"+
+        "<span class='"+col+"'>"+row.wr+"%</span>"+
+        "<span style='color:"+(row.avg>0?"var(--g)":"var(--r)")+"'>"+(row.avg>0?"+":"")+row.avg+"%</span>"+
+        "</div></div>";
+    });
+  } else if(key==="time"){
+    var rows=(_btData["by_time"]||[]);
+    html="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>Win rate by time of day. Tells you when the engine fires accurate signals vs when it's noise.</div>";
+    rows.forEach(function(row){
+      var col=row.wr>=35?"wr-good":row.wr>=25?"wr-ok":"wr-bad";
+      html+="<div class='bt-row'><div class='k'>"+row.k+"</div>"+
+        "<div style='display:flex;gap:12px;font-size:.65rem;text-align:right'>"+
+        "<span style='color:var(--m)'>"+row.n+"</span>"+
+        "<span class='"+col+"'>"+row.wr+"%</span>"+
+        "<span style='color:"+(row.avg>0?"var(--g)":"var(--r)")+"'>"+(row.avg>0?"+":"")+row.avg+"%</span>"+
+        "</div></div>";
+    });
+  } else if(key==="combo"){
+    var rows=(_btData["by_combo"]||[]);
+    html="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>"+
+      "Top layer combinations by win rate (min 20 signals). These are the setups with real edge — "+
+      "use this to guide which layers to require for HIGH urgency signals.</div>";
+    rows.slice(0,20).forEach(function(row){
+      var col=row.wr>=35?"wr-good":row.wr>=25?"wr-ok":"wr-bad";
+      html+="<div class='bt-row'><div class='k' style='font-family:monospace;font-size:.62rem'>"+row.k+"</div>"+
+        "<div style='display:flex;gap:12px;font-size:.65rem;text-align:right'>"+
+        "<span style='color:var(--m)'>"+row.n+"</span>"+
+        "<span class='"+col+"'>"+row.wr+"%</span>"+
+        "<span style='color:"+(row.avg>0?"var(--g)":"var(--r)")+"'>"+(row.avg>0?"+":"")+row.avg+"%</span>"+
+        "</div></div>";
+    });
+  }
+
   document.getElementById("bt-breakdown").innerHTML=html||
     "<div style='color:var(--m);font-size:.7rem;padding:12px;text-align:center'>No data</div>";
 }
@@ -1839,18 +1936,54 @@ function exportBtReport(){
   });
 
   // ── Section 3: Full Signal Log ───────────────────────────
+  // MFE/MAE summary
+  var mfe=r.mfe_stats||{};
+  if(mfe.avg_mfe_win){
+    rows.push(["MFE / MAE ANALYSIS"]);
+    rows.push(["Metric","Winners","Losers"]);
+    rows.push(["Avg MFE (best price reached)","+"+mfe.avg_mfe_win+"%","+"+mfe.avg_mfe_loss+"%"]);
+    rows.push(["Avg MAE (worst drawdown)","-"+mfe.avg_mae_win+"% (survived)","-"+mfe.avg_mae_loss+"% (hit SL)"]);
+    rows.push(["Fast wins (T1 within 30min)",mfe.wins_fast_pct+"%","—"]);
+    rows.push(["Never went positive","—",mfe.losses_never_positive_pct+"%"]);
+    rows.push([]);
+  }
+  // Layer attribution
+  if((r.by_layer||[]).length){
+    rows.push(["LAYER ATTRIBUTION"]);
+    rows.push(["Layer","Signals (with)","WR with","WR without","Edge (pp)","Verdict","Reliable"]);
+    (r.by_layer||[]).forEach(function(row){
+      rows.push([row.k,row.n,row.wr_with+"%",row.wr_without+"%",(row.edge>0?"+":"")+row.edge+"pp",row.verdict,row.reliable?"YES":"n<30"]);
+    });
+    rows.push([]);
+  }
+  // Score bucket
+  if((r.by_score||[]).length){
+    rows.push(["BY SCORE BUCKET"]);
+    rows.push(["Score","Trades","Wins","Losses","Win Rate","Avg P&L %"]);
+    (r.by_score||[]).forEach(function(row){rows.push(["Score "+row.k,row.n,row.w,row.l,row.wr+"%",row.avg+"%"]);});
+    rows.push([]);
+  }
+  // Time of day
+  if((r.by_time||[]).length){
+    rows.push(["BY TIME OF DAY"]);
+    rows.push(["Time","Trades","Wins","Losses","Win Rate","Avg P&L %"]);
+    (r.by_time||[]).forEach(function(row){rows.push([row.k,row.n,row.w,row.l,row.wr+"%",row.avg+"%"]);});
+    rows.push([]);
+  }
   rows.push(["FULL SIGNAL LOG"]);
-  rows.push(["Date","Time","Symbol","Bias","Confidence","Bull","Bear",
+  rows.push(["Date","Time","Symbol","Bias","Confidence","Bull","Bear","Score",
              "Trend15","Regime","CPR","PCR","RSI","SetupKey","Entry","SL","T1","T2",
-             "Status","Exit","P&L %","Bars Held","Session"]);
+             "Status","Exit","P&L %","MFE %","MAE %","Bars to T1","Bars Held","Session"]);
   (r.signals||[]).forEach(function(s){
     rows.push([
       s.date, s.time, s.sym, s.bias, s.conf+"%",
-      s.bull, s.bear, s.trend15, s.regime||"",
+      s.bull, s.bear, s.score||"",
+      s.trend15, s.regime||"",
       s.cpr_narrow?"NARROW":"WIDE", s.pcr, s.rsi, s.setup_key||"",
       s.entry, s.sl, s.t1, s.t2,
       s.status, s.exit, (s.pnl_pct>0?"+":"")+s.pnl_pct+"%",
-      s.bars, s.session
+      s.mfe!=null?"+"+s.mfe+"%":"", s.mae!=null?"-"+s.mae+"%":"",
+      s.bars_to_t1||"", s.bars, s.session
     ]);
   });
 
