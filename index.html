@@ -1923,13 +1923,19 @@ function rpLoadFile(input){
   reader.onload = function(e){
     var lines = e.target.result.trim().split("\n");
     var hdr = lines[0].split(",").map(function(s){return s.trim().toLowerCase();});
-    // Validate this is a candle CSV not a backtest report
-    var hasTs  = hdr.indexOf("timestamp")>=0 || hdr.indexOf("t")>=0;
-    var hasOHLC= hdr.indexOf("open")>=0 || hdr.indexOf("o")>=0;
     var infoEl = document.getElementById("rp-file-info");
-    if(!hasTs || !hasOHLC){
+    // Try to parse first data row to detect format
+    // Accept any CSV where first numeric column looks like a unix timestamp (>1e9)
+    // OR has recognisable candle column names
+    var hasTs   = hdr.some(function(h){return h==="timestamp"||h==="t"||h==="date"||h==="time"||h==="ts";});
+    var hasPrice= hdr.some(function(h){return h==="open"||h==="o"||h==="close"||h==="c"||h==="price"||h==="px";});
+    // Fallback: check if first data value looks like a unix timestamp
+    var firstRow = lines[1] ? lines[1].split(",") : [];
+    var firstVal = firstRow[0] ? parseFloat(firstRow[0].trim()) : 0;
+    var looksLikeTs = firstVal > 1600000000; // any unix epoch after 2020
+    if(!hasTs && !looksLikeTs){
       infoEl.style.color="var(--r)";
-      infoEl.textContent="❌ Wrong file — this looks like a backtest/signal report, not a candle CSV. Use the Download Candles button below to get the right file.";
+      infoEl.textContent="❌ Wrong file — headers found: ["+hdr.slice(0,5).join(", ")+"] — need timestamp,open,high,low,close,volume,symbol. Tap Download Candles first.";
       infoEl.style.display="block";
       document.getElementById("rp-run").disabled=true;
       _rpCandles=[];
