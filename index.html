@@ -641,6 +641,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
     <div style="display:flex;gap:6px;margin-bottom:10px">
       <button id="bt-mode-server" onclick="btSetMode('server')" style="flex:1;padding:8px 6px;background:rgba(59,130,246,.25);border:1px solid rgba(59,130,246,.5);color:var(--b);border-radius:8px;font-size:.65rem;font-weight:700;cursor:pointer">📡 Server Backtest<br><span style="font-weight:400;opacity:.7">Kite candles · 60 days</span></button>
       <button id="bt-mode-replay" onclick="btSetMode('replay')" style="flex:1;padding:8px 6px;background:var(--bg3);border:1px solid var(--border);color:var(--m);border-radius:8px;font-size:.65rem;font-weight:700;cursor:pointer">🔁 Local Replay<br><span style="font-weight:400;opacity:.7">Upload CSV · Full engine</span></button>
+      <button id="bt-mode-oi" onclick="btSetMode('oi')" style="flex:1;padding:8px 6px;background:var(--bg3);border:1px solid var(--border);color:var(--m);border-radius:8px;font-size:.65rem;font-weight:700;cursor:pointer">🧪 OI Impact<br><span style="font-weight:400;opacity:.7">Snapshot CSV · Permutations</span></button>
     </div>
     <div id="bt-mode-desc" style="font-size:.65rem;color:var(--m)">Tests technical layers only — SMA, RSI, VWAP, ORB, CPR, PDH/PDL, 15D Trend — using 60 days of Zerodha historical data. <span style="color:rgba(251,191,36,.7)">OI layer excluded</span> — requires intraday data.</div>
   </div>
@@ -704,7 +705,6 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
         <button class="bt-dtab" style="color:#a78bfa" onclick="btTab(this,'mfe')">📈 MFE/MAE</button>
         <button class="bt-dtab" onclick="btTab(this,'time')">🕐 Time</button>
         <button class="bt-dtab" onclick="btTab(this,'combo')">🔗 Combos</button>
-        <button class="bt-dtab" style="color:#f97316" onclick="btTab(this,'oi_perm')">🧪 OI Impact</button>
       </div>
       <div id="bt-breakdown" style="padding:12px"></div>
     </div>
@@ -784,6 +784,22 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
         <div id="rp-breakdown" style="padding:12px"></div>
       </div>
     </div>
+  </div>
+</div>
+
+  <!-- OI IMPACT PANEL -->
+  <div id="bt-oi" style="display:none">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
+      <div style="font-size:.72rem;font-weight:700;margin-bottom:4px">🧪 OI Impact Analysis</div>
+      <div style="font-size:.6rem;color:var(--m);margin-bottom:10px">Upload your <span style="color:#f97316;font-family:monospace">protrader_snapshots_all.csv</span> to analyse OI permutations — PCR buckets, writer buildup × technical confirmation, and the confidence lift each OI condition adds.</div>
+      <label style="display:block;background:var(--bg3);border:1px dashed var(--border);border-radius:8px;padding:14px;text-align:center;cursor:pointer;font-size:.72rem;color:var(--m);margin-bottom:8px">
+        <span id="oi-file-lbl">Tap to upload protrader_snapshots_all.csv</span>
+        <input type="file" accept=".csv" onchange="oiLoadFile(this)" style="display:none">
+      </label>
+      <div id="oi-file-info" style="font-size:.6rem;margin-bottom:8px;display:none"></div>
+      <button id="oi-run" onclick="oiRunAnalysis()" disabled style="width:100%;padding:10px;background:rgba(249,115,22,.2);border:1px solid rgba(249,115,22,.4);color:#fb923c;border-radius:8px;font-size:.75rem;font-weight:800;cursor:pointer;letter-spacing:.5px">🧪 RUN OI ANALYSIS</button>
+    </div>
+    <div id="oi-results"></div>
   </div>
 </div>
 
@@ -1862,24 +1878,6 @@ function _btRenderBreakdown(key){
         "<span style='color:"+(row.avg>0?"var(--g)":"var(--r)")+"'>"+(row.avg>0?"+":"")+row.avg+"%</span>"+
         "</div></div>";
     });
-  } else if(key==="oi_perm"){
-    // OI permutation analysis — needs snapshot CSV upload, independent of server backtest
-    html="<div style='background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px'>"+
-      "<div style='font-size:.72rem;font-weight:700;margin-bottom:6px'>🧪 OI Impact Analysis</div>"+
-      "<div style='font-size:.6rem;color:var(--m);margin-bottom:10px'>"+
-      "Upload your snapshot CSV (protrader_snapshots_all.csv) to run permutation analysis on real OI data — PCR buckets, buildup × technical, writer behavior impact on confidence."+
-      "</div>"+
-      "<label style='display:block;background:var(--bg3);border:1px dashed var(--border);border-radius:8px;padding:12px;text-align:center;cursor:pointer;font-size:.72rem;color:var(--m);margin-bottom:8px'>"+
-      "<span id='oi-file-lbl'>Tap to upload protrader_snapshots_all.csv</span>"+
-      "<input type='file' accept='.csv' onchange='oiLoadFile(this)' style='display:none'>"+
-      "</label>"+
-      "<div id='oi-file-info' style='font-size:.6rem;margin-bottom:8px;display:none'></div>"+
-      "<button id='oi-run' onclick='oiRunAnalysis()' disabled "+
-      "style='width:100%;padding:9px;background:rgba(249,115,22,.2);border:1px solid rgba(249,115,22,.4);color:#fb923c;border-radius:8px;font-size:.72rem;font-weight:800;cursor:pointer'>"+
-      "🧪 RUN OI ANALYSIS</button>"+
-      "</div>"+
-      "<div id='oi-results' style='display:none'></div>";
-
   } else if(key==="combo"){
     var rows=(_btData["by_combo"]||[]);
     html="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>"+
@@ -2035,23 +2033,31 @@ var _rpRunning = false;
 // ── Mode toggle ─────────────────────────────────────────────────
 function btSetMode(mode){
   var isServer = mode === "server";
-  // Config panels
+  var isReplay = mode === "replay";
+  var isOI     = mode === "oi";
+  // Show/hide panels
   document.querySelector(".bt-config-wrap").style.display = isServer ? "block" : "none";
   document.getElementById("bt-results").style.display = "none";
-  document.getElementById("bt-replay").style.display = isServer ? "none" : "block";
-  // Button styles
-  var sBtn = document.getElementById("bt-mode-server");
-  var rBtn = document.getElementById("bt-mode-replay");
-  sBtn.style.background = isServer ? "rgba(59,130,246,.25)" : "var(--bg3)";
-  sBtn.style.borderColor = isServer ? "rgba(59,130,246,.5)" : "var(--border)";
-  sBtn.style.color = isServer ? "var(--b)" : "var(--m)";
-  rBtn.style.background = !isServer ? "rgba(34,197,94,.15)" : "var(--bg3)";
-  rBtn.style.borderColor = !isServer ? "rgba(34,197,94,.4)" : "var(--border)";
-  rBtn.style.color = !isServer ? "var(--g)" : "var(--m)";
-  var desc = isServer
-    ? "Tests technical layers only — SMA, RSI, VWAP, ORB, CPR, PDH/PDL, 15D Trend — using 60 days of Zerodha historical data. OI layer excluded."
-    : "Runs the FULL signal engine (SMC + all technical layers) locally on your uploaded candle CSV. No server needed. OI excluded — no historical OI available.";
-  document.getElementById("bt-mode-desc").textContent = desc;
+  document.getElementById("bt-replay").style.display = isReplay ? "block" : "none";
+  document.getElementById("bt-oi").style.display     = isOI     ? "block" : "none";
+  // Button active styles
+  var panels = [
+    {id:"bt-mode-server", active:isServer, bg:"rgba(59,130,246,.25)", bc:"rgba(59,130,246,.5)", col:"var(--b)"},
+    {id:"bt-mode-replay", active:isReplay, bg:"rgba(34,197,94,.15)",  bc:"rgba(34,197,94,.4)",  col:"var(--g)"},
+    {id:"bt-mode-oi",     active:isOI,     bg:"rgba(249,115,22,.2)",  bc:"rgba(249,115,22,.4)", col:"#fb923c"},
+  ];
+  panels.forEach(function(p){
+    var btn=document.getElementById(p.id); if(!btn) return;
+    btn.style.background  = p.active ? p.bg  : "var(--bg3)";
+    btn.style.borderColor = p.active ? p.bc  : "var(--border)";
+    btn.style.color       = p.active ? p.col : "var(--m)";
+  });
+  var descs = {
+    server: "Tests technical layers only — SMA, RSI, VWAP, ORB, CPR, PDH/PDL, 15D Trend — using 60 days of Zerodha historical data. OI excluded.",
+    replay: "Runs the FULL signal engine (SMC + all technical layers) locally on your uploaded candle CSV. No server needed. OI excluded — no historical OI available.",
+    oi:     "Upload protrader_snapshots_all.csv to analyse OI permutations — PCR buckets, writer buildup × technical confirmation, confidence lift per OI condition.",
+  };
+  document.getElementById("bt-mode-desc").textContent = descs[mode] || "";
 }
 
 // ── Download candles from server ───────────────────────────────
