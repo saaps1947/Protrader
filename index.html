@@ -704,6 +704,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
         <button class="bt-dtab" style="color:#a78bfa" onclick="btTab(this,'mfe')">📈 MFE/MAE</button>
         <button class="bt-dtab" onclick="btTab(this,'time')">🕐 Time</button>
         <button class="bt-dtab" onclick="btTab(this,'combo')">🔗 Combos</button>
+        <button class="bt-dtab" style="color:#f97316" onclick="btTab(this,'oi_perm')">🧪 OI Impact</button>
       </div>
       <div id="bt-breakdown" style="padding:12px"></div>
     </div>
@@ -1861,6 +1862,24 @@ function _btRenderBreakdown(key){
         "<span style='color:"+(row.avg>0?"var(--g)":"var(--r)")+"'>"+(row.avg>0?"+":"")+row.avg+"%</span>"+
         "</div></div>";
     });
+  } else if(key==="oi_perm"){
+    // OI permutation analysis — needs snapshot CSV upload, independent of server backtest
+    html="<div style='background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px'>"+
+      "<div style='font-size:.72rem;font-weight:700;margin-bottom:6px'>🧪 OI Impact Analysis</div>"+
+      "<div style='font-size:.6rem;color:var(--m);margin-bottom:10px'>"+
+      "Upload your snapshot CSV (protrader_snapshots_all.csv) to run permutation analysis on real OI data — PCR buckets, buildup × technical, writer behavior impact on confidence."+
+      "</div>"+
+      "<label style='display:block;background:var(--bg3);border:1px dashed var(--border);border-radius:8px;padding:12px;text-align:center;cursor:pointer;font-size:.72rem;color:var(--m);margin-bottom:8px'>"+
+      "<span id='oi-file-lbl'>Tap to upload protrader_snapshots_all.csv</span>"+
+      "<input type='file' accept='.csv' onchange='oiLoadFile(this)' style='display:none'>"+
+      "</label>"+
+      "<div id='oi-file-info' style='font-size:.6rem;margin-bottom:8px;display:none'></div>"+
+      "<button id='oi-run' onclick='oiRunAnalysis()' disabled "+
+      "style='width:100%;padding:9px;background:rgba(249,115,22,.2);border:1px solid rgba(249,115,22,.4);color:#fb923c;border-radius:8px;font-size:.72rem;font-weight:800;cursor:pointer'>"+
+      "🧪 RUN OI ANALYSIS</button>"+
+      "</div>"+
+      "<div id='oi-results' style='display:none'></div>";
+
   } else if(key==="combo"){
     var rows=(_btData["by_combo"]||[]);
     html="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>"+
@@ -2498,6 +2517,253 @@ function _rpOutcome(bias, entryBar, futureBars){
   var fin=futureBars[Math.min(23,futureBars.length-1)].c;
   var pct=bias==="BULL"?(fin-e)/e*100:(e-fin)/e*100;
   return{result:pct>0?"WIN":"LOSS",pct:Math.round(pct*100)/100};
+}
+
+// ── OI Permutation Analysis (runs on snapshot CSV) ─────────────
+var _oiSnaps = [];  // parsed snapshot rows
+
+function oiLoadFile(input){
+  var f=input.files[0]; if(!f) return;
+  document.getElementById("oi-file-lbl").textContent=f.name;
+  var reader=new FileReader();
+  reader.onload=function(e){
+    var lines=e.target.result.trim().split("\n");
+    var hdr=lines[0].split(",").map(function(s){return s.trim().toLowerCase();});
+    _oiSnaps=lines.slice(1).map(function(l){
+      var v=l.split(","); var obj={};
+      hdr.forEach(function(h,i){obj[h]=v[i]?v[i].trim():"";});
+      return obj;
+    }).filter(function(r){return r.sym&&r.px;});
+    // Filter to rows with OI data
+    var withOI=_oiSnaps.filter(function(r){return r.pcr&&r.pcr!=="0"&&r.pcr!=="0.0"&&r.pcr!==""});
+    document.getElementById("oi-file-info").textContent=
+      "✅ "+_oiSnaps.length.toLocaleString()+" snapshots · "+withOI.length+" with OI data · "+
+      new Set(withOI.map(function(r){return r.sym;})).size+" symbols";
+    document.getElementById("oi-file-info").style.color="var(--g)";
+    document.getElementById("oi-file-info").style.display="block";
+    document.getElementById("oi-run").disabled=false;
+  };
+  reader.readAsText(f);
+}
+
+function oiRunAnalysis(){
+  var snaps=_oiSnaps.filter(function(r){
+    return r.pcr&&r.pcr!=="0"&&r.pcr!=="0.0"&&r.pcr!==""&&parseFloat(r.pcr)>0;
+  });
+  if(!snaps.length){alert("No OI data found in snapshot CSV");return;}
+
+  function sf(v,d){var n=parseFloat(v);return isNaN(n)?d:n;}
+  function si(v){var n=parseInt(v);return isNaN(n)?0:n;}
+
+  // Enrich each row
+  var enriched=snaps.map(function(r){
+    var pcr=sf(r.pcr,0);
+    var buildup=r.buildup||"";
+    var aboveSma=si(r.above_sma20);
+    var aboveVwap=si(r.above_vwap);
+    var smaTrend=r.sma_trend||"";
+    var trend15=r.trend15||"";
+    var rsi=sf(r.rsi,50);
+    var cprType=r.cpr_type||"";
+    var signal=r.signal_bias||"";
+    var conf=si(r.signal_conf);
+    var orbOk=r.orb_state&&r.orb_state!=="none"&&r.orb_state!=="";
+    var smcStr=r.smc_structure||"";
+    var bullScore=si(r.signal_bull_score);
+    var bearScore=si(r.signal_bear_score);
+
+    // OI direction derived from conditions
+    var oiDir="NEUTRAL";
+    if(pcr>=1.1&&aboveSma&&aboveVwap) oiDir="BULLISH";
+    else if(pcr<=0.7&&!aboveSma&&!aboveVwap) oiDir="BEARISH";
+    else if(buildup==="LONG_BUILDUP"&&aboveSma) oiDir="BULLISH";
+    else if(buildup==="SHORT_BUILDUP"&&!aboveSma) oiDir="BEARISH";
+
+    // Tech direction
+    var techBull=aboveSma+aboveVwap+(smaTrend==="BULLISH"?1:0)+(trend15==="STRONG_BULL"||trend15==="BULL"?1:0);
+    var techBear=(1-aboveSma)+(1-aboveVwap)+(smaTrend==="BEARISH"?1:0)+(trend15==="STRONG_BEAR"||trend15==="BEAR"?1:0);
+    var techDir=techBull>techBear?"BULLISH":techBear>techBull?"BEARISH":"NEUTRAL";
+    var aligned=oiDir===techDir&&oiDir!=="NEUTRAL";
+
+    return {
+      pcr:pcr,buildup:buildup,aboveSma:aboveSma,aboveVwap:aboveVwap,
+      smaTrend:smaTrend,trend15:trend15,rsi:rsi,cprType:cprType,
+      signal:signal,conf:conf,oiDir:oiDir,techDir:techDir,aligned:aligned,
+      orbOk:orbOk,smcStr:smcStr,bullScore:bullScore,bearScore:bearScore,
+      sym:r.sym,date:r.date,time:r.time
+    };
+  });
+
+  // ── Build analysis sections ──────────────────────────────────────────
+  var html="";
+
+  // Summary bar
+  var hasSig=enriched.filter(function(r){return r.signal==="BULLISH"||r.signal==="BEARISH";});
+  var alignedSig=enriched.filter(function(r){return r.aligned&&(r.signal==="BULLISH"||r.signal==="BEARISH");});
+  var avgConfAll=hasSig.length?Math.round(hasSig.reduce(function(a,r){return a+r.conf;},0)/hasSig.length):0;
+  var avgConfAligned=alignedSig.length?Math.round(alignedSig.reduce(function(a,r){return a+r.conf;},0)/alignedSig.length):0;
+
+  html+="<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px'>"+
+    _btCard("OI snapshots",""+enriched.length,"var(--b)")+
+    _btCard("Signals fired",""+hasSig.length+" ("+(hasSig.length/enriched.length*100).toFixed(0)+"%)","var(--y)")+
+    _btCard("OI+Tech aligned",""+alignedSig.length+" ("+(alignedSig.length/enriched.length*100).toFixed(0)+"%)","var(--g)")+
+    _btCard("Avg conf (all)",avgConfAll+"%","var(--m)")+
+    _btCard("Avg conf (aligned)",avgConfAligned+"%",avgConfAligned>90?"var(--g)":"var(--y)")+
+    _btCard("Alignment lift","+"+(avgConfAligned-avgConfAll)+"pp","var(--g)")+
+    "</div>";
+
+  // Section: PCR bucket analysis
+  html+="<div class='bt-card' style='margin-bottom:12px'>";
+  html+="<div style='font-size:.7rem;font-weight:700;margin-bottom:8px'>📊 PCR Bucket → Signal Bias + Confidence</div>";
+  html+="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>How different PCR levels correlate with signal direction and confidence. PCR>1.1 with technical confirmation should produce high-conf BULLISH signals.</div>";
+  var pcrBuckets=[
+    {lbl:"PCR <0.7 (heavy CE — bearish)",fn:function(r){return r.pcr<0.7;}},
+    {lbl:"PCR 0.7–0.9 (slight call bias)",fn:function(r){return r.pcr>=0.7&&r.pcr<0.9;}},
+    {lbl:"PCR 0.9–1.1 (balanced — neutral)",fn:function(r){return r.pcr>=0.9&&r.pcr<1.1;}},
+    {lbl:"PCR 1.1–1.4 (put writing — bullish)",fn:function(r){return r.pcr>=1.1&&r.pcr<1.4;}},
+    {lbl:"PCR >1.4 (strong put writing)",fn:function(r){return r.pcr>=1.4;}},
+  ];
+  pcrBuckets.forEach(function(b){
+    var grp=enriched.filter(b.fn);
+    var sig=grp.filter(function(r){return r.signal==="BULLISH"||r.signal==="BEARISH";});
+    var bullSig=sig.filter(function(r){return r.signal==="BULLISH";});
+    var bearSig=sig.filter(function(r){return r.signal==="BEARISH";});
+    var avgC=sig.length?Math.round(sig.reduce(function(a,r){return a+r.conf;},0)/sig.length):0;
+    var sigRate=grp.length?Math.round(sig.length/grp.length*100):0;
+    var bullPct=sig.length?Math.round(bullSig.length/sig.length*100):0;
+    html+="<div class='bt-row'>"+
+      "<div class='k' style='font-size:.63rem'>"+b.lbl+"</div>"+
+      "<div style='display:flex;gap:8px;font-size:.62rem;text-align:right;flex-wrap:wrap'>"+
+      "<span style='color:var(--m)'>n="+grp.length+"</span>"+
+      "<span style='color:var(--y)'>sig:"+sigRate+"%</span>"+
+      "<span style='color:var(--g)'>🔺"+bullSig.length+"</span>"+
+      "<span style='color:var(--r)'>🔻"+bearSig.length+"</span>"+
+      "<span style='color:"+(bullPct>=70?"var(--g)":bullPct<=30?"var(--r)":"var(--y)")+";font-weight:700'>"+bullPct+"% bull</span>"+
+      "<span style='color:var(--b)'>conf:"+avgC+"%</span>"+
+      "</div></div>";
+  });
+  html+="</div>";
+
+  // Section: Key OI permutations
+  html+="<div class='bt-card' style='margin-bottom:12px'>";
+  html+="<div style='font-size:.7rem;font-weight:700;margin-bottom:8px'>🧪 OI Permutation Combinations</div>";
+  html+="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>Each row = a specific OI condition. Signal rate = how often our engine fired when this condition was true. Bull% = direction of fired signals.</div>";
+  var combos=[
+    {lbl:"PCR>1.1 (put writing present)",
+     fn:function(r){return r.pcr>=1.1;}},
+    {lbl:"PCR>1.1 + Long Buildup",
+     fn:function(r){return r.pcr>=1.1&&r.buildup==="LONG_BUILDUP";}},
+    {lbl:"PCR>1.1 + Above SMA + Above VWAP",
+     fn:function(r){return r.pcr>=1.1&&r.aboveSma&&r.aboveVwap;}},
+    {lbl:"PCR>1.1 + Long Buildup + Above SMA + VWAP ⭐",
+     fn:function(r){return r.pcr>=1.1&&r.buildup==="LONG_BUILDUP"&&r.aboveSma&&r.aboveVwap;}},
+    {lbl:"PCR>1.1 + Long Buildup + Narrow CPR ⭐",
+     fn:function(r){return r.pcr>=1.1&&r.buildup==="LONG_BUILDUP"&&r.cprType==="NARROW";}},
+    {lbl:"PCR>1.1 + Strong/Bull 15D Trend",
+     fn:function(r){return r.pcr>=1.1&&(r.trend15==="STRONG_BULL"||r.trend15==="BULL");}},
+    {lbl:"PCR>1.1 + Long Buildup + NARROW CPR + Above SMA ⭐",
+     fn:function(r){return r.pcr>=1.1&&r.buildup==="LONG_BUILDUP"&&r.cprType==="NARROW"&&r.aboveSma;}},
+    {lbl:"Short Buildup + Below SMA + Below VWAP",
+     fn:function(r){return r.buildup==="SHORT_BUILDUP"&&!r.aboveSma&&!r.aboveVwap;}},
+    {lbl:"PCR<0.7 + Short Buildup",
+     fn:function(r){return r.pcr<0.7&&r.buildup==="SHORT_BUILDUP";}},
+    {lbl:"PCR<0.7 + Short Buildup + Below SMA + VWAP",
+     fn:function(r){return r.pcr<0.7&&r.buildup==="SHORT_BUILDUP"&&!r.aboveSma&&!r.aboveVwap;}},
+    {lbl:"Long Buildup + Narrow CPR",
+     fn:function(r){return r.buildup==="LONG_BUILDUP"&&r.cprType==="NARROW";}},
+    {lbl:"OI aligned with technical direction",
+     fn:function(r){return r.aligned;}},
+    {lbl:"OI misaligned with technical direction",
+     fn:function(r){return !r.aligned&&r.oiDir!=="NEUTRAL";}},
+  ];
+  combos.forEach(function(c){
+    var grp=enriched.filter(c.fn);
+    if(grp.length<3) return;
+    var sig=grp.filter(function(r){return r.signal==="BULLISH"||r.signal==="BEARISH";});
+    var bullSig=sig.filter(function(r){return r.signal==="BULLISH";});
+    var avgC=sig.length?Math.round(sig.reduce(function(a,r){return a+r.conf;},0)/sig.length):0;
+    var sigRate=Math.round(sig.length/grp.length*100);
+    var bullPct=sig.length?Math.round(bullSig.length/sig.length*100):0;
+    var colC=avgC>=92?"var(--g)":avgC>=88?"var(--y)":"var(--m)";
+    html+="<div class='bt-row'>"+
+      "<div class='k' style='font-size:.62rem'>"+c.lbl+"</div>"+
+      "<div style='display:flex;gap:8px;font-size:.62rem;text-align:right;flex-wrap:wrap'>"+
+      "<span style='color:var(--m)'>n="+grp.length+"</span>"+
+      "<span style='color:var(--y)'>"+sigRate+"% sig</span>"+
+      "<span style='color:"+(bullPct>=70?"var(--g)":bullPct<=30?"var(--r)":"var(--y)")+";font-weight:700'>"+bullPct+"% 🔺</span>"+
+      "<span style='color:"+colC+";font-weight:700'>"+avgC+"% conf</span>"+
+      "</div></div>";
+  });
+  html+="</div>";
+
+  // Section: Buildup × Tech breakdown
+  html+="<div class='bt-card' style='margin-bottom:12px'>";
+  html+="<div style='font-size:.7rem;font-weight:700;margin-bottom:8px'>📈 Writer Behavior × Technical Layer</div>";
+  html+="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>How writer buildup + tech confirmation affects signal direction. Each combo shows how often the engine agreed with the OI story.</div>";
+  var bGroups=["LONG_BUILDUP","SHORT_BUILDUP","SHORT_COVERING","LONG_UNWINDING"];
+  var techStates=[
+    {lbl:"Above SMA+VWAP (tech bull)",fn:function(r){return r.aboveSma&&r.aboveVwap;}},
+    {lbl:"Below SMA+VWAP (tech bear)",fn:function(r){return !r.aboveSma&&!r.aboveVwap;}},
+    {lbl:"Mixed (contradicted)",fn:function(r){return r.aboveSma!==r.aboveVwap;}},
+  ];
+  bGroups.forEach(function(bg){
+    techStates.forEach(function(ts){
+      var grp=enriched.filter(function(r){return r.buildup===bg&&ts.fn(r);});
+      if(grp.length<5) return;
+      var sig=grp.filter(function(r){return r.signal==="BULLISH"||r.signal==="BEARISH";});
+      var bullSig=sig.filter(function(r){return r.signal==="BULLISH";});
+      var avgC=sig.length?Math.round(sig.reduce(function(a,r){return a+r.conf;},0)/sig.length):0;
+      var bullPct=sig.length?Math.round(bullSig.length/sig.length*100):0;
+      // Is OI+tech telling the same story?
+      var oiIsBull=bg==="LONG_BUILDUP"||bg==="SHORT_COVERING";
+      var techIsBull=ts.lbl.indexOf("bull")>=0;
+      var aligned=oiIsBull===techIsBull;
+      var alignTag=aligned?"✅ aligned":"⚠️ conflict";
+      html+="<div class='bt-row'>"+
+        "<div class='k' style='font-size:.6rem'>"+bg+" + "+ts.lbl+" <span style='font-size:.55rem;color:"+(aligned?"var(--g)":"var(--y)")+"'>"+alignTag+"</span></div>"+
+        "<div style='display:flex;gap:8px;font-size:.62rem;text-align:right'>"+
+        "<span style='color:var(--m)'>n="+grp.length+"</span>"+
+        "<span style='color:"+(bullPct>=70?"var(--g)":bullPct<=30?"var(--r)":"var(--y)")+";font-weight:700'>"+bullPct+"% 🔺</span>"+
+        "<span style='color:var(--b)'>"+avgC+"% conf</span>"+
+        "</div></div>";
+    });
+  });
+  html+="</div>";
+
+  // Section: OI impact on confidence — key insight
+  html+="<div class='bt-card'>";
+  html+="<div style='font-size:.7rem;font-weight:700;margin-bottom:8px'>💡 OI Layer Impact on Confidence</div>";
+  var oiConfTable=[
+    {lbl:"OI present (any PCR)",fn:function(r){return true;}},
+    {lbl:"OI aligned with tech",fn:function(r){return r.aligned;}},
+    {lbl:"OI misaligned with tech",fn:function(r){return !r.aligned&&r.oiDir!=="NEUTRAL";}},
+    {lbl:"PCR>1.1 only (no tech check)",fn:function(r){return r.pcr>=1.1;}},
+    {lbl:"PCR>1.1 + tech confirms ⭐",fn:function(r){return r.pcr>=1.1&&r.aboveSma&&r.aboveVwap;}},
+    {lbl:"Long buildup only",fn:function(r){return r.buildup==="LONG_BUILDUP";}},
+    {lbl:"Long buildup + PCR>1.1 ⭐",fn:function(r){return r.buildup==="LONG_BUILDUP"&&r.pcr>=1.1;}},
+    {lbl:"Long buildup + PCR>1.1 + narrow CPR ⭐⭐",fn:function(r){return r.buildup==="LONG_BUILDUP"&&r.pcr>=1.1&&r.cprType==="NARROW";}},
+  ];
+  html+="<div style='font-size:.6rem;color:var(--m);margin-bottom:8px'>⭐ marks combinations showing the OI layer genuinely improves signal quality. Compare avg confidence — higher confidence when OI confirms = OI adds real edge.</div>";
+  oiConfTable.forEach(function(row){
+    var grp=enriched.filter(row.fn);
+    var sig=grp.filter(function(r){return r.signal==="BULLISH"||r.signal==="BEARISH";});
+    if(!sig.length) return;
+    var avgC=Math.round(sig.reduce(function(a,r){return a+r.conf;},0)/sig.length);
+    var maxC=Math.max.apply(null,sig.map(function(r){return r.conf;}));
+    var highConfPct=Math.round(sig.filter(function(r){return r.conf>=90;}).length/sig.length*100);
+    var colC=avgC>=92?"var(--g)":avgC>=88?"var(--y)":"var(--m)";
+    html+="<div class='bt-row'>"+
+      "<div class='k' style='font-size:.63rem'>"+row.lbl+"</div>"+
+      "<div style='display:flex;gap:8px;font-size:.62rem;text-align:right'>"+
+      "<span style='color:var(--m)'>n="+sig.length+"</span>"+
+      "<span style='color:"+colC+";font-weight:700'>avg "+avgC+"%</span>"+
+      "<span style='color:var(--b)'>≥90%: "+highConfPct+"%</span>"+
+      "</div></div>";
+  });
+  html+="</div>";
+
+  document.getElementById("oi-results").innerHTML=html;
+  document.getElementById("oi-results").style.display="block";
 }
 
 // ── Main replay runner ──────────────────────────────────────────
