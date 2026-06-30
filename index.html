@@ -1384,6 +1384,7 @@ function nav(el,id){
   if(id==="auto")updAT();
 }
 function gotoAT(){nav(document.querySelectorAll(".nb")[2],"auto");}
+function gotoJournal(){nav(document.querySelectorAll(".nb")[3],"jour");}
 function setBias(btn,b){bias=b;document.querySelectorAll(".bb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");renderFeed();renderScannerSetups();}
 function setSF(btn,f){document.querySelectorAll(".fb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");scanFilt=f;renderScannerSetups();}
 
@@ -4519,6 +4520,41 @@ function renderFeed(){
     if(layers.length){layerDetail="<div id='ld_"+gi+"' style='display:none;padding:8px 10px;background:rgba(255,255,255,.03);border-top:1px solid rgba(255,255,255,.05)'>"+layers.join("")+"</div><div onclick='toggleLD("+gi+")' style='padding:4px 10px;font-size:.6rem;color:var(--m);text-align:center;cursor:pointer;border-top:1px solid rgba(255,255,255,.05)' id='ldBtn_"+gi+"'>▼ Show analysis layers</div>";}
 
     var exCls=sig.bias==="BULLISH"?"btn-buy":sig.bias==="BEARISH"?"btn-sell":"";
+
+    // ── ACTIVE TRADE STATUS — show if this symbol has an open/T1-hit trade ──
+    // Looks up SIGNAL_LOG for the most recent OPEN or T1_HIT entry matching
+    // this card's symbol AND bias (so a NEW bearish card doesn't show a
+    // stale bullish trade's status). Computes live P&L from current price.
+    var activeTrade = SIGNAL_LOG.filter(function(e){
+      return e.sym===sig.sym && e.bias===sig.bias &&
+             (e.status==="OPEN"||e.status==="T1_HIT");
+    })[0];
+    var liveStatusHtml = "";
+    if(activeTrade && activeTrade.entry_px){
+      var curPx = s.px || activeTrade.entry_px;
+      var lotSz = LOT_SIZES[sig.sym] || LOT_SIZES.DEFAULT || 50;
+      var diff = activeTrade.bias==="BULLISH" ? (curPx-activeTrade.entry_px) : (activeTrade.entry_px-curPx);
+      var livePnl = Math.round(diff * lotSz);
+      var pnlPct = activeTrade.entry_px ? (diff/activeTrade.entry_px*100) : 0;
+      var isProfit = livePnl >= 0;
+      var statusLbl = activeTrade.status==="T1_HIT" ? "T1 HIT — Risk-Free" : "LIVE";
+      var statusIcon = activeTrade.status==="T1_HIT" ? "🔒" : "🟢";
+      var pnlColor = isProfit ? "var(--g)" : "var(--r)";
+      var bgTint = isProfit ? "rgba(34,197,94,.12)" : "rgba(239,68,68,.12)";
+      var borderTint = isProfit ? "rgba(34,197,94,.35)" : "rgba(239,68,68,.35)";
+      liveStatusHtml =
+        "<div style='margin:0 10px 8px;padding:8px 10px;background:"+bgTint+";border:1px solid "+borderTint+";border-radius:8px;display:flex;align-items:center;justify-content:space-between'>"+
+          "<div style='display:flex;align-items:center;gap:6px'>"+
+            "<span style='font-size:.62rem;font-weight:800;color:"+pnlColor+"'>"+statusIcon+" "+statusLbl+"</span>"+
+            "<span style='font-size:.58rem;color:var(--m)'>Entry ₹"+activeTrade.entry_px.toLocaleString("en-IN")+"</span>"+
+          "</div>"+
+          "<div style='text-align:right'>"+
+            "<div style='font-size:.78rem;font-weight:800;color:"+pnlColor+"'>"+(isProfit?"+":"")+"₹"+Math.abs(livePnl).toLocaleString("en-IN")+"</div>"+
+            "<div style='font-size:.55rem;color:"+pnlColor+"'>"+(isProfit?"+":"")+pnlPct.toFixed(2)+"%</div>"+
+          "</div>"+
+        "</div>";
+    }
+
     h+="<div class='sc "+dir+"'>"+badge+
       "<div class='sc-hd'><span class='sc-sym'>"+sig.sym+"</span>"+
       "<span style='font-size:.6rem;font-weight:600;margin-left:5px;color:"+(s.chg>=0?"var(--g)":"var(--r)")+"'>₹"+(s.px?s.px.toLocaleString("en-IN"):"–")+"</span>"+
@@ -4529,6 +4565,7 @@ function renderFeed(){
       "<span style='background:"+ccbg+";border:1px solid "+ccbd+";border-radius:20px;padding:3px 12px;font-size:.88rem;font-weight:800;color:"+cc+"'>"+sig.confidence+"% — "+convLbl+"</span></div>"+
       "<div class='sc-dir'><span class='sc-dt' style='color:"+dc+"'>"+ico+" "+sig.bias+"</span><span class='sc-tr'>"+sig.trade+"</span></div>"+
       "<div class='sc-why'>"+sig.why+"</div>"+
+      liveStatusHtml+
       (bt&&sig.btstNote?"<div class='sc-note'>🌙 "+sig.btstNote+"</div>":"")+
       layerDetail+
       "<div class='sc-lvls'>"+
@@ -4542,7 +4579,10 @@ function renderFeed(){
         "<div style='flex:1;text-align:center;background:rgba(255,255,255,.04);border-radius:6px;padding:4px'><div style='font-size:.55rem;color:var(--m)'>TF</div><div style='font-size:.7rem;font-weight:700;color:var(--b)'>"+( sig.timeframe||"Intraday")+"</div></div>"+
         "<div style='flex:1;text-align:center;background:rgba(255,255,255,.04);border-radius:6px;padding:4px'><div style='font-size:.55rem;color:var(--m)'>VIX</div><div style='font-size:.7rem;font-weight:700;color:var(--m)'>"+VIX+"</div></div>"+
       "</div>"+
-      "<button class='sc-exec "+(exSty?"":exCls)+"' style='"+exSty+"' onclick='execSig("+gi+")'>"+( AT.active?"⚡ Auto-Execute":"▶ Execute")+" — "+sig.trade+"</button>"+
+      ( activeTrade ?
+        "<button class='sc-exec' style='background:rgba(100,116,139,.15);color:var(--m);border:1px solid rgba(100,116,139,.3)' onclick='gotoJournal()'>📖 View in Journal — Trade Active</button>" :
+        "<button class='sc-exec "+(exSty?"":exCls)+"' style='"+exSty+"' onclick='execSig("+gi+")'>"+( AT.active?"⚡ Auto-Execute":"▶ Execute")+" — "+sig.trade+"</button>"
+      )+
       "<div class='sc-time'>"+timeDisplay+
       (sig.setupKey?" · <span style='color:var(--b)'>"+sig.setupKey+"</span>":"")+
       (sig.layers?" · "+sig.layers+"/4 layers":"")+
