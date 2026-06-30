@@ -3420,8 +3420,18 @@ function localSigs(){
     // Apply SMC cap — log which reasons made it through
     var smcBullCapped = Math.min(smcBullRaw, 5);
     var smcBearCapped = Math.min(smcBearRaw, 5);
-    if(smcBullRaw>5) smcBullLog.unshift("⚡ SMC capped at 5 (raw="+smcBullRaw+") — OI/price confirmation required");
-    if(smcBearRaw>5) smcBearLog.unshift("⚡ SMC capped at 5 (raw="+smcBearRaw+") — OI/price confirmation required");
+    // Trader-facing label instead of internal cap mechanics — same meaning,
+    // describes WHAT confluence exists rather than HOW the score was computed.
+    if(smcBullRaw>5){
+      var bullConfluence = smcBullLog.length>=3 ? "Strong multi-factor SMC confluence" :
+                            smcBullLog.length===2 ? "SMC confluence (2 factors)" : "Strong SMC signal";
+      smcBullLog.unshift("🏛 "+bullConfluence+" — seek OI/price confirmation before sizing up");
+    }
+    if(smcBearRaw>5){
+      var bearConfluence = smcBearLog.length>=3 ? "Strong multi-factor SMC confluence" :
+                            smcBearLog.length===2 ? "SMC confluence (2 factors)" : "Strong SMC signal";
+      smcBearLog.unshift("🏛 "+bearConfluence+" — seek OI/price confirmation before sizing up");
+    }
     bullScore+=smcBullCapped; bullReasons=bullReasons.concat(smcBullLog);
     bearScore+=smcBearCapped; bearReasons=bearReasons.concat(smcBearLog);
     // ── LAYER 3: IV Context ──
