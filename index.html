@@ -1384,6 +1384,17 @@ function nav(el,id){
   if(id==="auto")updAT();
 }
 function gotoAT(){nav(document.querySelectorAll(".nb")[2],"auto");}
+
+// Append Kite credentials to /smc URL so the server can use Kite candles
+// even on cold-start before /market has been called.
+// This is the fix for ORB always being 0% — /smc was getting no-credential
+// requests and falling back to Yahoo which has no reliable 9:15 candle.
+function _smcCreds(baseUrl){
+  var key = KITE&&KITE.apiKey ? encodeURIComponent(KITE.apiKey) : "";
+  var tok = KITE&&KITE.accessToken ? encodeURIComponent(KITE.accessToken) : "";
+  if(!key||!tok) return "";
+  return "?key="+key+"&token="+tok;
+}
 function gotoJournal(){nav(document.querySelectorAll(".nb")[3],"jour");}
 function setBias(btn,b){bias=b;document.querySelectorAll(".bb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");renderFeed();renderScannerSetups();}
 function setSF(btn,f){document.querySelectorAll(".fb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");scanFilt=f;renderScannerSetups();}
@@ -3096,7 +3107,7 @@ function runScan(manual){
       // Silent timeout → afterPrimarySync fires without orb data → snapshot
       // captures s.orb=null → ORB always 0% despite server computing correctly.
       // 12s is still well inside the 50s snapshot window.
-      fetch(SERVER_URL+"/smc/"+sym,{signal:AbortSignal.timeout(12000)})
+      fetch(SERVER_URL+"/smc/"+sym+_smcCreds(),{signal:AbortSignal.timeout(12000)})
       .then(function(r){return r.json();})
       .then(function(d){applySmcData(sym,d);afterPrimarySync();})
       .catch(function(){afterPrimarySync();});
@@ -3105,7 +3116,7 @@ function runScan(manual){
     // Batch 2: liquid stocks — in background (staggered to avoid rate limits)
     smcLiquid.forEach(function(sym,i){
       safeTimeout(function(){
-        fetch(SERVER_URL+"/smc/"+sym,{signal:AbortSignal.timeout(8000)})
+        fetch(SERVER_URL+"/smc/"+sym+_smcCreds(),{signal:AbortSignal.timeout(8000)})
         .then(function(r){return r.json();})
         .then(function(d){applySmcData(sym,d);})
         .catch(function(){});
@@ -3119,7 +3130,7 @@ function runScan(manual){
 
     remaining.forEach(function(s,i){
       safeTimeout(function(){
-        fetch(SERVER_URL+"/smc/"+s.sym,{signal:AbortSignal.timeout(8000)})
+        fetch(SERVER_URL+"/smc/"+s.sym+_smcCreds(),{signal:AbortSignal.timeout(8000)})
         .then(function(r){return r.json();})
         .then(function(d){applySmcData(s.sym,d);})
         .catch(function(){});
@@ -5908,7 +5919,7 @@ function updateBiasCounts(){
 function fetchSMC(sym){
   var url=SERVER_URL||localStorage.getItem("pt_server")||"";
   if(!url)return;
-  fetch(url+"/smc/"+sym,{signal:AbortSignal.timeout(10000)})
+  fetch(url+"/smc/"+sym+_smcCreds(url),{signal:AbortSignal.timeout(10000)})
   .then(function(r){return r.json();})
   .then(function(d){
     if(!d||!d.ok||!d.smc)return;
