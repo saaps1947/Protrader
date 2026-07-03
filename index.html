@@ -1094,10 +1094,21 @@ function _doFetchFromServer(){
         sc.pcr=sd.oi.pcr||0;sc.mp=sd.oi.max_pain||0;
         sc.iv=sd.oi.iv||0;sc.cW=sd.oi.ce_wall||0;sc.pW=sd.oi.pe_wall||0;
         sc.buildup=sd.oi.buildup||"";           // LONG_BUILDUP / SHORT_BUILDUP etc
+        sc.oiExpiryDay=sd.oi.is_expiry_day||false;  // expiry day — OI decays as contract settles
+        sc.oiExpiry=sd.oi.expiry||"";
       }
       // CPR — now included in market response from prev day OHLC
       if(sd.cpr && sd.cpr.pivot){
         sc.cpr=sd.cpr;
+      }
+      // ORB — now included in market response for ALL symbols (fixes 0% capture)
+      // Previously ORB only came from /smc (few symbols); now every symbol gets it.
+      if(sd.orb){
+        sc.orb=sd.orb;
+      }
+      // SMC — now included in market response for ALL symbols (fixes ~1% capture)
+      if(sd.smc){
+        sc.smc=sd.smc;
       }
       // VWAP approximation — now included in market response
       if(sd.vwap){
@@ -4523,7 +4534,12 @@ function renderFeed(){
       });
     }
     // Add OI data if available
-    if(s.pcr){layers.push("<div style='display:flex;gap:6px;margin-bottom:4px'><span style='font-size:.6rem;font-weight:700;color:var(--m);white-space:nowrap'>🔵 OI Live</span><span style='font-size:.62rem;color:var(--b)'>PCR: "+s.pcr+" | Max Pain: ₹"+s.mp+" | CE Wall: ₹"+s.cW+" | PE Wall: ₹"+s.pW+"</span></div>");}
+    if(s.pcr){
+      var oiLabel = s.oiExpiryDay ? "🔵 OI Live ⚡EXPIRY" : "🔵 OI Live";
+      var oiLabelColor = s.oiExpiryDay ? "#f59e0b" : "var(--m)";
+      var expiryNote = s.oiExpiryDay ? " <span style='color:#f59e0b;font-size:.55rem'>(expiry — OI settling, watch for short covering)</span>" : "";
+      layers.push("<div style='display:flex;gap:6px;margin-bottom:4px'><span style='font-size:.6rem;font-weight:700;color:"+oiLabelColor+";white-space:nowrap'>"+oiLabel+"</span><span style='font-size:.62rem;color:var(--b)'>PCR: "+s.pcr+" | Max Pain: ₹"+s.mp+" | CE Wall: ₹"+s.cW+" | PE Wall: ₹"+s.pW+expiryNote+"</span></div>");
+    }
     // Add CPR if available
     if(s.cpr){layers.push("<div style='display:flex;gap:6px;margin-bottom:4px'><span style='font-size:.6rem;font-weight:700;color:var(--m);white-space:nowrap'>📐 CPR</span><span style='font-size:.62rem;color:var(--b)'>"+s.cpr.type+" | Pivot: ₹"+s.cpr.pivot+" | TC: ₹"+s.cpr.tc+" | BC: ₹"+s.cpr.bc+" | Bias: "+s.cpr.bias+"</span></div>");}
     // Add SMC if available
