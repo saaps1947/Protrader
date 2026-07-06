@@ -4573,7 +4573,7 @@ function renderFeed(){
         "<div style='margin:0 10px 8px;padding:8px 10px;background:"+bgTint+";border:1px solid "+borderTint+";border-radius:8px;display:flex;align-items:center;justify-content:space-between'>"+
           "<div style='display:flex;align-items:center;gap:6px'>"+
             "<span style='font-size:.62rem;font-weight:800;color:"+pnlColor+"'>"+statusIcon+" "+statusLbl+"</span>"+
-            "<span style='font-size:.58rem;color:var(--m)'>Entry ₹"+activeTrade.entry_px.toLocaleString("en-IN")+"</span>"+
+            "<span style='font-size:.58rem;color:var(--m)'>Entry ₹"+activeTrade.entry_px.toLocaleString("en-IN")+" 🔒</span>"+
           "</div>"+
           "<div style='text-align:right'>"+
             "<div style='font-size:.78rem;font-weight:800;color:"+pnlColor+"'>"+(isProfit?"+":"")+"₹"+Math.abs(livePnl).toLocaleString("en-IN")+"</div>"+
@@ -4595,14 +4595,31 @@ function renderFeed(){
       liveStatusHtml+
       (bt&&sig.btstNote?"<div class='sc-note'>🌙 "+sig.btstNote+"</div>":"")+
       layerDetail+
-      "<div class='sc-lvls'>"+
-        "<div class='sc-lv'><div class='sc-ll'>Entry</div><div class='sc-lv-v le'>"+fpx(sig.entry)+"</div></div>"+
-        "<div class='sc-lv'><div class='sc-ll'>Stop"+(sig._slMoved?" 🔒":"")+"</div><div class='sc-lv-v ls' style='"+(sig._slMoved?"color:var(--y)":"")+"'>"+fpx(sig.sl)+(sig._slMoved?" BE":"")+"</div></div>"+
-        "<div class='sc-lv'><div class='sc-ll'>T1</div><div class='sc-lv-v lt'>"+fpx(sig.target1)+"</div></div>"+
-        "<div class='sc-lv'><div class='sc-ll'>T2</div><div class='sc-lv-v lt'>"+fpx(sig.target2||sig.target1)+"</div></div>"+
-      "</div>"+(sig._slMoved?"<div style='padding:3px 10px 6px;font-size:.58rem;color:var(--y)'>🔒 SL moved to breakeven after T1 hit — trade is risk-free</div>":"")+
+      // FROZEN CARD: once a trade is LIVE (activeTrade exists), show the values
+      // captured when the signal was first logged — NOT recomputed from current
+      // price. This fixes the entry-price drift where the card showed the latest
+      // price (e.g. 78,186) while the trade's real entry was 78,052.
+      (function(){
+        var eV, sV, t1V, t2V, slMoved;
+        if(activeTrade && activeTrade.entry_px){
+          eV  = fpx(activeTrade.entry_px);
+          sV  = fpx(activeTrade.sl_px);
+          t1V = fpx(activeTrade.t1_px);
+          t2V = fpx(activeTrade.t2_px||activeTrade.t1_px);
+          slMoved = activeTrade.status==="T1_HIT";
+        } else {
+          eV=fpx(sig.entry); sV=fpx(sig.sl); t1V=fpx(sig.target1);
+          t2V=fpx(sig.target2||sig.target1); slMoved=sig._slMoved;
+        }
+        return "<div class='sc-lvls'>"+
+          "<div class='sc-lv'><div class='sc-ll'>Entry</div><div class='sc-lv-v le'>"+eV+"</div></div>"+
+          "<div class='sc-lv'><div class='sc-ll'>Stop"+(slMoved?" 🔒":"")+"</div><div class='sc-lv-v ls' style='"+(slMoved?"color:var(--y)":"")+"'>"+sV+(slMoved?" BE":"")+"</div></div>"+
+          "<div class='sc-lv'><div class='sc-ll'>T1</div><div class='sc-lv-v lt'>"+t1V+"</div></div>"+
+          "<div class='sc-lv'><div class='sc-ll'>T2</div><div class='sc-lv-v lt'>"+t2V+"</div></div>"+
+        "</div>";
+      })()+(sig._slMoved?"<div style='padding:3px 10px 6px;font-size:.58rem;color:var(--y)'>🔒 SL moved to breakeven after T1 hit — trade is risk-free</div>":"")+
       "<div style='display:flex;gap:6px;padding:0 10px 8px'>"+
-        "<div style='flex:1;text-align:center;background:rgba(255,255,255,.04);border-radius:6px;padding:4px'><div style='font-size:.55rem;color:var(--m)'>R:R</div><div style='font-size:.7rem;font-weight:700;color:var(--y)'>"+( sig.rr||"1:2")+"</div></div>"+
+        "<div style='flex:1;text-align:center;background:rgba(255,255,255,.04);border-radius:6px;padding:4px'><div style='font-size:.55rem;color:var(--m)'>R:R</div><div style='font-size:.7rem;font-weight:700;color:var(--y)'>"+( (activeTrade&&activeTrade.rr)?activeTrade.rr : (sig.rr||"1:2"))+"</div></div>"+
         "<div style='flex:1;text-align:center;background:rgba(255,255,255,.04);border-radius:6px;padding:4px'><div style='font-size:.55rem;color:var(--m)'>TF</div><div style='font-size:.7rem;font-weight:700;color:var(--b)'>"+( sig.timeframe||"Intraday")+"</div></div>"+
         "<div style='flex:1;text-align:center;background:rgba(255,255,255,.04);border-radius:6px;padding:4px'><div style='font-size:.55rem;color:var(--m)'>VIX</div><div style='font-size:.7rem;font-weight:700;color:var(--m)'>"+VIX+"</div></div>"+
       "</div>"+
