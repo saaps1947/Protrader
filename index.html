@@ -579,6 +579,8 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   <optgroup label="🛢 MCX Commodities">
     <option value="CRUDEOIL">CRUDE OIL — MCX (₹/barrel)</option>
     <option value="GOLD">GOLD — MCX (₹/10g)</option>
+    <option value="SILVER">SILVER — MCX (₹/kg)</option>
+    <option value="NATURALGAS">NATURAL GAS — MCX (₹/mmBtu)</option>
   </optgroup>
 </select>
         </div>
@@ -869,7 +871,9 @@ var SD = {
   ],
   com:[
     {sym:"CRUDEOIL",name:"Crude Oil MCX",px:0,chg:0,pct:0,h:0,l:0,o:0,atm:0,step:50,optEx:"MCX",note:"MCX Options (₹/bbl)"},
-    {sym:"GOLD",    name:"Gold MCX",     px:0,chg:0,pct:0,h:0,l:0,o:0,atm:0,step:100,optEx:"MCX",note:"MCX Options (₹/10g)"}
+    {sym:"GOLD",    name:"Gold MCX",     px:0,chg:0,pct:0,h:0,l:0,o:0,atm:0,step:100,optEx:"MCX",note:"MCX Options (₹/10g)"},
+    {sym:"SILVER",  name:"Silver MCX",   px:0,chg:0,pct:0,h:0,l:0,o:0,atm:0,step:100,optEx:"MCX",note:"MCX Options (₹/kg)"},
+    {sym:"NATURALGAS",name:"Natural Gas MCX",px:0,chg:0,pct:0,h:0,l:0,o:0,atm:0,step:5,optEx:"MCX",note:"MCX Options (₹/mmBtu)"}
   ],
   stk:[
     {sym:"HDFCBANK",  name:"HDFC Bank",        px:0,chg:0,pct:0,h:0,l:0,o:0,atm:800,  pcr:0,mp:0,iv:0,exp:"",sector:"BANK"},
@@ -971,7 +975,7 @@ function istMinsNow(){var d=new Date();return(d.getUTCHours()*60+d.getUTCMinutes
 function istDayNow(){var d=new Date();var u=d.getUTCHours()*60+d.getUTCMinutes();var day=d.getUTCDay();if(u+330>=1440&&day<6)day=(day+1)%7;return day;}
 function isOpen(){var m=istMinsNow(),day=istDayNow();if(day===0||day===6)return false;return m>=555&&m<=930;}
 function isMCXOpen(){var m=istMinsNow(),day=istDayNow();if(day===0)return false;if(day===6)return m>=540&&m<=840;return m>=540&&m<=1410;}
-function isSymMCX(sym){return sym==="CRUDEOIL"||sym==="GOLD"||sym==="SILVER";}
+function isSymMCX(sym){return sym==="CRUDEOIL"||sym==="GOLD"||sym==="SILVER"||sym==="NATURALGAS";}
 function mktTxt(){var d=istNow(),day=d.getUTCDay(),h=d.getUTCHours(),m=d.getUTCMinutes(),mins=h*60+m;if(day===0)return"Closed (Sun)";if(day===6)return"Closed (Sat)";if(mins<555)return"Pre-market";if(mins>=555&&mins<=930)return"● LIVE";if(isSymMCX(CS&&CS.sym||"")&&isMCXOpen())return"● MCX LIVE";return"Closed";}
 function nextExp(sym){
   // If OI data has actual expiry from Zerodha — most accurate
@@ -1140,7 +1144,7 @@ function _doFetchFromServer(){
       document.getElementById("dataSrc").textContent="⏸ Market closed — showing last data"+(ageMin>0?" ("+ageMin+"m ago)":"");
     } else {
       setStatus("live","Server · "+t);
-      var isMCX=CS.sym==="CRUDEOIL"||CS.sym==="GOLD";
+      var isMCX=isSymMCX(CS.sym);
       document.getElementById("dataSrc").textContent="PRO Trader Server · "+t+(isMCX?" · MCX live ₹ (USD×"+USDINR.toFixed(1)+")":"");
     }
     // Fetch live USD/INR from server and update commodity prices
@@ -1156,6 +1160,19 @@ function _doFetchFromServer(){
     if(gold&&gold.px>0&&gold.px<5000){
       gold.px=Math.round(gold.px*usdInr/31.1*10);gold.chg=Math.round(gold.chg*usdInr/31.1*10);
       var gStep=100;gold.atm=Math.round(gold.px/gStep)*gStep;gold.step=gStep;
+    }
+    var silver=SD.com.filter(function(s){return s.sym==="SILVER";})[0];
+    if(silver&&silver.px>0&&silver.px<500){
+      // Yahoo SI=F is $/troy_oz -> MCX quotes ₹/kg (1 troy oz = 31.1035g)
+      var sf=usdInr*1000/31.1035;
+      silver.px=Math.round(silver.px*sf);silver.chg=Math.round(silver.chg*sf);
+      var sStep=100;silver.atm=Math.round(silver.px/sStep)*sStep;silver.step=sStep;
+    }
+    var natgas=SD.com.filter(function(s){return s.sym==="NATURALGAS";})[0];
+    if(natgas&&natgas.px>0&&natgas.px<50){
+      // Yahoo NG=F is $/mmBtu -> MCX quotes ₹/mmBtu directly (currency only)
+      natgas.px=Math.round(natgas.px*usdInr*100)/100;natgas.chg=Math.round(natgas.chg*usdInr*100)/100;
+      var nStep=5;natgas.atm=Math.round(natgas.px/nStep)*nStep;natgas.step=nStep;
     }
     // Fetch OI for current symbol only (background fetches happen via startOIFetch)
     fetchOI(CS.sym);
@@ -3565,6 +3582,12 @@ function localSigs(){
     // (bullScore/bearScore already initialized above, SMC already scored)
 
     // OI confirmations
+    // MCX GATE: CRUDEOIL/GOLD option-chain OI is thin (only ~10% of snapshots
+    // even had OI populated) and back-tested at 48% direction-match — a coin
+    // flip. Unlike NSE/BSE index OI (deep, reliable), MCX commodity option OI
+    // is noise here, so it's excluded entirely for MCX. Price/technicals still
+    // drive MCX signals normally.
+    if(!isMCX){
     if(putWriting){bullScore+=2;bullReasons.push("Put writing ↑ ("+((peChg/1e6).toFixed(1))+"M new puts = support)");}
     // FIX: CE writing alone is NOT enough for bearish signal
     // Institutions write covered calls as income — not necessarily bearish
@@ -3605,6 +3628,7 @@ function localSigs(){
     if(aboveMp){bearScore+=1;bearReasons.push("Above Max Pain ₹"+mp+" → gravitates down");}
     if(nearPeWall){bullScore+=2;bullReasons.push("At PE wall ₹"+peWall+" = strong support");}
     if(nearCeWall){bearScore+=2;bearReasons.push("At CE wall ₹"+ceWall+" = strong resistance");}
+    } // end !isMCX OI gate
 
     // Technical confirmations
     // FIX 2: Golden/Death Cross +4→+2. On 5-min intraday charts SMA20/50 cross
@@ -3899,7 +3923,7 @@ function localSigs(){
     var avgRange = s.avg_range_pct||0;
     // Indices have naturally lower range but tighter spreads — exempt them.
     // MCX also exempt (different volatility profile). Only filter NSE stocks.
-    var isIndexOrMcx = ["NIFTY","BANKNIFTY","FINNIFTY","SENSEX","MIDCPNIFTY","CRUDEOIL","GOLD"].indexOf(s.sym)>=0;
+    var isIndexOrMcx = ["NIFTY","BANKNIFTY","FINNIFTY","SENSEX","MIDCPNIFTY","CRUDEOIL","GOLD","SILVER","NATURALGAS"].indexOf(s.sym)>=0;
     if(!isIndexOrMcx && avgRange>0 && avgRange<1.2){
       noTradeReasons.push("Low volatility: "+avgRange+"% avg daily range (<1.2% min) — can't reach targets intraday");
     }
@@ -4447,11 +4471,16 @@ function processScan(sigs){
     }
     if(idx>=0)allSigs[idx]=sig;else allSigs.unshift(sig);
   });
-  // Remove signals not seen in last 30 min and purge their firstSeen cache
+  // Remove signals not seen in last 30 min from the LIVE feed list — but do NOT
+  // delete their _sigFirstSeen record here. That record is meant to survive
+  // market-closed gaps and app restarts (up to 24h, purged on load above).
+  // BUG FIX: this used to delete _sigFirstSeen the moment a signal dropped out
+  // of the scan for 30 min (e.g. market closed, or user viewing another symbol
+  // tab so this symbol wasn't rescanned) — so when the signal reappeared it was
+  // treated as brand-new and re-stamped with the current time, wiping the
+  // original "first seen" timestamp the user relied on. Now the timestamp
+  // persists correctly until the 24h load-time cutoff or the trade closes.
   var cut=Date.now()-30*60*1000;
-  var removed=allSigs.filter(function(s){return s._firstSeenTs&&s._firstSeenTs<=cut;});
-  removed.forEach(function(s){delete _sigFirstSeen[s.sym+s.bias];});
-  if(removed.length) _saveSigFirstSeen(); // persist deletions
   allSigs=allSigs.filter(function(s){return !s._firstSeenTs||s._firstSeenTs>cut;});
   allSigs.sort(function(a,b){if(a.urgency==="HIGH"&&b.urgency!=="HIGH")return -1;if(b.urgency==="HIGH"&&a.urgency!=="HIGH")return 1;return (b.confidence||0)-(a.confidence||0);});
   renderFeed();buildSF();updateBiasCounts();
@@ -4465,9 +4494,37 @@ function processScan(sigs){
   });
 }
 
+// BUG FIX: active (OPEN / T1_HIT) trades were disappearing from the Live
+// Signals feed whenever the underlying symbol dropped out of allSigs — which
+// happens after market hours (the scan loop hard-returns before scoring any
+// symbol, per the isOpen()/isMCXOpen() gate) and also whenever 30 min passed
+// without that symbol being rescanned. A running trade should stay visible
+// until it actually closes (SL/T1/T2/manual), regardless of market hours or
+// scan gaps. This builds a synthetic card straight from SIGNAL_LOG for any
+// active trade not already present in allSigs, so it always shows — same
+// symbol tab as the live signal, per the original request.
+function _activeTradeSigs(){
+  var out=[];
+  SIGNAL_LOG.forEach(function(e){
+    if(e.status!=="OPEN" && e.status!=="T1_HIT") return;
+    if(allSigs.some(function(a){return a.sym===e.sym && a.bias===e.bias;})) return; // already represented live
+    out.push({
+      sym:e.sym, bias:e.bias, trade:e.trade||(e.sym+" "+e.bias),
+      strategy:e.strategy||"", confidence:e.confidence||70,
+      urgency:e.urgency||"HIGH", why:e.notes||"Trade in progress",
+      entry:e.entry_px, sl:e.sl_px, target1:e.t1_px, target2:e.t2_px||e.t1_px,
+      rr:e.rr||"1:2", timeframe:e.timeframe||"Intraday",
+      setupKey:e.setupKey, layers:e.layers,
+      _firstSeen:e.firstSeen||e.date, _firstSeenTs:e.ts||0,
+      _isNew:false, _isActiveTradeCard:true
+    });
+  });
+  return out;
+}
+
 function renderFeed(){
   var feed=document.getElementById("sigFeed");if(!feed)return;
-  var f=allSigs;
+  var f=allSigs.concat(_activeTradeSigs());
   if(sfFilt!=="ALL")f=f.filter(function(s){return s.sym===sfFilt;});
   if(bias==="BTST")f=f.filter(function(s){return s.isBTST;});
   else if(bias!=="ALL")f=f.filter(function(s){return (bias==="BULL"&&s.bias==="BULLISH")||(bias==="BEAR"&&s.bias==="BEARISH")||(bias==="NEU"&&s.bias==="NEUTRAL");});
@@ -5010,6 +5067,7 @@ function autoLogSignal(sig){
       x.exitTime= istDateTime();
       x.exit_px = entryPx; // last known price as exit
       x.notes   = "Auto-closed: direction flipped to "+sig.bias;
+      delete _sigFirstSeen[x.sym+x.bias]; _saveSigFirstSeen(); // trade closed — clear its "first seen" stamp
       if(x.entry_px&&x.exit_px){
         var diff = x.bias==="BULLISH"?x.exit_px-x.entry_px:x.entry_px-x.exit_px;
         x.pnl = Math.round(diff*(LOT_SIZES[x.sym]||LOT_SIZES.DEFAULT||50));
@@ -5097,6 +5155,7 @@ function checkSignalLevels(){
           e.pnl=Math.round(diff*lotSize);
           e.outcome="LOSS"; e.notes="Auto-detected: SL hit at ₹"+e.sl_px;
           allSigs=allSigs.filter(function(a){return !(a.sym===e.sym&&a.bias===e.bias);});
+          delete _sigFirstSeen[e.sym+e.bias]; _saveSigFirstSeen(); // trade closed — clear its "first seen" stamp
           toast("🔴 SL Hit — "+e.sym,e.trade+" auto-closed at ₹"+e.sl_px,"tr");
           changed=true; return;
         }
@@ -5127,6 +5186,8 @@ function checkSignalLevels(){
         e.status="T2_HIT"; e.exit_px=e.t2_px; e.exitTime=istDateTime();
         e.pnl=Math.round(t2diff*lotSize); // full position throughout
         e.outcome="BIG WIN"; e.notes=(e.notes||"")+" | 🏆 T2 hit ₹"+e.t2_px;
+        allSigs=allSigs.filter(function(a){return !(a.sym===e.sym&&a.bias===e.bias);});
+        delete _sigFirstSeen[e.sym+e.bias]; _saveSigFirstSeen(); // trade closed — clear its "first seen" stamp
         toast("🏆 T2 Hit — "+e.sym,e.trade+" ₹"+e.t2_px+" | Total P&L: ₹"+e.pnl,"tg");
         changed=true;
       }
@@ -6051,7 +6112,10 @@ function startOIFetch(){
 }
 
 function fetchOIMain(sym){
-  // All OI-supported symbols: 4 indices + 18 liquid stocks + MCX (CRUDEOIL, GOLD)
+  // OI-supported symbols: 4 indices + 18 liquid stocks.
+  // MCX (CRUDEOIL/GOLD/SILVER/NATURALGAS) excluded from OI — thin option
+  // chains back-tested at 48% direction-match (coin flip), so MCX signals
+  // are price/technicals-driven only, same as any other non-OI symbol.
   // Server-side OI_ALL validates the symbol — no need to duplicate the list here
   if(!SERVER_URL)return Promise.resolve(null);
   var url=SERVER_URL+"/zerodha_oi?sym="+sym;
