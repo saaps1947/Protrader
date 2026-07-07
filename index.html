@@ -5270,7 +5270,13 @@ function renderJ(){
 
   var open   = SIGNAL_LOG.filter(function(x){return x.status==="OPEN";});
   var closed = SIGNAL_LOG.filter(function(x){return x.status!=="OPEN";});
-  var wins   = closed.filter(function(x){return x.outcome==="WIN"||x.outcome==="BIG WIN";}).length;
+  // FIX: was only counting outcome==="WIN"||"BIG WIN" as a win, so a MANUAL
+  // close (direction-flip auto-close) that happened to be profitable wasn't
+  // counted — giving a different win rate here (39%) than the Signal
+  // Performance card (46%), which already used the more complete definition
+  // "any trade that closed in profit, regardless of why it closed." Aligned
+  // to that single definition across the whole app per Mahesh's decision.
+  var wins   = closed.filter(function(x){return x.outcome==="WIN"||x.outcome==="BIG WIN"||(x.pnl!=null&&x.pnl>0);}).length;
   var wr     = closed.length ? Math.round(wins/closed.length*100) : 0;
   var totPnl = closed.reduce(function(a,x){return a+(x.pnl||0);},0);
   var avgPnl = closed.length ? Math.round(totPnl/closed.length) : 0;
@@ -5610,7 +5616,7 @@ function renderPerformance(){
   html+="</div>";
   // ROI row
   html+="<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px'>";
-  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>ROI (on ₹"+capitalRef.toLocaleString("en-IN")+")</div><div style='font-size:1.1rem;font-weight:800;color:"+(roiOnRef>=0?"var(--g)":"var(--r)")+"'>"+(roiOnRef>=0?"+":"")+roiOnRef.toFixed(1)+"%</div></div>";
+  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>ROI (on capital used)</div><div style='font-size:1.1rem;font-weight:800;color:"+(roiPct>=0?"var(--g)":"var(--r)")+"'>"+(roiPct>=0?"+":"")+roiPct.toFixed(1)+"%</div><div style='font-size:.5rem;color:var(--m);margin-top:2px'>₹"+Math.round(capitalDeployed).toLocaleString("en-IN")+" deployed</div></div>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>AVG / TRADE</div><div style='font-size:1.1rem;font-weight:800;color:"+(avgPnlPerTrade>=0?"var(--g)":"var(--r)")+"'>"+(avgPnlPerTrade>=0?"+":"")+"₹"+Math.abs(avgPnlPerTrade).toLocaleString("en-IN")+"</div></div>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>BEST / WORST</div><div style='font-size:.72rem;font-weight:800'><span style='color:var(--g)'>+₹"+bestTrade.toLocaleString("en-IN")+"</span><span style='color:var(--m)'> / </span><span style='color:var(--r)'>₹"+worstTrade.toLocaleString("en-IN")+"</span></div></div>";
   html+="</div>";
