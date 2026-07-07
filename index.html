@@ -1049,6 +1049,22 @@ function _doFetchFromServer(){
     serverOk=true;
     _serverRetryCount=0; // reset on success
     VIX=d.vix||17.5;
+    // BUG FIX: the server has known about Kite token expiry all along
+    // (result["zerodha_token_expired"]) but the frontend never surfaced it —
+    // so when the daily Zerodha access token expired, OI/price data quietly
+    // fell back to stale cache with zero indication of WHY, and it looked
+    // like a data bug rather than "you need to regenerate today's Kite
+    // token." This is the most likely real cause of the OI mismatch (the
+    // Render Starter plan doesn't sleep, so cold-start wasn't it). Now: show
+    // a persistent, unmissable alert the moment this is detected, at most
+    // once per hour so it doesn't spam every 30s poll.
+    if(d.zerodha_token_expired){
+      var lastTokenAlert = _lastTokenExpiredAlert || 0;
+      if(Date.now()-lastTokenAlert > 3600000){
+        _lastTokenExpiredAlert = Date.now();
+        toast("🔑 Kite Token Expired","Zerodha access token has expired — OI and live data are showing STALE cached values. Regenerate today's token in Settings to fix.","tr");
+      }
+    }
     if(wasDown){
       setTimeout(fetchStocks,2000);
       if(KITE.connected){setTimeout(startOIFetch,1000);}
@@ -1100,6 +1116,18 @@ function _doFetchFromServer(){
         sc.buildup=sd.oi.buildup||"";           // LONG_BUILDUP / SHORT_BUILDUP etc
         sc.oiExpiryDay=sd.oi.is_expiry_day||false;  // expiry day — OI decays as contract settles
         sc.oiExpiry=sd.oi.expiry||"";
+        // BUG FIX: the server ALREADY knows when it's serving stale OI (it
+        // tags responses with cached:true + cache_age_min + stale:true when
+        // Zerodha calls fail — most commonly a DAILY KITE TOKEN EXPIRY, not
+        // a Render cold-start; Render Starter plan doesn't sleep). The
+        // frontend was silently discarding that flag and displaying the
+        // numbers as if fresh. Now we read the server's authoritative age
+        // directly, which is more accurate than guessing from client-side
+        // fetch timing alone (that only catches OUR fetch failing, not a
+        // stale value the server itself is recycling from its own cache).
+        sc.oiServerStale = sd.oi.stale || sd.oi.cached || false;
+        sc.oiServerAgeMin = sd.oi.cache_age_min || 0;
+        sc.oiFetchedAt = Date.now();
       }
       // CPR — now included in market response from prev day OHLC
       if(sd.cpr && sd.cpr.pivot){
@@ -1207,6 +1235,7 @@ function _doFetchFromServer(){
 // Lock is 30s normally, but bypassed on first load (_hasOILoaded flag)
 var _oiFirstLoad={};
 var _oiRefreshTime={}; // sym → last successful OI refresh time string
+var _oiRefreshTs={};   // sym → last successful OI refresh epoch ms (for staleness check)
 function fetchOI(sym){
   var minInterval = _oiFirstLoad[sym] ? 30000 : 100; // near-instant on first load
   safeFetch("oi_"+sym, function(){return fetchOIMain(sym);}, minInterval);
@@ -1382,9 +1411,29 @@ function updateOI(s){
   var ceOI  = s.cOI>0 ? "<div class='oi-sv' style='color:var(--r)'>"+(s.cOI/1e7).toFixed(2)+" Cr</div>"+ceChg : "<div class='oi-sv'>–</div>";
 
   strip.style.display="block";
-  var oiAge = _oiRefreshTime[s.sym] ? ("OI @ "+_oiRefreshTime[s.sym]) : ("OI @ "+istTime());
+  // BUG FIX: this used to fall back to istTime() (current time) whenever the
+  // dedicated /oi fetch hadn't succeeded for this symbol — silently showing
+  // BUG FIX: this used to fall back to istTime() (current time) whenever the
+  // dedicated /oi fetch hadn't succeeded for this symbol — silently showing
+  // "OI @ 10:28 AM" even when the underlying PCR/walls were actually several
+  // hours old. Root cause confirmed: NOT a Render cold-start (paid Starter
+  // plan doesn't sleep) — it's the Zerodha Kite access token expiring daily;
+  // the server correctly detects the 401/403 and serves its own last-good
+  // cache (tagged stale/cache_age_min), but the frontend was discarding that
+  // tag. Now we prefer the server's authoritative age when available.
+  var oiAgeMin = s.oiServerStale ? s.oiServerAgeMin
+                : (_oiRefreshTs[s.sym] ? Math.round((Date.now()-_oiRefreshTs[s.sym])/60000) : null);
+  var oiIsStale = s.oiServerStale || oiAgeMin===null || oiAgeMin>10;
+  var oiAge;
+  if(oiAgeMin===null && !s.oiServerStale){
+    oiAge = "<span style='color:#f59e0b'>⚠ OI not yet loaded</span>";
+  } else if(oiIsStale){
+    oiAge = "<span style='color:#f59e0b'>⚠ OI stale — "+oiAgeMin+"m old (Kite token may need refresh)</span>";
+  } else {
+    oiAge = "OI @ "+_oiRefreshTime[s.sym];
+  }
   strip.innerHTML=
-    "<div class='oi-hdr'><span>📊 OI — <b>"+s.sym+"</b></span><span style='color:var(--m);font-size:.6rem'>"+oiAge+"</span></div>"+
+    "<div class='oi-hdr'><span>📊 OI — <b>"+s.sym+"</b></span><span style='font-size:.6rem'>"+oiAge+"</span></div>"+
     "<div class='oi-grid'>"+
       "<div class='oi-side'><div class='oi-sl' style='color:var(--g)'>Put OI (Support)</div>"+peOI+"</div>"+
       "<div class='oi-side'><div class='oi-sl' style='color:var(--r)'>Call OI (Resist)</div>"+ceOI+"</div>"+
@@ -4592,9 +4641,27 @@ function renderFeed(){
     }
     // Add OI data if available
     if(s.pcr){
-      var oiLabel = s.oiExpiryDay ? "🔵 OI Live ⚡EXPIRY" : "🔵 OI Live";
-      var oiLabelColor = s.oiExpiryDay ? "#f59e0b" : "var(--m)";
-      var expiryNote = s.oiExpiryDay ? " <span style='color:#f59e0b;font-size:.55rem'>(expiry — OI settling, watch for short covering)</span>" : "";
+      // Prefer the SERVER's authoritative staleness flag (it knows about
+      // Kite token expiry / Zerodha failures we can't see client-side).
+      // Fall back to client-side fetch timing only if the server didn't say.
+      var oiCardAgeMin = s.oiServerStale ? s.oiServerAgeMin
+                        : (s.oiFetchedAt ? Math.round((Date.now()-s.oiFetchedAt)/60000) : null);
+      var oiStale = s.oiServerStale || oiCardAgeMin===null || oiCardAgeMin>10;
+      var oiLabel, oiLabelColor, expiryNote;
+      if(oiStale){
+        oiLabel = "🔵 OI ⚠ STALE";
+        oiLabelColor = "#f59e0b";
+        var reasonTxt = s.oiServerStale ? "server cache" : "not refreshing";
+        expiryNote = " <span style='color:#f59e0b;font-size:.55rem'>("+(oiCardAgeMin?oiCardAgeMin+"m old":"age unknown")+" — "+reasonTxt+", do not rely on this)</span>";
+      } else if(s.oiExpiryDay){
+        oiLabel = "🔵 OI Live ⚡EXPIRY";
+        oiLabelColor = "#f59e0b";
+        expiryNote = " <span style='color:#f59e0b;font-size:.55rem'>(expiry — OI settling, watch for short covering)</span>";
+      } else {
+        oiLabel = "🔵 OI Live";
+        oiLabelColor = "var(--m)";
+        expiryNote = "";
+      }
       layers.push("<div style='display:flex;gap:6px;margin-bottom:4px'><span style='font-size:.6rem;font-weight:700;color:"+oiLabelColor+";white-space:nowrap'>"+oiLabel+"</span><span style='font-size:.62rem;color:var(--b)'>PCR: "+s.pcr+" | Max Pain: ₹"+s.mp+" | CE Wall: ₹"+s.cW+" | PE Wall: ₹"+s.pW+expiryNote+"</span></div>");
     }
     // Add CPR if available
@@ -6142,10 +6209,22 @@ function applyOIData(sym,o){
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.cW=o.ce_wall||0;s.pW=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
   if(o.expiry) s.exp=o.expiry;
-  console.log("[OI ✅] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" src:"+(o.source||"")+" @ "+istTime());
-  // Track when OI was last successfully refreshed (for display in strip)
+  // Server-side authoritative staleness (set when Zerodha calls fail — most
+  // often a daily Kite token expiry — and the server falls back to its own
+  // cache). This is more reliable than client-side timing alone.
+  s.oiServerStale = o.stale || o.cached || false;
+  s.oiServerAgeMin = o.cache_age_min || 0;
+  console.log("[OI "+(s.oiServerStale?"⚠ STALE":"✅")+"] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" src:"+(o.source||"")+(s.oiServerStale?(" AGE:"+s.oiServerAgeMin+"min"):"")+" @ "+istTime());
+  // Track when OI was last successfully refreshed (for display in strip).
+  // BUG FIX: previously only the display STRING was tracked, and the render
+  // fallback showed "OI @ <current time>" whenever this hadn't fired — which
+  // silently disguised a failed/stalled OI fetch as freshly-loaded data.
+  // Now we also store the real epoch ms so the header can detect and flag
+  // genuinely stale OI instead of always claiming "now".
   _oiRefreshTime = _oiRefreshTime || {};
   _oiRefreshTime[sym] = istTime();
+  _oiRefreshTs = _oiRefreshTs || {};
+  _oiRefreshTs[sym] = Date.now();
   // Only update the hero OI strip if this symbol IS currently selected (CS)
   if(CS&&CS.sym===sym){
     updateHero();  // refresh PCR/MaxPain tiles
