@@ -5593,18 +5593,29 @@ function renderPerformance(){
   var html="<div style='padding:4px 0 12px'>";
 
   // Overall stats
-  // ROI = P&L ÷ capital actually deployed
-  // Capital deployed per trade = entry_px × lot_size (premium not included — directional trades)
-  // We use the AT.capital setting as the reference capital for simple ROI
-  var capitalRef = AT.capital || 50000;
-  var capitalDeployed = closed.reduce(function(a,e){
+  // ROI — capital-weighted average, per Mahesh's explicit choice.
+  // Mechanically this is total_pnl / total_capital-in-play (same shape as
+  // the original "consolidated" method), but with REALISTIC capital now:
+  //   INDEX (NIFTY/BANKNIFTY/FINNIFTY/SENSEX) → fixed ₹1,90,000 margin,
+  //     NOT entry_px×lot notional (full contract value was never actually
+  //     at risk on a futures/margin-based index trade — the margin was).
+  //   STOCKS → entry_px × lot_size (unchanged — direct equity buying).
+  // Weighting by capital means a trade that used more capital pulls the
+  // blended % harder, which answers "what's my overall return on the
+  // capital actually in play," size-adjusted — as opposed to a plain
+  // average which would let a small trade count equally to a large one.
+  var INDEX_SYMS = {"NIFTY":1,"BANKNIFTY":1,"FINNIFTY":1,"SENSEX":1,"MIDCPNIFTY":1};
+  var INDEX_MARGIN = 190000;
+  var capPerTrade = closed.map(function(e){
+    if(INDEX_SYMS[e.sym]) return INDEX_MARGIN;
     var ls = e.lot_size || LOT_SIZES[e.sym] || LOT_SIZES.DEFAULT || 50;
-    return a + (e.entry_px||0) * ls;
-  },0);
-  // ROI on deployed capital (not reference capital — more honest)
-  var roiPct = capitalDeployed > 0 ? (totPnl / capitalDeployed * 100) : 0;
-  // Simple ROI on AT capital (for intuitive understanding)
-  var roiOnRef = capitalRef > 0 ? (totPnl / capitalRef * 100) : 0;
+    return (e.entry_px||0) * ls;
+  });
+  var totalCapital = capPerTrade.reduce(function(a,b){return a+b;},0);
+  var roiPct = totalCapital>0 ? (totPnl/totalCapital*100) : 0;
+  // capitalDeployed shown as average capital-per-trade, for an intuitive
+  // "typical size" reference next to the blended ROI%.
+  var capitalDeployed = closed.length ? totalCapital/closed.length : 0;
   var avgPnlPerTrade = closed.length ? Math.round(totPnl / closed.length) : 0;
   var bestTrade = closed.reduce(function(a,e){return (e.pnl||0)>a?(e.pnl||0):a;},0);
   var worstTrade = closed.reduce(function(a,e){return (e.pnl||0)<a?(e.pnl||0):a;},0);
@@ -5616,7 +5627,7 @@ function renderPerformance(){
   html+="</div>";
   // ROI row
   html+="<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px'>";
-  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>ROI (on capital used)</div><div style='font-size:1.1rem;font-weight:800;color:"+(roiPct>=0?"var(--g)":"var(--r)")+"'>"+(roiPct>=0?"+":"")+roiPct.toFixed(1)+"%</div><div style='font-size:.5rem;color:var(--m);margin-top:2px'>₹"+Math.round(capitalDeployed).toLocaleString("en-IN")+" deployed</div></div>";
+  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>ROI (capital-weighted)</div><div style='font-size:1.1rem;font-weight:800;color:"+(roiPct>=0?"var(--g)":"var(--r)")+"'>"+(roiPct>=0?"+":"")+roiPct.toFixed(1)+"%</div><div style='font-size:.5rem;color:var(--m);margin-top:2px'>~₹"+Math.round(capitalDeployed).toLocaleString("en-IN")+" avg capital/trade</div></div>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>AVG / TRADE</div><div style='font-size:1.1rem;font-weight:800;color:"+(avgPnlPerTrade>=0?"var(--g)":"var(--r)")+"'>"+(avgPnlPerTrade>=0?"+":"")+"₹"+Math.abs(avgPnlPerTrade).toLocaleString("en-IN")+"</div></div>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>BEST / WORST</div><div style='font-size:.72rem;font-weight:800'><span style='color:var(--g)'>+₹"+bestTrade.toLocaleString("en-IN")+"</span><span style='color:var(--m)'> / </span><span style='color:var(--r)'>₹"+worstTrade.toLocaleString("en-IN")+"</span></div></div>";
   html+="</div>";
