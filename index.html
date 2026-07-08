@@ -4586,7 +4586,13 @@ function _activeTradeSigs(){
     out.push({
       sym:e.sym, bias:e.bias, trade:e.trade||(e.sym+" "+e.bias),
       strategy:e.strategy||"", confidence:e.confidence||70,
-      urgency:e.urgency||"HIGH", why:e.notes||"Trade in progress",
+      // BUG FIX: was reading e.notes (only ever populated with post-close
+      // messages like "SL hit at ₹X" — empty while a trade is OPEN) instead
+      // of e.why, which is where the real signal explanation is actually
+      // stored (see autoLogSignal: why: sig.why||""). This is why every
+      // active-trade card showed the generic "Trade in progress" fallback
+      // instead of the genuine reasoning the signal fired on.
+      urgency:e.urgency||"HIGH", why:e.why||e.notes||"Trade in progress",
       entry:e.entry_px, sl:e.sl_px, target1:e.t1_px, target2:e.t2_px||e.t1_px,
       rr:e.rr||"1:2", timeframe:e.timeframe||"Intraday",
       setupKey:e.setupKey, layers:e.layers,
