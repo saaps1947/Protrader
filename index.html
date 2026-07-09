@@ -1128,8 +1128,6 @@ function _doFetchFromServer(){
         sc.oiServerStale = sd.oi.stale || sd.oi.cached || false;
         sc.oiServerAgeMin = sd.oi.cache_age_min || 0;
         sc.oiFetchedAt = Date.now();
-        sc.cC15 = sd.oi.ce_chg_15m||0; sc.pC15 = sd.oi.pe_chg_15m||0;
-        sc.oi15Avail = sd.oi.oi_15m_available||false;
       }
       // CPR — now included in market response from prev day OHLC
       if(sd.cpr && sd.cpr.pivot){
@@ -1406,24 +1404,6 @@ function updateOI(s){
   var pcrCol=pcr>1.1?"var(--g)":pcr<0.9?"var(--r)":"var(--y)";
   var pcrLbl=pcr>1.1?"Bullish":pcr<0.9?"Bearish":"Neutral";
   var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"–";
-  // 15-min OI change row: shows genuine build-up/unwind over the last 15
-  // minutes, separate from the near-instant fetch-to-fetch delta shown next
-  // to Put/Call OI above (which mostly reflects API polling noise, not a
-  // real trend). Falls back to "building..." in the first ~15min after
-  // market open or app load, when there isn't yet a real 15-min-old sample.
-  var oi15mRow;
-  if(!s.oi15Avail){
-    oi15mRow = "<span class='oi-rl'>OI Δ 15min</span><span class='oi-rv' style='font-size:.6rem;color:var(--m)'>building… (needs 15min of data)</span>";
-  } else {
-    var pe15 = s.pC15||0, ce15 = s.cC15||0;
-    var pe15Col = pe15>0?"var(--g)":pe15<0?"var(--r)":"var(--m)";
-    var ce15Col = ce15>0?"var(--r)":ce15<0?"var(--g)":"var(--m)";
-    // Interpretation hint: PE OI rising = fresh put writing (support building,
-    // bullish); CE OI rising = fresh call writing (resistance building, bearish)
-    var fmt15 = function(v){ return (v>=0?"+":"")+(v/1e7).toFixed(2)+"Cr"; };
-    oi15mRow = "<span class='oi-rl'>PE Δ15m</span><span class='oi-rv' style='color:"+pe15Col+"'>"+fmt15(pe15)+"</span>"+
-               "<span class='oi-rl' style='margin-left:12px'>CE Δ15m</span><span class='oi-rv' style='color:"+ce15Col+"'>"+fmt15(ce15)+"</span>";
-  }
   if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
   var peChg = s.pC ? "<div class='oi-sc' style='color:var(--g)'>Chg "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr</div>" : "";
   var ceChg = s.cC ? "<div class='oi-sc' style='color:var(--r)'>Chg "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr</div>" : "";
@@ -1463,7 +1443,6 @@ function updateOI(s){
         "<span class='oi-rl' style='margin-left:12px'>Max Pain</span><span class='oi-rv'>"+(s.mp?"₹"+s.mp.toLocaleString("en-IN"):"–")+"</span></div>"+
       "<div class='oi-row'><span class='oi-rl' style='color:var(--g)'>PE Wall</span><span class='oi-rv' style='color:var(--g)'>"+(s.pW?"₹"+s.pW.toLocaleString("en-IN"):"–")+"</span>"+
         "<span class='oi-rl' style='margin-left:12px;color:var(--r)'>CE Wall</span><span class='oi-rv' style='color:var(--r)'>"+(s.cW?"₹"+s.cW.toLocaleString("en-IN"):"–")+"</span></div>"+
-      "<div class='oi-row'>"+oi15mRow+"</div>"+
       "<div class='oi-row'><span class='oi-rl'>Signal</span><span class='oi-rv' style='font-size:.63rem'>"+sig+"</span></div>"+
     "</div>";
 }
@@ -3330,6 +3309,15 @@ function localSigs(){
     // hours, until 11:30 PM. Every other symbol — including the BTST/strong-
     // close bonus — is fully blocked outside 9:15 AM–3:30 PM. No exceptions.
     var isMCX = isSymMCX(s.sym);
+    // Combined OI staleness — matches the check used for the card's own
+    // "⚠ STALE" display exactly, so scoring never trusts OI the UI is
+    // simultaneously telling the user not to trust. Catches both an
+    // explicit server-side stale flag (Kite token expiry etc.) AND the
+    // client-side fallback (no fresh fetch in the last 10 min / never
+    // loaded at all).
+    var _oiAgeMinChk = s.oiServerStale ? s.oiServerAgeMin
+                      : (s.oiFetchedAt ? Math.round((Date.now()-s.oiFetchedAt)/60000) : null);
+    var oiIsStaleForScoring = s.oiServerStale || _oiAgeMinChk===null || _oiAgeMinChk>10;
     if(isMCX){ if(!isMCXOpen()) return; } else { if(!isOpen()) return; }
 
     var px=s.px, atm=s.atm||Math.round(px/(s.step||100))*(s.step||100);
@@ -3607,26 +3595,29 @@ function localSigs(){
     var ceUnwinding=writer&&writer.ce_unwinding;
     var peUnwinding=writer&&writer.pe_unwinding;
 
-    // ── 15-DAY DAILY TREND — macro context layer ──
+    // ── INTRADAY MTF TREND — 5m/15m/1h weighted (replaces old daily-15d calc) ──
     var trend15=s.trend15||"UNKNOWN";
     var hhHl=s.hh_hl||false;
     var lhLl=s.lh_ll||false;
-    var trendStr15 = s.trend_strength||0;          // % of up-days (e.g. 57)
-    var trendUpCnt = s.trend_up_count||0;          // actual up-day count (e.g. 8)
-    var trendSess  = s.trend_sessions||0;          // total sessions compared (e.g. 14)
-    // Build readable count label: "8W/6L in 14 sessions" or fallback to % if counts missing
-    var trendCountLbl = trendSess>0
-      ? (trendUpCnt+"W/"+(trendSess-trendUpCnt)+"L in "+trendSess+" sessions")
-      : (trendStr15+"% up-days");
+    var trendStr15 = s.trend_strength||0;
+    // trend15 itself is computed server-side by the MTF engine (5m×3 + 15m×2
+    // + 1h×1), NOT a 15-day daily calculation despite the old variable names
+    // below (trend_up_count/trend_sessions are legacy fields never removed).
+    // Label built from the real per-timeframe alignment instead of stale
+    // daily win/loss counts, which were misleading (e.g. "8W/6L in 14
+    // sessions" sitting next to an already-MTF-corrected trend value).
+    var t5=s.trend_5m||0, t15tf=s.trend_15m||0, t1h=s.trend_1h||0;
+    function _tfSym(v){ return v>0?"↑":v<0?"↓":"–"; }
+    var trendCountLbl = "5m"+_tfSym(t5)+" 15m"+_tfSym(t15tf)+" 1h"+_tfSym(t1h);
 
     if(trend15==="STRONG_BULL"||hhHl){
-      bullScore+=3;bullReasons.push("15D trend: STRONG BULL — HH/HL structure ("+trendCountLbl+")");
+      bullScore+=3;bullReasons.push("MTF trend: STRONG BULL — timeframes aligned ("+trendCountLbl+")");
     } else if(trend15==="BULL"){
-      bullScore+=2;bullReasons.push("15D trend: BULLISH ("+trendCountLbl+")");
+      bullScore+=2;bullReasons.push("MTF trend: BULLISH ("+trendCountLbl+")");
     } else if(trend15==="STRONG_BEAR"||lhLl){
-      bearScore+=3;bearReasons.push("15D trend: STRONG BEAR — LH/LL structure ("+trendCountLbl+")");
+      bearScore+=3;bearReasons.push("MTF trend: STRONG BEAR — timeframes aligned ("+trendCountLbl+")");
     } else if(trend15==="BEAR"){
-      bearScore+=2;bearReasons.push("15D trend: BEARISH ("+trendCountLbl+")");
+      bearScore+=2;bearReasons.push("MTF trend: BEARISH ("+trendCountLbl+")");
     }
     // Counter-trend penalty: signal against 15D trend loses 2 points
     if((trend15==="STRONG_BULL"||trend15==="BULL")&&bearScore>bullScore){
@@ -3657,7 +3648,12 @@ function localSigs(){
     // flip. Unlike NSE/BSE index OI (deep, reliable), MCX commodity option OI
     // is noise here, so it's excluded entirely for MCX. Price/technicals still
     // drive MCX signals normally.
-    if(!isMCX){
+    // STALE-OI GATE: same principle applied to stale data. The OI panel
+    // already warns "⚠ STALE — do not rely on this" (Kite token expiry /
+    // Zerodha fetch failure), but the scoring itself was still using those
+    // numbers as if fresh — a signal could hit 97% confidence citing a PCR
+    // reading the UI was simultaneously telling the user not to trust.
+    if(!isMCX && !oiIsStaleForScoring){
     if(putWriting){bullScore+=2;bullReasons.push("Put writing ↑ ("+((peChg/1e6).toFixed(1))+"M new puts = support)");}
     // FIX: CE writing alone is NOT enough for bearish signal
     // Institutions write covered calls as income — not necessarily bearish
@@ -3698,7 +3694,7 @@ function localSigs(){
     if(aboveMp){bearScore+=1;bearReasons.push("Above Max Pain ₹"+mp+" → gravitates down");}
     if(nearPeWall){bullScore+=2;bullReasons.push("At PE wall ₹"+peWall+" = strong support");}
     if(nearCeWall){bearScore+=2;bearReasons.push("At CE wall ₹"+ceWall+" = strong resistance");}
-    } // end !isMCX OI gate
+    } // end !isMCX && !oiServerStale OI gate
 
     // Technical confirmations
     // FIX 2: Golden/Death Cross +4→+2. On 5-min intraday charts SMA20/50 cross
@@ -4088,7 +4084,14 @@ function localSigs(){
     // ══════════════════════════════════════════════════════════
     // LAYER DIVERSITY GATE — 5 independent source categories
     // ══════════════════════════════════════════════════════════
-    var hasOI = (pcr>0||ceOI>0||peOI>0||ceWall>0||peWall>0||mp>0);
+    // BUG FIX: hasOI previously only checked whether OI fields had ANY
+    // value, with no regard for whether that data was fresh. This meant a
+    // signal could score 97% confidence citing "PCR: 0.88" as supporting
+    // evidence while the OI panel itself was simultaneously showing
+    // "⚠ STALE — age unknown — not refreshing, do not rely on this" — the
+    // staleness warning was purely cosmetic and never actually excluded
+    // stale OI from scoring. Now stale OI is treated the same as NO OI.
+    var hasOI = (pcr>0||ceOI>0||peOI>0||ceWall>0||peWall>0||mp>0) && !oiIsStaleForScoring;
 
     // OI category: PCR, walls, writer traps
     var oiCatBull = (pcrBull?1:0)+(pcrStrongBull?2:0)+(nearPeWall?1:0)+
@@ -6246,11 +6249,6 @@ function applyOIData(sym,o){
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.cW=o.ce_wall||0;s.pW=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
-  // 15-min OI change — separate from the fetch-to-fetch delta (cC/pC above,
-  // which is only ~2min and mostly noise). Shows genuine medium-term OI
-  // build-up/unwind so a fresh put-writing wave or call-unwind is visible
-  // instead of only the last poll's tiny move.
-  s.cC15=o.ce_chg_15m||0; s.pC15=o.pe_chg_15m||0; s.oi15Avail=o.oi_15m_available||false;
   if(o.expiry) s.exp=o.expiry;
   // Server-side authoritative staleness (set when Zerodha calls fail — most
   // often a daily Kite token expiry — and the server falls back to its own
