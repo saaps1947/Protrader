@@ -4640,6 +4640,15 @@ function renderFeed(){
   var h="";
   f.forEach(function(sig,i){
     var gi=allSigs.indexOf(sig);
+    // FIX: gi is -1 for every active-trade injected card (they're not in
+    // allSigs by design — see _activeTradeSigs()), so all such cards ended
+    // up with the same id="ld_-1" for the "Show analysis layers" toggle.
+    // getElementById only ever finds the FIRST match, so only the first
+    // active-trade card's toggle worked; every other one silently toggled
+    // the first card's hidden div instead of its own. Use a per-card unique
+    // key (symbol+bias) for the toggle's DOM id instead — gi is kept as-is
+    // since execSig(gi) still needs -1 to mean "no matching live signal".
+    var ldKey=sig.sym+"_"+sig.bias;
     var s=allS().filter(function(x){return x.sym===sig.sym;})[0]||{};
     var bt=sig.isBTST,dir=bt?"btst":sig.bias==="BULLISH"?"bull":sig.bias==="BEARISH"?"bear":"neu";
     var dc=bt?"var(--p)":sig.bias==="BULLISH"?"var(--g)":sig.bias==="BEARISH"?"var(--r)":"var(--y)";
@@ -4801,8 +4810,8 @@ function renderFeed(){
     // (layerDetailExtra, only present for active trades) under one toggle,
     // per request, instead of the live check always being visible.
     if(layers.length || layerDetailExtra){
-      layerDetail="<div id='ld_"+gi+"' style='display:none;padding:8px 10px;background:rgba(255,255,255,.03);border-top:1px solid rgba(255,255,255,.05)'>"+layers.join("")+layerDetailExtra+"</div>"+
-        "<div onclick='toggleLD("+gi+")' style='padding:4px 10px;font-size:.6rem;color:var(--m);text-align:center;cursor:pointer;border-top:1px solid rgba(255,255,255,.05)' id='ldBtn_"+gi+"'>▼ Show analysis layers</div>";
+      layerDetail="<div id='ld_"+ldKey+"' style='display:none;padding:8px 10px;background:rgba(255,255,255,.03);border-top:1px solid rgba(255,255,255,.05)'>"+layers.join("")+layerDetailExtra+"</div>"+
+        "<div onclick='toggleLD(\""+ldKey+"\")' style='padding:4px 10px;font-size:.6rem;color:var(--m);text-align:center;cursor:pointer;border-top:1px solid rgba(255,255,255,.05)' id='ldBtn_"+ldKey+"'>▼ Show analysis layers</div>";
     }
 
     h+="<div class='sc "+dir+"'>"+badge+
@@ -4857,9 +4866,9 @@ function renderFeed(){
   });
   feed.innerHTML=h;
 }
-function toggleLD(gi){
-  var el=document.getElementById("ld_"+gi);
-  var btn=document.getElementById("ldBtn_"+gi);
+function toggleLD(ldKey){
+  var el=document.getElementById("ld_"+ldKey);
+  var btn=document.getElementById("ldBtn_"+ldKey);
   if(!el)return;
   var hidden=el.style.display==="none";
   el.style.display=hidden?"block":"none";
