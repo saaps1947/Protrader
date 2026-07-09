@@ -1128,6 +1128,8 @@ function _doFetchFromServer(){
         sc.oiServerStale = sd.oi.stale || sd.oi.cached || false;
         sc.oiServerAgeMin = sd.oi.cache_age_min || 0;
         sc.oiFetchedAt = Date.now();
+        sc.cC15 = sd.oi.ce_chg_15m||0; sc.pC15 = sd.oi.pe_chg_15m||0;
+        sc.oi15Avail = sd.oi.oi_15m_available||false;
       }
       // CPR — now included in market response from prev day OHLC
       if(sd.cpr && sd.cpr.pivot){
@@ -1405,6 +1407,20 @@ function updateOI(s){
   var pcrLbl=pcr>1.1?"Bullish":pcr<0.9?"Bearish":"Neutral";
   var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"–";
   if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
+  // 15-min OI change row: genuine build-up/unwind over the last 15 minutes,
+  // separate from the near-instant fetch-to-fetch delta (mostly API-poll
+  // noise). Falls back to "building..." until 15min of real history exists.
+  var oi15mRow;
+  if(!s.oi15Avail){
+    oi15mRow = "<span class='oi-rl'>OI Δ 15min</span><span class='oi-rv' style='font-size:.6rem;color:var(--m)'>building… (needs 15min of data)</span>";
+  } else {
+    var pe15 = s.pC15||0, ce15 = s.cC15||0;
+    var pe15Col = pe15>0?"var(--g)":pe15<0?"var(--r)":"var(--m)";
+    var ce15Col = ce15>0?"var(--r)":ce15<0?"var(--g)":"var(--m)";
+    var fmt15 = function(v){ return (v>=0?"+":"")+(v/1e7).toFixed(2)+"Cr"; };
+    oi15mRow = "<span class='oi-rl'>PE Δ15m</span><span class='oi-rv' style='color:"+pe15Col+"'>"+fmt15(pe15)+"</span>"+
+               "<span class='oi-rl' style='margin-left:12px'>CE Δ15m</span><span class='oi-rv' style='color:"+ce15Col+"'>"+fmt15(ce15)+"</span>";
+  }
   var peChg = s.pC ? "<div class='oi-sc' style='color:var(--g)'>Chg "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr</div>" : "";
   var ceChg = s.cC ? "<div class='oi-sc' style='color:var(--r)'>Chg "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr</div>" : "";
   var peOI  = s.pOI>0 ? "<div class='oi-sv' style='color:var(--g)'>"+(s.pOI/1e7).toFixed(2)+" Cr</div>"+peChg : "<div class='oi-sv'>–</div>";
@@ -1443,6 +1459,7 @@ function updateOI(s){
         "<span class='oi-rl' style='margin-left:12px'>Max Pain</span><span class='oi-rv'>"+(s.mp?"₹"+s.mp.toLocaleString("en-IN"):"–")+"</span></div>"+
       "<div class='oi-row'><span class='oi-rl' style='color:var(--g)'>PE Wall</span><span class='oi-rv' style='color:var(--g)'>"+(s.pW?"₹"+s.pW.toLocaleString("en-IN"):"–")+"</span>"+
         "<span class='oi-rl' style='margin-left:12px;color:var(--r)'>CE Wall</span><span class='oi-rv' style='color:var(--r)'>"+(s.cW?"₹"+s.cW.toLocaleString("en-IN"):"–")+"</span></div>"+
+      "<div class='oi-row'>"+oi15mRow+"</div>"+
       "<div class='oi-row'><span class='oi-rl'>Signal</span><span class='oi-rv' style='font-size:.63rem'>"+sig+"</span></div>"+
     "</div>";
 }
@@ -4728,6 +4745,32 @@ function renderFeed(){
             "<div style='font-size:.55rem;color:"+pnlColor+"'>"+(isProfit?"+":"")+pnlPct.toFixed(2)+"%</div>"+
           "</div>"+
         "</div>";
+
+      // LIVE LAYER STATUS — for a running trade, show each layer's CURRENT
+      // read vs the trade's original direction.
+      var layerStatuses = _layerLiveStatus(s, activeTrade.bias);
+      if(layerStatuses.length){
+        var disagreeCount = layerStatuses.filter(function(l){return !l.agree && !l.neutral;}).length;
+        var layerChips = layerStatuses.map(function(l){
+          var chipColor = l.agree ? "var(--g)" : l.neutral ? "var(--m)" : "var(--r)";
+          var chipIcon = l.agree ? "✅" : l.neutral ? "◦" : "⚠️";
+          return "<div style='display:flex;align-items:center;gap:5px;padding:3px 0'>"+
+                   "<span style='font-size:.6rem;width:16px'>"+l.icon+"</span>"+
+                   "<span style='font-size:.62rem;font-weight:700;color:var(--m);width:42px'>"+l.name+"</span>"+
+                   "<span style='font-size:.6rem;color:"+chipColor+"'>"+chipIcon+" "+l.detail+"</span>"+
+                 "</div>";
+        }).join("");
+        var summaryColor = disagreeCount>=2 ? "var(--r)" : disagreeCount===1 ? "var(--y)" : "var(--g)";
+        var summaryTxt = disagreeCount===0 ? "All layers still aligned"
+                        : disagreeCount+" of "+layerStatuses.length+" layers now against you";
+        liveStatusHtml += "<div style='margin:0 10px 8px;padding:8px 10px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:8px'>"+
+          "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px'>"+
+            "<span style='font-size:.6rem;font-weight:700;color:var(--m)'>LIVE LAYER CHECK</span>"+
+            "<span style='font-size:.6rem;font-weight:700;color:"+summaryColor+"'>"+summaryTxt+"</span>"+
+          "</div>"+
+          layerChips+
+        "</div>";
+      }
     }
 
     h+="<div class='sc "+dir+"'>"+badge+
@@ -4790,6 +4833,52 @@ function toggleLD(gi){
   el.style.display=hidden?"block":"none";
   if(btn)btn.innerHTML=hidden?"▲ Hide analysis":"▼ Show analysis layers";
 }
+// Computes the CURRENT live read of each scoring layer for a symbol, and
+// flags whether it still agrees with a trade's original direction (bias).
+// Used to show "which layers are still aligned vs breaking down" on an
+// active trade card.
+function _layerLiveStatus(s, bias){
+  var bull = bias==="BULLISH";
+  var out = [];
+  if(s.vwap){
+    var vwapDir = s.px>s.vwap ? "BULLISH" : s.px<s.vwap ? "BEARISH" : "NEUTRAL";
+    out.push({name:"VWAP", icon:"📈", agree: vwapDir===bias, neutral: vwapDir==="NEUTRAL",
+               detail: (s.px>s.vwap?"Above":"Below")+" VWAP ₹"+Math.round(s.vwap).toLocaleString("en-IN")});
+  }
+  if(s.sma20 && s.sma50){
+    var smaDir = (s.px>s.sma20 && s.sma20>=s.sma50) ? "BULLISH" : (s.px<s.sma20 && s.sma20<=s.sma50) ? "BEARISH" : "NEUTRAL";
+    out.push({name:"SMA", icon:"📊", agree: smaDir===bias, neutral: smaDir==="NEUTRAL",
+               detail: "Price "+(s.px>s.sma20?"above":"below")+" SMA20, "+(s.sma20>s.sma50?"20>50":"20<50")});
+  }
+  if(s.rsi){
+    var rsiDir = s.rsi>55 ? "BULLISH" : s.rsi<45 ? "BEARISH" : "NEUTRAL";
+    out.push({name:"RSI", icon:"⚡", agree: rsiDir===bias, neutral: rsiDir==="NEUTRAL",
+               detail: "RSI "+Math.round(s.rsi)+(s.rsi>68?" (overbought)":s.rsi<32?" (oversold)":"")});
+  }
+  if(s.trend15 && s.trend15!=="UNKNOWN"){
+    var trendDir = (s.trend15==="BULL"||s.trend15==="STRONG_BULL") ? "BULLISH" :
+                   (s.trend15==="BEAR"||s.trend15==="STRONG_BEAR") ? "BEARISH" : "NEUTRAL";
+    out.push({name:"Trend", icon:"📉", agree: trendDir===bias, neutral: trendDir==="NEUTRAL",
+               detail: s.trend15.replace(/_/g," ")});
+  }
+  if(s.orb && (s.orb.high||s.orb.low)){
+    var orbDir = (s.orb.high && s.px>s.orb.high) ? "BULLISH" : (s.orb.low && s.px<s.orb.low) ? "BEARISH" : "NEUTRAL";
+    out.push({name:"ORB", icon:"🎯", agree: orbDir===bias, neutral: orbDir==="NEUTRAL",
+               detail: orbDir==="NEUTRAL" ? "Inside range" : (orbDir==="BULLISH"?"Above":"Below")+" ORB"});
+  }
+  if(s.smc && s.smc.structure && s.smc.structure!=="NEUTRAL"){
+    var smcDir = s.smc.structure==="BULLISH" ? "BULLISH" : s.smc.structure==="BEARISH" ? "BEARISH" : "NEUTRAL";
+    out.push({name:"SMC", icon:"🏛", agree: smcDir===bias, neutral: smcDir==="NEUTRAL",
+               detail: "Structure: "+s.smc.structure});
+  }
+  if(s.pcr && !s.oiServerStale){
+    var oiDir = s.pcr>=1.1 ? "BULLISH" : s.pcr<=0.9 ? "BEARISH" : "NEUTRAL";
+    out.push({name:"OI", icon:"🔵", agree: oiDir===bias, neutral: oiDir==="NEUTRAL",
+               detail: "PCR "+s.pcr});
+  }
+  return out;
+}
+
 function fpx(v){if(!v&&v!==0)return "–";var s=""+v;if(isNaN(parseFloat(s)))return s;return "₹"+parseFloat(s).toLocaleString("en-IN");}
 function execSig(idx){var sig=allSigs[idx];if(!sig)return;logSignalEntry(sig);pendingTrade={action:sig.bias==="BULLISH"?"BUY":"SELL",instrument:sig.trade,confidence:sig.confidence,entry:sig.entry,sl:sig.sl,target:sig.target1,why:sig.why,_bt:sig.isBTST||false};if(AT.active)qAT(pendingTrade);else showOrd();}
 
@@ -6249,6 +6338,7 @@ function applyOIData(sym,o){
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.cW=o.ce_wall||0;s.pW=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
+  s.cC15=o.ce_chg_15m||0; s.pC15=o.pe_chg_15m||0; s.oi15Avail=o.oi_15m_available||false;
   if(o.expiry) s.exp=o.expiry;
   // Server-side authoritative staleness (set when Zerodha calls fail — most
   // often a daily Kite token expiry — and the server falls back to its own
