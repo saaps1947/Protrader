@@ -1128,6 +1128,8 @@ function _doFetchFromServer(){
         sc.oiServerStale = sd.oi.stale || sd.oi.cached || false;
         sc.oiServerAgeMin = sd.oi.cache_age_min || 0;
         sc.oiFetchedAt = Date.now();
+        sc.cC15 = sd.oi.ce_chg_15m||0; sc.pC15 = sd.oi.pe_chg_15m||0;
+        sc.oi15Avail = sd.oi.oi_15m_available||false;
       }
       // CPR — now included in market response from prev day OHLC
       if(sd.cpr && sd.cpr.pivot){
@@ -1404,6 +1406,24 @@ function updateOI(s){
   var pcrCol=pcr>1.1?"var(--g)":pcr<0.9?"var(--r)":"var(--y)";
   var pcrLbl=pcr>1.1?"Bullish":pcr<0.9?"Bearish":"Neutral";
   var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"–";
+  // 15-min OI change row: shows genuine build-up/unwind over the last 15
+  // minutes, separate from the near-instant fetch-to-fetch delta shown next
+  // to Put/Call OI above (which mostly reflects API polling noise, not a
+  // real trend). Falls back to "building..." in the first ~15min after
+  // market open or app load, when there isn't yet a real 15-min-old sample.
+  var oi15mRow;
+  if(!s.oi15Avail){
+    oi15mRow = "<span class='oi-rl'>OI Δ 15min</span><span class='oi-rv' style='font-size:.6rem;color:var(--m)'>building… (needs 15min of data)</span>";
+  } else {
+    var pe15 = s.pC15||0, ce15 = s.cC15||0;
+    var pe15Col = pe15>0?"var(--g)":pe15<0?"var(--r)":"var(--m)";
+    var ce15Col = ce15>0?"var(--r)":ce15<0?"var(--g)":"var(--m)";
+    // Interpretation hint: PE OI rising = fresh put writing (support building,
+    // bullish); CE OI rising = fresh call writing (resistance building, bearish)
+    var fmt15 = function(v){ return (v>=0?"+":"")+(v/1e7).toFixed(2)+"Cr"; };
+    oi15mRow = "<span class='oi-rl'>PE Δ15m</span><span class='oi-rv' style='color:"+pe15Col+"'>"+fmt15(pe15)+"</span>"+
+               "<span class='oi-rl' style='margin-left:12px'>CE Δ15m</span><span class='oi-rv' style='color:"+ce15Col+"'>"+fmt15(ce15)+"</span>";
+  }
   if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
   var peChg = s.pC ? "<div class='oi-sc' style='color:var(--g)'>Chg "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr</div>" : "";
   var ceChg = s.cC ? "<div class='oi-sc' style='color:var(--r)'>Chg "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr</div>" : "";
@@ -1443,6 +1463,7 @@ function updateOI(s){
         "<span class='oi-rl' style='margin-left:12px'>Max Pain</span><span class='oi-rv'>"+(s.mp?"₹"+s.mp.toLocaleString("en-IN"):"–")+"</span></div>"+
       "<div class='oi-row'><span class='oi-rl' style='color:var(--g)'>PE Wall</span><span class='oi-rv' style='color:var(--g)'>"+(s.pW?"₹"+s.pW.toLocaleString("en-IN"):"–")+"</span>"+
         "<span class='oi-rl' style='margin-left:12px;color:var(--r)'>CE Wall</span><span class='oi-rv' style='color:var(--r)'>"+(s.cW?"₹"+s.cW.toLocaleString("en-IN"):"–")+"</span></div>"+
+      "<div class='oi-row'>"+oi15mRow+"</div>"+
       "<div class='oi-row'><span class='oi-rl'>Signal</span><span class='oi-rv' style='font-size:.63rem'>"+sig+"</span></div>"+
     "</div>";
 }
@@ -4172,28 +4193,19 @@ function localSigs(){
           return o.type==="BULLISH"&&!o.mitigated&&o.low<entry;
         }).map(function(o){return o.low;}).sort(function(a,b){return b-a;})[0]||0) : 0;
         var pdl = s.pdl||0;  // previous day low — key intraday support level
-        var cprBc = (s.cpr && s.cpr.bc && s.cpr.bc<entry) ? s.cpr.bc : 0;  // CPR bottom central — added as stop candidate (was missing)
         var structSL=[
           bullObLow>0&&bullObLow<entry?bullObLow*0.999:0,   // just below OB low
           strongLow>0&&strongLow<entry?strongLow*0.999:0,   // just below strong low (if SMC loaded)
           weakLow>0&&weakLow<entry?weakLow*0.999:0,         // swing low
           pdl>0&&pdl<entry?pdl*0.999:0,                     // PDL — reliable structural support
-          cprBc>0?cprBc*0.999:0,                            // CPR BC — added: backtest showed this improves stop placement
           vwap>0&&vwap<entry?vwap*0.998:0                   // VWAP as soft floor
         ].filter(function(x){return x>0&&x<entry;});
         // Pick the HIGHEST structural level below entry (tightest valid stop)
         sl = structSL.length ? Math.max.apply(null,structSL) : 0;
-        // Guard: SL must be 0.15%–1.5% away. Too tight = noise stop. Too wide = bad R:R.
-        // FIX: floor loosened from 0.3% to 0.15% — backtested on 60 days of index
-        // candles (identical entries, only stop mechanism varied): the stricter
-        // 0.3% floor was overriding genuinely tight, valid structural stops (real
-        // swing lows/PDL sitting ~0.2% away) and forcing them out to a flat 0.5%,
-        // adding unneeded risk on trades that had a tight, valid level available.
-        // Result: bull expectancy +0.092R→+0.174R, bear +0.054R→+0.123R. The 1.5%
-        // cap was tested up to 2.5% with identical results, so it stays unchanged.
+        // Guard: SL must be 0.3%–1.5% away. Too tight = noise stop. Too wide = bad R:R.
         var slPct = sl>0 ? (entry-sl)/entry : 0;
-        if(!sl || slPct<0.0015) sl = entry*(1-0.005);  // floor at 0.5% if structure too close
-        if(slPct>0.015)         sl = entry*(1-0.015);  // cap at 1.5% if structure too far
+        if(!sl || slPct<0.003) sl = entry*(1-0.005);   // floor at 0.5% if structure too close
+        if(slPct>0.015)        sl = entry*(1-0.015);   // cap at 1.5% if structure too far
         var slDist=entry-sl;
 
         // T1: nearest resistance (CE wall, bearish OB low, bullish FVG top)
@@ -4236,21 +4248,17 @@ function localSigs(){
           return o.type==="BEARISH"&&!o.mitigated&&o.high>entry;
         }).map(function(o){return o.high;}).sort(function(a,b){return a-b;})[0]||0) : 0;
         var pdh = s.pdh||0;  // previous day high — key intraday resistance
-        var cprTc = (s.cpr && s.cpr.tc && s.cpr.tc>entry) ? s.cpr.tc : 0;  // CPR top central — added as stop candidate (was missing)
         var structSL2=[
           bearObHigh>entry?bearObHigh*1.001:0,
           strongHigh>entry?strongHigh*1.001:0,
           weakHigh>entry?weakHigh*1.001:0,
           pdh>entry?pdh*1.001:0,                  // PDH — reliable structural resistance
-          cprTc>0?cprTc*1.001:0,                  // CPR TC — added: backtest showed this improves stop placement
           vwap>entry?vwap*1.002:0
         ].filter(function(x){return x>entry;});
         sl = structSL2.length ? Math.min.apply(null,structSL2) : 0;
-        // FIX: floor loosened from 0.3% to 0.15% — same backtested fix as the
-        // bull side above. Cap stays at 1.5% (confirmed non-binding up to 2.5%).
         var slPct2 = sl>0 ? (sl-entry)/entry : 0;
-        if(!sl || slPct2<0.0015) sl = entry*(1+0.005);
-        if(slPct2>0.015)         sl = entry*(1+0.015);
+        if(!sl || slPct2<0.003) sl = entry*(1+0.005);
+        if(slPct2>0.015)        sl = entry*(1+0.015);
         var slDist2=sl-entry;
 
         // T1: nearest support — but never closer than 1.5×SL (wall is hint, not cap)
@@ -6238,6 +6246,11 @@ function applyOIData(sym,o){
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.cW=o.ce_wall||0;s.pW=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
+  // 15-min OI change — separate from the fetch-to-fetch delta (cC/pC above,
+  // which is only ~2min and mostly noise). Shows genuine medium-term OI
+  // build-up/unwind so a fresh put-writing wave or call-unwind is visible
+  // instead of only the last poll's tiny move.
+  s.cC15=o.ce_chg_15m||0; s.pC15=o.pe_chg_15m||0; s.oi15Avail=o.oi_15m_available||false;
   if(o.expiry) s.exp=o.expiry;
   // Server-side authoritative staleness (set when Zerodha calls fail — most
   // often a daily Kite token expiry — and the server falls back to its own
