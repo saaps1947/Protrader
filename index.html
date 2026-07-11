@@ -1065,6 +1065,27 @@ function _doFetchFromServer(){
         toast("🔑 Kite Token Expired","Zerodha access token has expired — OI and live data are showing STALE cached values. Regenerate today's token in Settings to fix.","tr");
       }
     }
+    // MCX diagnostic — surfaces WHY CRUDEOIL/GOLD/SILVER/NATURALGAS aren't
+    // generating signals if their price/contract fetch is failing server-
+    // side, without needing to check Render logs. Shown once per session
+    // per symbol so it doesn't repeat every poll.
+    if(d.mcx_debug){
+      window._mcxDebugSeen = window._mcxDebugSeen || {};
+      Object.keys(d.mcx_debug).forEach(function(sym){
+        var info = d.mcx_debug[sym];
+        if(info.status==="name_mismatch" || info.status==="exception" || info.yahoo_fallback==="failed — no price returned"){
+          if(!window._mcxDebugSeen[sym]){
+            window._mcxDebugSeen[sym]=true;
+            var msg = info.status==="name_mismatch"
+              ? "Zerodha instrument name mismatch for "+sym+". Similar names found: "+(info.similar_names_found||[]).join(", ")
+              : info.status==="exception"
+              ? sym+" fetch error: "+info.error
+              : sym+" — both Zerodha and Yahoo fallback failed to return a price.";
+            toast("⚠️ "+sym+" Data Issue", msg, "tr");
+          }
+        }
+      });
+    }
     if(wasDown){
       setTimeout(fetchStocks,2000);
       if(KITE.connected){setTimeout(startOIFetch,1000);}
@@ -1128,8 +1149,6 @@ function _doFetchFromServer(){
         sc.oiServerStale = sd.oi.stale || sd.oi.cached || false;
         sc.oiServerAgeMin = sd.oi.cache_age_min || 0;
         sc.oiFetchedAt = Date.now();
-        sc.cC15 = sd.oi.ce_chg_15m||0; sc.pC15 = sd.oi.pe_chg_15m||0;
-        sc.oi15Avail = sd.oi.oi_15m_available||false;
       }
       // CPR — now included in market response from prev day OHLC
       if(sd.cpr && sd.cpr.pivot){
@@ -1407,20 +1426,6 @@ function updateOI(s){
   var pcrLbl=pcr>1.1?"Bullish":pcr<0.9?"Bearish":"Neutral";
   var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"–";
   if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
-  // 15-min OI change row: genuine build-up/unwind over the last 15 minutes,
-  // separate from the near-instant fetch-to-fetch delta (mostly API-poll
-  // noise). Falls back to "building..." until 15min of real history exists.
-  var oi15mRow;
-  if(!s.oi15Avail){
-    oi15mRow = "<span class='oi-rl'>OI Δ 15min</span><span class='oi-rv' style='font-size:.6rem;color:var(--m)'>building… (needs 15min of data)</span>";
-  } else {
-    var pe15 = s.pC15||0, ce15 = s.cC15||0;
-    var pe15Col = pe15>0?"var(--g)":pe15<0?"var(--r)":"var(--m)";
-    var ce15Col = ce15>0?"var(--r)":ce15<0?"var(--g)":"var(--m)";
-    var fmt15 = function(v){ return (v>=0?"+":"")+(v/1e7).toFixed(2)+"Cr"; };
-    oi15mRow = "<span class='oi-rl'>PE Δ15m</span><span class='oi-rv' style='color:"+pe15Col+"'>"+fmt15(pe15)+"</span>"+
-               "<span class='oi-rl' style='margin-left:12px'>CE Δ15m</span><span class='oi-rv' style='color:"+ce15Col+"'>"+fmt15(ce15)+"</span>";
-  }
   var peChg = s.pC ? "<div class='oi-sc' style='color:var(--g)'>Chg "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr</div>" : "";
   var ceChg = s.cC ? "<div class='oi-sc' style='color:var(--r)'>Chg "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr</div>" : "";
   var peOI  = s.pOI>0 ? "<div class='oi-sv' style='color:var(--g)'>"+(s.pOI/1e7).toFixed(2)+" Cr</div>"+peChg : "<div class='oi-sv'>–</div>";
@@ -1459,7 +1464,6 @@ function updateOI(s){
         "<span class='oi-rl' style='margin-left:12px'>Max Pain</span><span class='oi-rv'>"+(s.mp?"₹"+s.mp.toLocaleString("en-IN"):"–")+"</span></div>"+
       "<div class='oi-row'><span class='oi-rl' style='color:var(--g)'>PE Wall</span><span class='oi-rv' style='color:var(--g)'>"+(s.pW?"₹"+s.pW.toLocaleString("en-IN"):"–")+"</span>"+
         "<span class='oi-rl' style='margin-left:12px;color:var(--r)'>CE Wall</span><span class='oi-rv' style='color:var(--r)'>"+(s.cW?"₹"+s.cW.toLocaleString("en-IN"):"–")+"</span></div>"+
-      "<div class='oi-row'>"+oi15mRow+"</div>"+
       "<div class='oi-row'><span class='oi-rl'>Signal</span><span class='oi-rv' style='font-size:.63rem'>"+sig+"</span></div>"+
     "</div>";
 }
@@ -3326,15 +3330,6 @@ function localSigs(){
     // hours, until 11:30 PM. Every other symbol — including the BTST/strong-
     // close bonus — is fully blocked outside 9:15 AM–3:30 PM. No exceptions.
     var isMCX = isSymMCX(s.sym);
-    // Combined OI staleness — matches the check used for the card's own
-    // "⚠ STALE" display exactly, so scoring never trusts OI the UI is
-    // simultaneously telling the user not to trust. Catches both an
-    // explicit server-side stale flag (Kite token expiry etc.) AND the
-    // client-side fallback (no fresh fetch in the last 10 min / never
-    // loaded at all).
-    var _oiAgeMinChk = s.oiServerStale ? s.oiServerAgeMin
-                      : (s.oiFetchedAt ? Math.round((Date.now()-s.oiFetchedAt)/60000) : null);
-    var oiIsStaleForScoring = s.oiServerStale || _oiAgeMinChk===null || _oiAgeMinChk>10;
     if(isMCX){ if(!isMCXOpen()) return; } else { if(!isOpen()) return; }
 
     var px=s.px, atm=s.atm||Math.round(px/(s.step||100))*(s.step||100);
@@ -3612,29 +3607,26 @@ function localSigs(){
     var ceUnwinding=writer&&writer.ce_unwinding;
     var peUnwinding=writer&&writer.pe_unwinding;
 
-    // ── INTRADAY MTF TREND — 5m/15m/1h weighted (replaces old daily-15d calc) ──
+    // ── 15-DAY DAILY TREND — macro context layer ──
     var trend15=s.trend15||"UNKNOWN";
     var hhHl=s.hh_hl||false;
     var lhLl=s.lh_ll||false;
-    var trendStr15 = s.trend_strength||0;
-    // trend15 itself is computed server-side by the MTF engine (5m×3 + 15m×2
-    // + 1h×1), NOT a 15-day daily calculation despite the old variable names
-    // below (trend_up_count/trend_sessions are legacy fields never removed).
-    // Label built from the real per-timeframe alignment instead of stale
-    // daily win/loss counts, which were misleading (e.g. "8W/6L in 14
-    // sessions" sitting next to an already-MTF-corrected trend value).
-    var t5=s.trend_5m||0, t15tf=s.trend_15m||0, t1h=s.trend_1h||0;
-    function _tfSym(v){ return v>0?"↑":v<0?"↓":"–"; }
-    var trendCountLbl = "5m"+_tfSym(t5)+" 15m"+_tfSym(t15tf)+" 1h"+_tfSym(t1h);
+    var trendStr15 = s.trend_strength||0;          // % of up-days (e.g. 57)
+    var trendUpCnt = s.trend_up_count||0;          // actual up-day count (e.g. 8)
+    var trendSess  = s.trend_sessions||0;          // total sessions compared (e.g. 14)
+    // Build readable count label: "8W/6L in 14 sessions" or fallback to % if counts missing
+    var trendCountLbl = trendSess>0
+      ? (trendUpCnt+"W/"+(trendSess-trendUpCnt)+"L in "+trendSess+" sessions")
+      : (trendStr15+"% up-days");
 
     if(trend15==="STRONG_BULL"||hhHl){
-      bullScore+=3;bullReasons.push("MTF trend: STRONG BULL — timeframes aligned ("+trendCountLbl+")");
+      bullScore+=3;bullReasons.push("15D trend: STRONG BULL — HH/HL structure ("+trendCountLbl+")");
     } else if(trend15==="BULL"){
-      bullScore+=2;bullReasons.push("MTF trend: BULLISH ("+trendCountLbl+")");
+      bullScore+=2;bullReasons.push("15D trend: BULLISH ("+trendCountLbl+")");
     } else if(trend15==="STRONG_BEAR"||lhLl){
-      bearScore+=3;bearReasons.push("MTF trend: STRONG BEAR — timeframes aligned ("+trendCountLbl+")");
+      bearScore+=3;bearReasons.push("15D trend: STRONG BEAR — LH/LL structure ("+trendCountLbl+")");
     } else if(trend15==="BEAR"){
-      bearScore+=2;bearReasons.push("MTF trend: BEARISH ("+trendCountLbl+")");
+      bearScore+=2;bearReasons.push("15D trend: BEARISH ("+trendCountLbl+")");
     }
     // Counter-trend penalty: signal against 15D trend loses 2 points
     if((trend15==="STRONG_BULL"||trend15==="BULL")&&bearScore>bullScore){
@@ -3665,12 +3657,7 @@ function localSigs(){
     // flip. Unlike NSE/BSE index OI (deep, reliable), MCX commodity option OI
     // is noise here, so it's excluded entirely for MCX. Price/technicals still
     // drive MCX signals normally.
-    // STALE-OI GATE: same principle applied to stale data. The OI panel
-    // already warns "⚠ STALE — do not rely on this" (Kite token expiry /
-    // Zerodha fetch failure), but the scoring itself was still using those
-    // numbers as if fresh — a signal could hit 97% confidence citing a PCR
-    // reading the UI was simultaneously telling the user not to trust.
-    if(!isMCX && !oiIsStaleForScoring){
+    if(!isMCX){
     if(putWriting){bullScore+=2;bullReasons.push("Put writing ↑ ("+((peChg/1e6).toFixed(1))+"M new puts = support)");}
     // FIX: CE writing alone is NOT enough for bearish signal
     // Institutions write covered calls as income — not necessarily bearish
@@ -3711,7 +3698,7 @@ function localSigs(){
     if(aboveMp){bearScore+=1;bearReasons.push("Above Max Pain ₹"+mp+" → gravitates down");}
     if(nearPeWall){bullScore+=2;bullReasons.push("At PE wall ₹"+peWall+" = strong support");}
     if(nearCeWall){bearScore+=2;bearReasons.push("At CE wall ₹"+ceWall+" = strong resistance");}
-    } // end !isMCX && !oiServerStale OI gate
+    } // end !isMCX OI gate
 
     // Technical confirmations
     // FIX 2: Golden/Death Cross +4→+2. On 5-min intraday charts SMA20/50 cross
@@ -4101,14 +4088,7 @@ function localSigs(){
     // ══════════════════════════════════════════════════════════
     // LAYER DIVERSITY GATE — 5 independent source categories
     // ══════════════════════════════════════════════════════════
-    // BUG FIX: hasOI previously only checked whether OI fields had ANY
-    // value, with no regard for whether that data was fresh. This meant a
-    // signal could score 97% confidence citing "PCR: 0.88" as supporting
-    // evidence while the OI panel itself was simultaneously showing
-    // "⚠ STALE — age unknown — not refreshing, do not rely on this" — the
-    // staleness warning was purely cosmetic and never actually excluded
-    // stale OI from scoring. Now stale OI is treated the same as NO OI.
-    var hasOI = (pcr>0||ceOI>0||peOI>0||ceWall>0||peWall>0||mp>0) && !oiIsStaleForScoring;
+    var hasOI = (pcr>0||ceOI>0||peOI>0||ceWall>0||peWall>0||mp>0);
 
     // OI category: PCR, walls, writer traps
     var oiCatBull = (pcrBull?1:0)+(pcrStrongBull?2:0)+(nearPeWall?1:0)+
@@ -4601,19 +4581,7 @@ function _activeTradeSigs(){
     out.push({
       sym:e.sym, bias:e.bias, trade:e.trade||(e.sym+" "+e.bias),
       strategy:e.strategy||"", confidence:e.confidence||70,
-      // FIX (keeps getting lost across file versions): was reading e.notes
-      // (only populated with post-close messages like "SL hit at ₹X" — empty
-      // while OPEN) instead of e.why, where the real signal explanation is
-      // actually stored. This is why active-trade cards kept showing the
-      // generic "Trade in progress" fallback instead of the genuine
-      // reasoning the signal fired on.
-      // NOTE: trades logged BEFORE this fix existed may still have why:""
-      // permanently baked into SIGNAL_LOG (localStorage) — this code fix
-      // can't recover text that was never saved. For those old trades,
-      // fall back to setupKey/strategy (which WERE being saved) instead of
-      // the bare generic placeholder, so there's at least some context.
-      urgency:e.urgency||"HIGH",
-      why:e.why||e.notes||(e.setupKey?("Setup: "+e.setupKey.replace(/_/g," ")+(e.strategy?" ("+e.strategy+")":"")):"Trade in progress — original reasoning wasn't saved for this older trade"),
+      urgency:e.urgency||"HIGH", why:e.notes||"Trade in progress",
       entry:e.entry_px, sl:e.sl_px, target1:e.t1_px, target2:e.t2_px||e.t1_px,
       rr:e.rr||"1:2", timeframe:e.timeframe||"Intraday",
       setupKey:e.setupKey, layers:e.layers,
@@ -4640,15 +4608,6 @@ function renderFeed(){
   var h="";
   f.forEach(function(sig,i){
     var gi=allSigs.indexOf(sig);
-    // FIX: gi is -1 for every active-trade injected card (they're not in
-    // allSigs by design — see _activeTradeSigs()), so all such cards ended
-    // up with the same id="ld_-1" for the "Show analysis layers" toggle.
-    // getElementById only ever finds the FIRST match, so only the first
-    // active-trade card's toggle worked; every other one silently toggled
-    // the first card's hidden div instead of its own. Use a per-card unique
-    // key (symbol+bias) for the toggle's DOM id instead — gi is kept as-is
-    // since execSig(gi) still needs -1 to mean "no matching live signal".
-    var ldKey=sig.sym+"_"+sig.bias;
     var s=allS().filter(function(x){return x.sym===sig.sym;})[0]||{};
     var bt=sig.isBTST,dir=bt?"btst":sig.bias==="BULLISH"?"bull":sig.bias==="BEARISH"?"bear":"neu";
     var dc=bt?"var(--p)":sig.bias==="BULLISH"?"var(--g)":sig.bias==="BEARISH"?"var(--r)":"var(--y)";
@@ -4691,7 +4650,6 @@ function renderFeed(){
 
     // ── Layer detail (collapsible) ──
     var layerDetail="";
-    var layerDetailExtra=""; // set later if there's an active trade with live layer status to show
     var layers=[];
     // Parse why into layers
     if(sig.why){
@@ -4731,10 +4689,7 @@ function renderFeed(){
     if(s.cpr){layers.push("<div style='display:flex;gap:6px;margin-bottom:4px'><span style='font-size:.6rem;font-weight:700;color:var(--m);white-space:nowrap'>📐 CPR</span><span style='font-size:.62rem;color:var(--b)'>"+s.cpr.type+" | Pivot: ₹"+s.cpr.pivot+" | TC: ₹"+s.cpr.tc+" | BC: ₹"+s.cpr.bc+" | Bias: "+s.cpr.bias+"</span></div>");}
     // Add SMC if available
     if(s.smc&&s.smc.structure){layers.push("<div style='display:flex;gap:6px;margin-bottom:4px'><span style='font-size:.6rem;font-weight:700;color:var(--m);white-space:nowrap'>🏛 SMC</span><span style='font-size:.62rem;color:var(--b)'>Structure: "+s.smc.structure+(s.smc.ob&&s.smc.ob.length?" | OB: "+s.smc.ob[0].type+" @₹"+s.smc.ob[0].low+"-"+s.smc.ob[0].high:"")+(s.smc.fvg&&s.smc.fvg.length?" | FVG: "+s.smc.fvg[0].type:"")+"</span></div>");}
-    // NOTE: layerDetail (the collapsible "Show analysis layers" div) is
-    // finalized further below, AFTER layerDetailExtra (live layer check for
-    // active trades) is computed — so both can share the same expand/collapse
-    // toggle instead of the live layer check always being visible separately.
+    if(layers.length){layerDetail="<div id='ld_"+gi+"' style='display:none;padding:8px 10px;background:rgba(255,255,255,.03);border-top:1px solid rgba(255,255,255,.05)'>"+layers.join("")+"</div><div onclick='toggleLD("+gi+")' style='padding:4px 10px;font-size:.6rem;color:var(--m);text-align:center;cursor:pointer;border-top:1px solid rgba(255,255,255,.05)' id='ldBtn_"+gi+"'>▼ Show analysis layers</div>";}
 
     var exCls=sig.bias==="BULLISH"?"btn-buy":sig.bias==="BEARISH"?"btn-sell":"";
 
@@ -4770,48 +4725,6 @@ function renderFeed(){
             "<div style='font-size:.55rem;color:"+pnlColor+"'>"+(isProfit?"+":"")+pnlPct.toFixed(2)+"%</div>"+
           "</div>"+
         "</div>";
-
-      // LIVE LAYER STATUS — moved into the collapsible "Show analysis
-      // layers" section (layerDetailExtra, appended to layerDetail below)
-      // instead of always-visible on the card, per request — keeps the
-      // card compact by default, same tap-to-expand pattern as the
-      // existing OI/CPR/SMC breakdown.
-      var layerStatuses = _layerLiveStatus(s, activeTrade.bias);
-      if(layerStatuses.length){
-        var disagreeCount = layerStatuses.filter(function(l){return !l.agree && !l.neutral;}).length;
-        var layerChips = layerStatuses.map(function(l){
-          var chipColor = l.agree ? "var(--g)" : l.neutral ? "var(--m)" : "var(--r)";
-          var chipIcon = l.agree ? "✅" : l.neutral ? "◦" : "⚠️";
-          return "<div style='display:flex;align-items:flex-start;gap:5px;padding:3px 0'>"+
-                   "<span style='font-size:.6rem;width:16px;flex-shrink:0'>"+l.icon+"</span>"+
-                   "<span style='font-size:.62rem;font-weight:700;color:var(--m);width:42px;flex-shrink:0'>"+l.name+"</span>"+
-                   "<span style='font-size:.6rem;color:"+chipColor+";line-height:1.4'>"+chipIcon+" "+l.detail+"</span>"+
-                 "</div>";
-        }).join("");
-        var summaryColor = disagreeCount>=2 ? "var(--r)" : disagreeCount===1 ? "var(--y)" : "var(--g)";
-        var summaryTxt = disagreeCount===0 ? "All layers still aligned"
-                        : disagreeCount+" of "+layerStatuses.length+" layers now against you";
-        var flagNote = activeTrade.layerFlagAt
-          ? "<div style='font-size:.55rem;color:var(--y);margin-top:4px'>⚠️ Flagged at "+activeTrade.layerFlagAt+" (₹"+fpx(activeTrade.layerFlagPx).replace("₹","")+") — review manually, not auto-closed</div>"
-          : "";
-        layerDetailExtra = "<div style='padding:8px 10px;border-top:1px solid rgba(255,255,255,.05)'>"+
-          "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px'>"+
-            "<span style='font-size:.6rem;font-weight:700;color:var(--m)'>LIVE LAYER CHECK</span>"+
-            "<span style='font-size:.6rem;font-weight:700;color:"+summaryColor+"'>"+summaryTxt+"</span>"+
-          "</div>"+
-          layerChips+
-          flagNote+
-        "</div>";
-      }
-    }
-
-    // Finalize the collapsible "Show analysis layers" section — combines
-    // the original OI/CPR/SMC breakdown (layers) with the live layer check
-    // (layerDetailExtra, only present for active trades) under one toggle,
-    // per request, instead of the live check always being visible.
-    if(layers.length || layerDetailExtra){
-      layerDetail="<div id='ld_"+ldKey+"' style='display:none;padding:8px 10px;background:rgba(255,255,255,.03);border-top:1px solid rgba(255,255,255,.05)'>"+layers.join("")+layerDetailExtra+"</div>"+
-        "<div onclick='toggleLD(\""+ldKey+"\")' style='padding:4px 10px;font-size:.6rem;color:var(--m);text-align:center;cursor:pointer;border-top:1px solid rgba(255,255,255,.05)' id='ldBtn_"+ldKey+"'>▼ Show analysis layers</div>";
     }
 
     h+="<div class='sc "+dir+"'>"+badge+
@@ -4866,69 +4779,14 @@ function renderFeed(){
   });
   feed.innerHTML=h;
 }
-function toggleLD(ldKey){
-  var el=document.getElementById("ld_"+ldKey);
-  var btn=document.getElementById("ldBtn_"+ldKey);
+function toggleLD(gi){
+  var el=document.getElementById("ld_"+gi);
+  var btn=document.getElementById("ldBtn_"+gi);
   if(!el)return;
   var hidden=el.style.display==="none";
   el.style.display=hidden?"block":"none";
   if(btn)btn.innerHTML=hidden?"▲ Hide analysis":"▼ Show analysis layers";
 }
-// Computes the CURRENT live read of each scoring layer for a symbol, and
-// flags whether it still agrees with a trade's original direction (bias).
-// Used to show "which layers are still aligned vs breaking down" on an
-// active trade card.
-function _layerLiveStatus(s, bias){
-  var bull = bias==="BULLISH";
-  var out = [];
-  if(s.vwap){
-    var vwapDir = s.px>s.vwap ? "BULLISH" : s.px<s.vwap ? "BEARISH" : "NEUTRAL";
-    var vwapWait = vwapDir===bias ? "" : (bull ? " — waiting for price to reclaim ₹"+Math.round(s.vwap).toLocaleString("en-IN")
-                                                : " — waiting for price to break below ₹"+Math.round(s.vwap).toLocaleString("en-IN"));
-    out.push({name:"VWAP", icon:"📈", agree: vwapDir===bias, neutral: vwapDir==="NEUTRAL",
-               detail: (s.px>s.vwap?"Above":"Below")+" VWAP ₹"+Math.round(s.vwap).toLocaleString("en-IN")+vwapWait});
-  }
-  if(s.sma20 && s.sma50){
-    var smaDir = (s.px>s.sma20 && s.sma20>=s.sma50) ? "BULLISH" : (s.px<s.sma20 && s.sma20<=s.sma50) ? "BEARISH" : "NEUTRAL";
-    var smaWait = smaDir===bias ? "" : (bull ? " — needs SMA20 to cross above SMA50" : " — needs SMA20 to cross below SMA50");
-    out.push({name:"SMA", icon:"📊", agree: smaDir===bias, neutral: smaDir==="NEUTRAL",
-               detail: "Price "+(s.px>s.sma20?"above":"below")+" SMA20, "+(s.sma20>s.sma50?"20>50":"20<50")+smaWait});
-  }
-  if(s.rsi){
-    var rsiDir = s.rsi>55 ? "BULLISH" : s.rsi<45 ? "BEARISH" : "NEUTRAL";
-    var rsiWait = rsiDir===bias ? "" : (bull ? " — waiting for RSI to push above 55" : " — waiting for RSI to drop below 45");
-    out.push({name:"RSI", icon:"⚡", agree: rsiDir===bias, neutral: rsiDir==="NEUTRAL",
-               detail: "RSI "+Math.round(s.rsi)+(s.rsi>68?" (overbought)":s.rsi<32?" (oversold)":"")+rsiWait});
-  }
-  if(s.trend15 && s.trend15!=="UNKNOWN"){
-    var trendDir = (s.trend15==="BULL"||s.trend15==="STRONG_BULL") ? "BULLISH" :
-                   (s.trend15==="BEAR"||s.trend15==="STRONG_BEAR") ? "BEARISH" : "NEUTRAL";
-    var trendWait = trendDir===bias ? "" : " — waiting for 5m/15m timeframes to turn "+(bull?"bullish":"bearish");
-    out.push({name:"Trend", icon:"📉", agree: trendDir===bias, neutral: trendDir==="NEUTRAL",
-               detail: s.trend15.replace(/_/g," ")+trendWait});
-  }
-  if(s.orb && (s.orb.high||s.orb.low)){
-    var orbDir = (s.orb.high && s.px>s.orb.high) ? "BULLISH" : (s.orb.low && s.px<s.orb.low) ? "BEARISH" : "NEUTRAL";
-    var orbWait = orbDir===bias ? "" : (bull ? " — waiting for a break above ₹"+(s.orb.high?Math.round(s.orb.high).toLocaleString("en-IN"):"–")
-                                              : " — waiting for a break below ₹"+(s.orb.low?Math.round(s.orb.low).toLocaleString("en-IN"):"–"));
-    out.push({name:"ORB", icon:"🎯", agree: orbDir===bias, neutral: orbDir==="NEUTRAL",
-               detail: (orbDir==="NEUTRAL" ? "Inside range" : (orbDir==="BULLISH"?"Above":"Below")+" ORB")+orbWait});
-  }
-  if(s.smc && s.smc.structure && s.smc.structure!=="NEUTRAL"){
-    var smcDir = s.smc.structure==="BULLISH" ? "BULLISH" : s.smc.structure==="BEARISH" ? "BEARISH" : "NEUTRAL";
-    var smcWait = smcDir===bias ? "" : " — waiting for a CHoCH/BOS to flip structure "+(bull?"bullish":"bearish");
-    out.push({name:"SMC", icon:"🏛", agree: smcDir===bias, neutral: smcDir==="NEUTRAL",
-               detail: "Structure: "+s.smc.structure+smcWait});
-  }
-  if(s.pcr && !s.oiServerStale){
-    var oiDir = s.pcr>=1.1 ? "BULLISH" : s.pcr<=0.9 ? "BEARISH" : "NEUTRAL";
-    var oiWait = oiDir===bias ? "" : (bull ? " — waiting for PCR to rise above 1.1 (fresh put writing)" : " — waiting for PCR to fall below 0.9 (fresh call writing)");
-    out.push({name:"OI", icon:"🔵", agree: oiDir===bias, neutral: oiDir==="NEUTRAL",
-               detail: "PCR "+s.pcr+oiWait});
-  }
-  return out;
-}
-
 function fpx(v){if(!v&&v!==0)return "–";var s=""+v;if(isNaN(parseFloat(s)))return s;return "₹"+parseFloat(s).toLocaleString("en-IN");}
 function execSig(idx){var sig=allSigs[idx];if(!sig)return;logSignalEntry(sig);pendingTrade={action:sig.bias==="BULLISH"?"BUY":"SELL",instrument:sig.trade,confidence:sig.confidence,entry:sig.entry,sl:sig.sl,target:sig.target1,why:sig.why,_bt:sig.isBTST||false};if(AT.active)qAT(pendingTrade);else showOrd();}
 
@@ -5372,38 +5230,6 @@ function checkSignalLevels(){
     var s=allS().filter(function(x){return x.sym===e.sym;})[0];
     if(!s||!s.px||!e.entry_px) return;
     var px=s.px;
-
-    // ── LAYER-BREAKDOWN DETECTION — LOG-ONLY MODE ──
-    // Originally built as an auto-close, but per discussion: our one real
-    // backtest of a similar idea (RSI/VWAP/CHoCH exhaustion exit) showed it
-    // RAISED win rate but LOWERED expectancy — it cut real winners short
-    // more often than it saved genuine losers. This "2+ layers" trigger is
-    // coarser and untested, so rather than risk the same mistake with real
-    // trades, this now only DETECTS and ALERTS — it does not close the
-    // trade. Every flag is recorded on the trade itself (layerFlagAt,
-    // layerFlagCount, layerFlagPx) so that once trades close naturally, we
-    // can check in the Journal/Performance tabs whether flagged trades went
-    // on to hit target or SL — the same kind of before/after evidence the
-    // exhaustion-exit backtest gave us, but for this specific rule, on real
-    // signals. Only promote to an actual auto-close once that data says it
-    // helps. Toggle: window.AUTO_CLOSE_LAYER_BREAKDOWN=false silences alerts.
-    if(e.status==="OPEN" && window.AUTO_CLOSE_LAYER_BREAKDOWN!==false){
-      var layerStatuses = _layerLiveStatus(s, e.bias);
-      var disagreeCount = layerStatuses.filter(function(l){return !l.agree && !l.neutral;}).length;
-      if(layerStatuses.length && disagreeCount>=2){
-        // Alert once per trade (not every scan cycle) — re-alert only if
-        // the disagreement count has gotten WORSE since the last flag.
-        if(!e.layerFlagCount || disagreeCount>e.layerFlagCount){
-          e.layerFlagAt = istDateTime();
-          e.layerFlagCount = disagreeCount;
-          e.layerFlagPx = px;
-          e.layerFlagTotal = layerStatuses.length;
-          changed = true;
-          toast("⚠️ Layer Check — "+e.sym, disagreeCount+"/"+layerStatuses.length+" layers now against your "+e.bias.toLowerCase()+" trade (still OPEN — review manually)","ty");
-        }
-      }
-    }
-
     var bull=e.bias==="BULLISH";
     var lotSize=LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
 
@@ -5529,8 +5355,7 @@ function renderSignalEntry(e, isOpen){
     "SL_HIT":"🔴 SL HIT",
     "T1_HIT":"✅ T1 HIT — watching T2",
     "T2_HIT":"🏆 T2 HIT",
-    "MANUAL":"⚪ MANUAL EXIT",
-    "LAYER_EXIT":"⚠️ LAYER BREAKDOWN EXIT"
+    "MANUAL":"⚪ MANUAL EXIT"
   }[e.status]||e.status;
   var bColor = e.bias==="BULLISH"?"var(--g)":"var(--r)";
   var pnlStr = e.pnl!=null ? ((e.pnl>=0?"+":"")+"₹"+Math.abs(e.pnl).toLocaleString("en-IN")) : "–";
@@ -5827,28 +5652,6 @@ function renderPerformance(){
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>AVG / TRADE</div><div style='font-size:1.1rem;font-weight:800;color:"+(avgPnlPerTrade>=0?"var(--g)":"var(--r)")+"'>"+(avgPnlPerTrade>=0?"+":"")+"₹"+Math.abs(avgPnlPerTrade).toLocaleString("en-IN")+"</div></div>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>BEST / WORST</div><div style='font-size:.72rem;font-weight:800'><span style='color:var(--g)'>+₹"+bestTrade.toLocaleString("en-IN")+"</span><span style='color:var(--m)'> / </span><span style='color:var(--r)'>₹"+worstTrade.toLocaleString("en-IN")+"</span></div></div>";
   html+="</div>";
-
-  // ── LAYER-FLAG ANALYSIS ── (log-only mode evidence gathering)
-  // Shows what happened to trades that got flagged (2+ layers disagreeing)
-  // but were LEFT OPEN rather than auto-closed. This is the exact evidence
-  // needed to decide whether "2+ layers disagree" should ever become a real
-  // auto-close rule: if flagged trades mostly went on to hit SL anyway, the
-  // rule would have helped. If they mostly recovered to hit T1/T2, closing
-  // on the flag would have cut winners short — same failure mode as the
-  // RSI/VWAP/CHoCH exhaustion-exit backtest that was rejected.
-  var flagged = closed.filter(function(e){return e.layerFlagAt;});
-  if(flagged.length){
-    var flagWins = flagged.filter(function(e){return e.outcome==="WIN"||e.outcome==="BIG WIN"||(e.pnl!=null&&e.pnl>0);}).length;
-    var flagWR = Math.round(flagWins/flagged.length*100);
-    var flagPnl = flagged.reduce(function(a,e){return a+(e.pnl||0);},0);
-    html+="<div style='font-size:.6rem;font-weight:700;letter-spacing:1px;color:var(--m);margin-bottom:6px'>⚠️ LAYER-FLAG ANALYSIS ("+flagged.length+" trades flagged, left open)</div>";
-    html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:12px'>";
-    html+="<div style='font-size:.62rem;color:var(--b);margin-bottom:4px'>Of trades flagged with 2+ layers against them, that were "+
-          "left open instead of closed: <b style='color:"+(flagWR>=50?"var(--g)":"var(--r)")+"'>"+flagWR+"%</b> still went on to close in profit.</div>";
-    html+="<div style='font-size:.6rem;color:var(--m)'>Net P&L from these trades after being flagged: <span style='color:"+(flagPnl>=0?"var(--g)":"var(--r)")+"'>"+(flagPnl>=0?"+":"")+"₹"+flagPnl.toLocaleString("en-IN")+"</span></div>";
-    html+="<div style='font-size:.55rem;color:var(--m);margin-top:6px'>If this win rate stays low over more trades, auto-closing on flag would likely help. If it stays high, leaving trades open (current behavior) is correct — closing would cut winners short.</div>";
-    html+="</div>";
-  }
 
   // Setup Leaderboard
   html+="<div style='font-size:.6rem;font-weight:700;letter-spacing:1px;color:var(--m);margin-bottom:6px'>📊 SETUP LEADERBOARD</div>";
@@ -6394,9 +6197,13 @@ function fetchLotSizes(){
       LOT_SIZES=d.data;
       var src=d.source||"unknown";
       console.log("[LotSizes] "+src+": "+JSON.stringify(d.data));
-      // Toast removed per request — lot sizes are still fetched and applied
-      // correctly (LOT_SIZES updated above), just no longer shown as a
-      // popup every time the app opens. Still logged to console above.
+      // Show once per session so user knows live lot sizes are active
+      if(src==="zerodha"&&!window._lotSizesLogged){
+        window._lotSizesLogged=true;
+        var ls=d.data;
+        var summary="NIFTY:"+ls.NIFTY+" · BANKNIFTY:"+ls.BANKNIFTY+" · SENSEX:"+ls.SENSEX+" · FINNIFTY:"+(ls.FINNIFTY||"—");
+        toast("📐 Lot Sizes Live",summary,"tg");
+      }
     }
   }).catch(function(){});
 }
@@ -6439,7 +6246,6 @@ function applyOIData(sym,o){
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.cW=o.ce_wall||0;s.pW=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
-  s.cC15=o.ce_chg_15m||0; s.pC15=o.pe_chg_15m||0; s.oi15Avail=o.oi_15m_available||false;
   if(o.expiry) s.exp=o.expiry;
   // Server-side authoritative staleness (set when Zerodha calls fail — most
   // often a daily Kite token expiry — and the server falls back to its own
