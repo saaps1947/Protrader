@@ -5114,10 +5114,23 @@ function loadSignalLog(){
 }
 
 function saveSignalLog(){
+  // FIX: removed the 500-entry cap per request — SIGNAL_LOG now keeps every
+  // trade indefinitely, no trimming. This does carry a real risk: browser
+  // localStorage has a per-origin size limit (typically 5-10MB depending on
+  // the browser), and an unbounded log will eventually approach it. Rather
+  // than silently trimming (the old behavior) or silently failing to save
+  // (what would happen without any safeguard), this now tries to save
+  // everything, and only if the browser genuinely rejects the write (quota
+  // exceeded) does it warn clearly — once — so you know your history needs
+  // exporting/archiving rather than losing data without any indication.
   try{
-    if(SIGNAL_LOG.length>500) SIGNAL_LOG=SIGNAL_LOG.slice(-500);
     localStorage.setItem("pt_siglog",JSON.stringify(SIGNAL_LOG));
-  }catch(e){}
+  }catch(e){
+    if(!window._sigLogQuotaWarned){
+      window._sigLogQuotaWarned=true;
+      toast("⚠️ Signal Log Storage Full","Your browser's storage limit was reached ("+SIGNAL_LOG.length+" trades). Export your Journal to CSV soon — new trades may not be saved until space is freed.","tr");
+    }
+  }
 }
 
 function autoLogSignal(sig){
@@ -5284,6 +5297,11 @@ function checkSignalLevels(){
   if(changed){saveSignalLog();renderJ();renderPerformance();renderFeed();}
 }
 
+function _jShowMore(){
+  window._jShowCount = (window._jShowCount||30) + 30;
+  renderJ();
+}
+
 function renderJ(){
   var jList = document.getElementById("jList");
   var jStats = document.getElementById("jStats");
@@ -5330,12 +5348,22 @@ function renderJ(){
     });
   }
 
-  // Closed signals
+  // Closed signals — most recent first (was in raw chronological/insertion
+  // order, so the old slice(0,30) below was actually showing the OLDEST 30
+  // trades, not the newest). Combined with removing the 500-entry storage
+  // cap, this also removes the silent display cutoff — a "Show more" control
+  // reveals the rest instead of trades being invisible even though they're
+  // fully captured in SIGNAL_LOG.
   if(closed.length){
+    var closedSorted = closed.slice().reverse();
+    var jShowCount = window._jShowCount || 30;
     html += "<div style='font-size:.6rem;font-weight:700;letter-spacing:1px;color:var(--m);padding:10px 0 4px'>CLOSED SIGNALS ("+closed.length+")</div>";
-    closed.slice(0,30).forEach(function(e){
+    closedSorted.slice(0,jShowCount).forEach(function(e){
       html += renderSignalEntry(e, false);
     });
+    if(closed.length>jShowCount){
+      html += "<div onclick='_jShowMore()' style='padding:8px;text-align:center;font-size:.65rem;color:var(--m);cursor:pointer;border-top:1px solid var(--border)'>▼ Show "+Math.min(30,closed.length-jShowCount)+" more (of "+closed.length+" total)</div>";
+    }
   }
 
   if(!SIGNAL_LOG.length){
