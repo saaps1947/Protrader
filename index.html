@@ -522,33 +522,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   <div id="sigFeed"></div>
 </div>
 
-<!-- SCANNER -->
-<div class="sec" id="sec-scan">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-    <div><div style="font-size:.85rem;font-weight:800">Market Overview</div>
-    <div style="font-size:.62rem;color:var(--m);margin-top:1px">Nifty 50 · tap any to switch</div></div>
-    <button style="padding:5px 10px;border-radius:7px;background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.2);color:var(--b);font-size:.68rem;font-weight:700;cursor:pointer" id="scanRefreshBtn" onclick="scannerRefresh()">⟳ Refresh</button>
-  </div>
-  <div style="display:flex;gap:4px;overflow-x:auto;padding-bottom:7px;scrollbar-width:none;margin-bottom:7px" id="sectorFilter">
-    <button class="sflt on" onclick="setSector(this,'ALL')">All</button>
-    <button class="sflt" onclick="setSector(this,'IDX')">Indices</button>
-    <button class="sflt" onclick="setSector(this,'BANK')">Banks</button>
-    <button class="sflt" onclick="setSector(this,'IT')">IT</button>
-    <button class="sflt" onclick="setSector(this,'AUTO')">Auto</button>
-    <button class="sflt" onclick="setSector(this,'PHARMA')">Pharma</button>
-    <button class="sflt" onclick="setSector(this,'ENERGY')">Energy</button>
-    <button class="sflt" onclick="setSector(this,'FMCG')">FMCG</button>
-    <button class="sflt" onclick="setSector(this,'METAL')">Metal</button>
-    <button class="sflt" onclick="setSector(this,'FINANCE')">Finance</button>
-  </div>
-  <div style="display:flex;gap:4px;margin-bottom:8px;align-items:center">
-    <span style="font-size:.58rem;color:var(--m)">Sort:</span>
-    <button class="ssort on" onclick="setSort(this,'score')">🔥 Signal</button>
-    <button class="ssort" onclick="setSort(this,'chg')">📈 Movers</button>
-    <button class="ssort" onclick="setSort(this,'alpha')">A-Z</button>
-  </div>
-  <div id="scanList"></div>
-</div>
+
 
 <div class="sec" id="sec-auto">
   <div class="at-card" id="atCard">
@@ -808,7 +782,6 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 <!-- NAV -->
 <nav class="bnav">
   <div class="nb on" onclick="nav(this,'sig')"><div class="nb-ico">🎯</div><div class="nb-lbl">Signals</div></div>
-  <div class="nb" onclick="nav(this,'scan')"><div class="nb-ico">📡</div><div class="nb-lbl">Scanner</div></div>
   <div class="nb" onclick="nav(this,'auto')"><div class="nb-ico">⚡</div><div class="nb-lbl">Auto</div></div>
   <div class="nb" onclick="nav(this,'jour')"><div class="nb-ico">📔</div><div class="nb-lbl">Journal</div></div>
   <div class="nb" onclick="nav(this,'bt')"><div class="nb-ico">🔬</div><div class="nb-lbl">Backtest</div></div>
@@ -950,7 +923,7 @@ var USDINR = 84.0;
 // Updated to current SEBI values (Nov 2024): NIFTY 65, BANKNIFTY 35, FINNIFTY 65
 var LOT_SIZES = {"NIFTY":65,"BANKNIFTY":35,"FINNIFTY":65,"SENSEX":20,"MIDCPNIFTY":120,"DEFAULT":50};
 var AT = {active:false,capital:50000,maxTrades:3,conf:82,dir:"both",inst:"AUTO",trades:0,timer:null};
-var allSigs=[],bias="ALL",sfFilt="ALL",scanFilt="all",scanning=false,pendingTrade=null;
+var allSigs=[],bias="ALL",sfFilt="ALL",scanning=false,pendingTrade=null;
 var lastSetups=[];
 var scanCd=180,scanTmr=null;
 var serverOk=false;
@@ -1065,27 +1038,6 @@ function _doFetchFromServer(){
         toast("🔑 Kite Token Expired","Zerodha access token has expired — OI and live data are showing STALE cached values. Regenerate today's token in Settings to fix.","tr");
       }
     }
-    // MCX diagnostic — surfaces WHY CRUDEOIL/GOLD/SILVER/NATURALGAS aren't
-    // generating signals if their price/contract fetch is failing server-
-    // side, without needing to check Render logs. Shown once per session
-    // per symbol so it doesn't repeat every poll.
-    if(d.mcx_debug){
-      window._mcxDebugSeen = window._mcxDebugSeen || {};
-      Object.keys(d.mcx_debug).forEach(function(sym){
-        var info = d.mcx_debug[sym];
-        if(info.status==="name_mismatch" || info.status==="exception" || info.yahoo_fallback==="failed — no price returned"){
-          if(!window._mcxDebugSeen[sym]){
-            window._mcxDebugSeen[sym]=true;
-            var msg = info.status==="name_mismatch"
-              ? "Zerodha instrument name mismatch for "+sym+". Similar names found: "+(info.similar_names_found||[]).join(", ")
-              : info.status==="exception"
-              ? sym+" fetch error: "+info.error
-              : sym+" — both Zerodha and Yahoo fallback failed to return a price.";
-            toast("⚠️ "+sym+" Data Issue", msg, "tr");
-          }
-        }
-      });
-    }
     if(wasDown){
       setTimeout(fetchStocks,2000);
       if(KITE.connected){setTimeout(startOIFetch,1000);}
@@ -1149,8 +1101,6 @@ function _doFetchFromServer(){
         sc.oiServerStale = sd.oi.stale || sd.oi.cached || false;
         sc.oiServerAgeMin = sd.oi.cache_age_min || 0;
         sc.oiFetchedAt = Date.now();
-        sc.cC15 = sd.oi.ce_chg_15m||0; sc.pC15 = sd.oi.pe_chg_15m||0;
-        sc.oi15Avail = sd.oi.oi_15m_available||false;
       }
       // CPR — now included in market response from prev day OHLC
       if(sd.cpr && sd.cpr.pivot){
@@ -1289,27 +1239,7 @@ function manualRefresh(){
   setTimeout(function(){if(btn){btn.style.color="var(--m)";btn.style.animation="";}},3000);
 }
 
-function scannerRefresh(){
-  // Full scanner refresh: new market data + fresh SMC/MTF/OI for current symbol
-  var btn=document.getElementById("scanRefreshBtn");
-  if(btn){btn.textContent="⟳ Refreshing…";btn.style.opacity="0.6";}
-  _serverRetryCount=0;
-  fetchFromServer(); // fresh market data — signals will update too
-  if(CS&&CS.sym){
-    // Force fresh SMC and MTF by clearing fetch timestamps
-    delete _fetchTimestamps["smc_"+CS.sym];
-    delete _fetchTimestamps["mtf_"+CS.sym];
-    delete _fetchTimestamps["oi_"+CS.sym];
-    _oiFirstLoad[CS.sym]=false;
-    fetchSMC(CS.sym);
-    fetchMTF(CS.sym);
-    fetchOI(CS.sym);
-  }
-  setTimeout(function(){
-    renderScannerSetups();
-    if(btn){btn.textContent="⟳ Refresh";btn.style.opacity="1";}
-  },3500);
-}
+
 
 function setStatus(state,msg){
   var dot=document.getElementById("ldot");
@@ -1428,20 +1358,6 @@ function updateOI(s){
   var pcrLbl=pcr>1.1?"Bullish":pcr<0.9?"Bearish":"Neutral";
   var sig=pcr>1.1?"✅ Bullish — Put writing dominant":pcr<0.9?"🔴 Bearish — Call writers dominant":pcr?"⚖ Neutral — watch CE wall":"–";
   if(s.buildup&&s.buildup!=="UNKNOWN") sig+=" | "+s.buildup.replace(/_/g," ");
-  // 15-min OI change row: genuine build-up/unwind over the last 15 minutes,
-  // separate from the near-instant fetch-to-fetch delta (mostly API-poll
-  // noise). Falls back to "building..." until 15min of real history exists.
-  var oi15mRow;
-  if(!s.oi15Avail){
-    oi15mRow = "<span class='oi-rl'>OI Δ 15min</span><span class='oi-rv' style='font-size:.6rem;color:var(--m)'>building… (needs 15min of data)</span>";
-  } else {
-    var pe15 = s.pC15||0, ce15 = s.cC15||0;
-    var pe15Col = pe15>0?"var(--g)":pe15<0?"var(--r)":"var(--m)";
-    var ce15Col = ce15>0?"var(--r)":ce15<0?"var(--g)":"var(--m)";
-    var fmt15 = function(v){ return (v>=0?"+":"")+(v/1e7).toFixed(2)+"Cr"; };
-    oi15mRow = "<span class='oi-rl'>PE Δ15m</span><span class='oi-rv' style='color:"+pe15Col+"'>"+fmt15(pe15)+"</span>"+
-               "<span class='oi-rl' style='margin-left:12px'>CE Δ15m</span><span class='oi-rv' style='color:"+ce15Col+"'>"+fmt15(ce15)+"</span>";
-  }
   var peChg = s.pC ? "<div class='oi-sc' style='color:var(--g)'>Chg "+(s.pC>=0?"+":"")+((s.pC||0)/1e7).toFixed(2)+" Cr</div>" : "";
   var ceChg = s.cC ? "<div class='oi-sc' style='color:var(--r)'>Chg "+(s.cC>=0?"+":"")+((s.cC||0)/1e7).toFixed(2)+" Cr</div>" : "";
   var peOI  = s.pOI>0 ? "<div class='oi-sv' style='color:var(--g)'>"+(s.pOI/1e7).toFixed(2)+" Cr</div>"+peChg : "<div class='oi-sv'>–</div>";
@@ -1480,7 +1396,6 @@ function updateOI(s){
         "<span class='oi-rl' style='margin-left:12px'>Max Pain</span><span class='oi-rv'>"+(s.mp?"₹"+s.mp.toLocaleString("en-IN"):"–")+"</span></div>"+
       "<div class='oi-row'><span class='oi-rl' style='color:var(--g)'>PE Wall</span><span class='oi-rv' style='color:var(--g)'>"+(s.pW?"₹"+s.pW.toLocaleString("en-IN"):"–")+"</span>"+
         "<span class='oi-rl' style='margin-left:12px;color:var(--r)'>CE Wall</span><span class='oi-rv' style='color:var(--r)'>"+(s.cW?"₹"+s.cW.toLocaleString("en-IN"):"–")+"</span></div>"+
-      "<div class='oi-row'>"+oi15mRow+"</div>"+
       "<div class='oi-row'><span class='oi-rl'>Signal</span><span class='oi-rv' style='font-size:.63rem'>"+sig+"</span></div>"+
     "</div>";
 }
@@ -1493,12 +1408,14 @@ function nav(el,id){
   document.querySelectorAll(".sec").forEach(function(s){s.classList.remove("on");});
   document.getElementById("sec-"+id).classList.add("on");
   window.scrollTo(0,0);
-  if(id==="scan")renderScannerSetups();
   if(id==="jour"){renderJ();renderPerformance();}
   if(id==="jour")renderJ();
   if(id==="auto")updAT();
 }
-function gotoAT(){nav(document.querySelectorAll(".nb")[2],"auto");}
+// FIX: was querySelectorAll(".nb")[2] (Auto tab), a hardcoded position that
+// assumed Signals(0)/Scanner(1)/Auto(2)/... — now that Scanner is removed,
+// Auto shifted to index [1]. Updated to match.
+function gotoAT(){nav(document.querySelectorAll(".nb")[1],"auto");}
 
 // Append Kite credentials to /smc URL so the server can use Kite candles
 // even on cold-start before /market has been called.
@@ -1510,9 +1427,8 @@ function _smcCreds(baseUrl){
   if(!key||!tok) return "";
   return "?key="+key+"&token="+tok;
 }
-function gotoJournal(){nav(document.querySelectorAll(".nb")[3],"jour");}
-function setBias(btn,b){bias=b;document.querySelectorAll(".bb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");renderFeed();renderScannerSetups();}
-function setSF(btn,f){document.querySelectorAll(".fb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");scanFilt=f;renderScannerSetups();}
+function gotoJournal(){nav(document.querySelectorAll(".nb")[2],"jour");}
+function setBias(btn,b){bias=b;document.querySelectorAll(".bb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");renderFeed();}
 
 // ═══════════════════════════════════════════
 // SYMBOL PICKER
@@ -4592,13 +4508,27 @@ function processScan(sigs){
 // symbol tab as the live signal, per the original request.
 function _activeTradeSigs(){
   var out=[];
-  SIGNAL_LOG.forEach(function(e){
-    if(e.status!=="OPEN" && e.status!=="T1_HIT") return;
-    if(allSigs.some(function(a){return a.sym===e.sym && a.bias===e.bias;})) return; // already represented live
+  var seen={}; // symbol+bias -> already pushed a card for this in THIS pass
+  // FIX: belt-and-suspenders dedup. loadSignalLog() now auto-closes stale
+  // (2+ day old) OPEN trades on load, which is the real fix for the root
+  // cause — but this loop itself never checked whether it had already
+  // pushed a card for a given symbol+bias, so if two OPEN/T1_HIT entries
+  // ever coexist for any reason, both would render as separate "LIVE"
+  // cards. Explicitly keep only the most recently-active one per key.
+  var candidates = SIGNAL_LOG.filter(function(e){
+    return (e.status==="OPEN"||e.status==="T1_HIT") &&
+           !allSigs.some(function(a){return a.sym===e.sym && a.bias===e.bias;});
+  });
+  candidates.sort(function(a,b){return (b.ts||0)-(a.ts||0);}); // most recent first
+  candidates.forEach(function(e){
+    var key=e.sym+e.bias;
+    if(seen[key]) return; // already have a card for this symbol+bias
+    seen[key]=true;
     out.push({
       sym:e.sym, bias:e.bias, trade:e.trade||(e.sym+" "+e.bias),
       strategy:e.strategy||"", confidence:e.confidence||70,
-      urgency:e.urgency||"HIGH", why:e.notes||"Trade in progress",
+      urgency:e.urgency||"HIGH",
+      why:e.why||e.notes||"Trade in progress",
       entry:e.entry_px, sl:e.sl_px, target1:e.t1_px, target2:e.t2_px||e.t1_px,
       rr:e.rr||"1:2", timeframe:e.timeframe||"Intraday",
       setupKey:e.setupKey, layers:e.layers,
@@ -4810,75 +4740,7 @@ function execSig(idx){var sig=allSigs[idx];if(!sig)return;logSignalEntry(sig);pe
 // ═══════════════════════════════════════════
 // SCANNER
 // ═══════════════════════════════════════════
-function renderScannerSetups(){
-  var setups=[];
-  // ── CPR Setup — always shown if data available ──
-  if(s.cpr&&s.cpr.type){
-    var cprNarrow=s.cpr.type==="NARROW";
-    var aboveTC2=px>s.cpr.tc; var belowBC2=px<s.cpr.bc;
-    if(cprNarrow&&aboveTC2){
-      setups.push({k:"cpr",d:"bull",tag:"tcpr",tn:"Narrow CPR",
-        title:"📐 Narrow CPR — Trending Day Breakout",
-        desc:"CPR width <0.3% — trending day expected. Price above TC ₹"+s.cpr.tc+". Trade CE on any pullback to TC level. High probability setup.",
-        e:"₹"+px.toLocaleString(),sl:"₹"+s.cpr.tc,t:"₹"+(atm+step*2).toLocaleString(),rr:"1:2",tf:"Today",p:84});
-    } else if(cprNarrow&&belowBC2){
-      setups.push({k:"cpr",d:"bear",tag:"tcpr",tn:"Narrow CPR",
-        title:"📐 Narrow CPR — Trending Day Breakdown",
-        desc:"CPR width <0.3% — trending day expected. Price below BC ₹"+s.cpr.bc+". Trade PE on any bounce to BC level. High probability setup.",
-        e:"₹"+px.toLocaleString(),sl:"₹"+s.cpr.bc,t:"₹"+(atm-step*2).toLocaleString(),rr:"1:2",tf:"Today",p:84});
-    } else if(cprNarrow){
-      setups.push({k:"cpr",d:"neu",tag:"tcpr",tn:"Narrow CPR",
-        title:"📐 Narrow CPR — Wait for Break",
-        desc:"CPR width <0.3% — trending day expected. Price inside TC ₹"+s.cpr.tc+" / BC ₹"+s.cpr.bc+". Wait for clear break above TC or below BC with volume before entering.",
-        e:"Wait for break",sl:"Other side of CPR",t:"1–2% directional",rr:"1:2+",tf:"Today",p:80});
-    } else {
-      setups.push({k:"cpr",d:"neu",tag:"tcpr",tn:"Wide CPR",
-        title:"📐 Wide CPR — Choppy Day",
-        desc:"CPR width >0.5% — choppy/sideways day expected. Pivot: ₹"+s.cpr.pivot+" | TC: ₹"+s.cpr.tc+" | BC: ₹"+s.cpr.bc+". Reduce directional size. Sell premium at OI walls instead.",
-        e:"Sell premium",sl:"Break of walls",t:"Premium decay",rr:"1:2",tf:"Today",p:74});
-    }
-  }
-  // Technical-based setups
-  if(s.crossover==="GOLDEN_CROSS")setups.push({k:"bo",d:"bull",tag:"tbo",tn:"Golden Cross",title:s.sym+" Golden Cross Signal",desc:"SMA20 crossed above SMA50 — strongest technical buy signal. Trend confirmed bullish.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.005)).toLocaleString(),t:"₹"+(atm+step*3).toLocaleString(),rr:"1:2",tf:"Daily",p:87});
-  if(s.crossover==="DEATH_CROSS")setups.push({k:"bo",d:"bear",tag:"tbo",tn:"Death Cross",title:s.sym+" Death Cross Signal",desc:"SMA20 crossed below SMA50 — strongest technical sell signal. Trend confirmed bearish.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.005)).toLocaleString(),t:"₹"+(atm-step*3).toLocaleString(),rr:"1:2",tf:"Daily",p:87});
-  if(s.breakout)setups.push({k:"bo",d:"bull",tag:"tbo",tn:"Breakout",title:s.sym+" Day High Breakout",desc:"Price broke day high with momentum. Buy CE for directional move.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.004)).toLocaleString(),t:"₹"+(atm+step).toLocaleString(),rr:"1:1.5",tf:"15M",p:82});
-  if(s.breakdown)setups.push({k:"bo",d:"bear",tag:"tbo",tn:"Breakdown",title:s.sym+" Day Low Breakdown",desc:"Price broke day low. Buy PE for downside move.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.004)).toLocaleString(),t:"₹"+(atm-step).toLocaleString(),rr:"1:1.5",tf:"15M",p:82});
-  if(s.rsi>70)setups.push({k:"sc",d:"bear",tag:"tsc",tn:"RSI Overbought",title:s.sym+" RSI "+s.rsi+" — Overbought",desc:"RSI above 70 signals exhaustion. Sell CE or buy PE for reversal.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.005)).toLocaleString(),t:"₹"+(atm-step).toLocaleString(),rr:"1:1.5",tf:"1H",p:79});
-  if(s.rsi<30)setups.push({k:"sc",d:"bull",tag:"tsc",tn:"RSI Oversold",title:s.sym+" RSI "+s.rsi+" — Oversold",desc:"RSI below 30 signals reversal potential. Buy CE on confirmation.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.005)).toLocaleString(),t:"₹"+(atm+step).toLocaleString(),rr:"1:1.5",tf:"1H",p:79});
-  if(iv>16&&Math.abs(px-mp)<px*.003)setups.push({k:"sc",d:"neu",tag:"tsc",tn:"Max Pain + IV",title:"Iron Condor — Max Pain ₹"+mp.toLocaleString(),desc:"IV "+iv+"% + near Max Pain. Sell premium inside OI walls.",e:"Sell "+(atm+step)+"CE + "+(atm-step)+"PE",sl:"Break of walls",t:"Premium decay",rr:"1:2.5",tf:"Expiry",p:84});
-  if(pcr>1.1&&(s.trend==="BULLISH"))setups.push({k:"sw",d:"bull",tag:"tsw",tn:"OI + Trend Aligned",title:"OI + SMA Bullish Alignment",desc:"PCR "+pcr+" + "+s.trend+" trend. Both OI and technicals confirm bulls.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.007)).toLocaleString(),t:"₹"+(atm+step*3).toLocaleString(),rr:"1:2.5",tf:"Daily",p:83});
-  if(pcr<0.9&&(s.trend==="BEARISH"))setups.push({k:"sw",d:"bear",tag:"tsw",tn:"OI + Trend Aligned",title:"OI + SMA Bearish Alignment",desc:"PCR "+pcr+" + "+s.trend+" trend. Both OI and technicals confirm bears.",e:"₹"+px.toLocaleString(),sl:"₹"+(px+Math.round(px*.007)).toLocaleString(),t:"₹"+(atm-step*3).toLocaleString(),rr:"1:2.5",tf:"Daily",p:83});
-  if(!isOpen()&&s.pct>1)setups.push({k:"bt",d:"bull",tag:"tbt",tn:"BTST Setup",title:s.sym+" BTST — Strong Close",desc:"Closed +"+s.pct.toFixed(1)+"% with bullish OI. Gap-up expected tomorrow.",e:"₹"+px.toLocaleString(),sl:"₹"+(px-Math.round(px*.006)).toLocaleString(),t:"₹"+(px+Math.round(px*.015)).toLocaleString(),rr:"1:2.5",tf:"Overnight",p:79});
-  // HF strategies always shown
-  setups.push({k:"hf",d:"neu",tag:"thf",tn:"HF: BlackRock Buffer",title:"BlackRock Buffer Strategy",desc:"Buy ATM PE + Sell OTM PE + Sell far CE. Asymmetric downside protection with upside.",e:"3-leg spread",sl:"Net debit",t:"Downside protected",rr:"Asymmetric",tf:"Monthly",p:79});
-  if(iv>18)setups.push({k:"hf",d:"neu",tag:"thf",tn:"HF: Citadel Theta",title:"Citadel Theta Harvest — IV "+iv+"%",desc:"IV elevated above VIX "+VIX+". Sell Iron Condor inside OI walls for premium decay.",e:"4-leg IC",sl:"Break of wings",t:"All premium decays",rr:"1:3",tf:"Weekly",p:83});
-  lastSetups=setups;
-  var fi=scanFilt==="all"?setups:setups.filter(function(x){return x.k===scanFilt;});
-  if(bias==="BTST")fi=fi.filter(function(x){return x.k==="bt";});
-  else if(bias!=="ALL")fi=fi.filter(function(x){return (bias==="BULL"&&x.d==="bull")||(bias==="BEAR"&&x.d==="bear")||(bias==="NEU"&&x.d==="neu");});
-  if(!fi.length){document.getElementById("scanList").innerHTML="<div class='empty'><div style='font-size:1.8rem;margin-bottom:7px'>📊</div><div>No setups for this filter</div></div>";return;}
-  var h="";
-  fi.forEach(function(su){
-    var dc=su.d==="bull"?"var(--g)":su.d==="bear"?"var(--r)":"var(--y)";
-    if(su.k==="bt")dc="var(--p)";
-    var bg="rgba("+(su.d==="bull"?"34,197,94":su.d==="bear"?"239,68,68":"59,130,246")+",.12)";
-    var bd="rgba("+(su.d==="bull"?"34,197,94":su.d==="bear"?"239,68,68":"59,130,246")+",.3)";
-    if(su.k==="bt"){bg="rgba(139,92,246,.12)";bd="rgba(139,92,246,.3)";}
-    var gi=lastSetups.indexOf(su);
-    h+="<div class='setup "+(su.d==="bull"?"bull":su.d==="bear"?"bear":"neu")+"'><div class='su-hd'><span class='su-tag "+su.tag+"'>"+su.tn+"</span><span class='su-title'>"+su.title+"</span><span class='su-prob' style='color:"+(su.p>=85?"var(--g)":su.p>=79?"var(--y)":"var(--m)")+"'>"+su.p+"%</span></div>"+
-      "<div class='su-body'><div class='su-desc'>"+su.desc+"</div>"+
-      "<div class='chips'>"+
-        "<div class='chip'><div class='chip-l'>Entry</div><div class='chip-v' style='color:var(--b)'>"+su.e+"</div></div>"+
-        "<div class='chip'><div class='chip-l'>Stop</div><div class='chip-v' style='color:var(--r)'>"+su.sl+"</div></div>"+
-        "<div class='chip'><div class='chip-l'>Target</div><div class='chip-v' style='color:var(--g)'>"+su.t+"</div></div>"+
-        "<div class='chip'><div class='chip-l'>R:R</div><div class='chip-v' style='color:var(--y)'>"+su.rr+"</div></div>"+
-        "<div class='chip'><div class='chip-l'>TF</div><div class='chip-v' style='color:var(--m)'>"+su.tf+"</div></div>"+
-      "</div>"+
-      "<button class='su-exec' style='background:"+bg+";color:"+dc+";border:1px solid "+bd+"' onclick='execSetup("+gi+")'>"+( AT.active?"⚡ Auto-Execute":"▶ Execute — "+su.tn)+"</button>"+
-      "</div></div>";
-  });
-  document.getElementById("scanList").innerHTML=h;
-}
+
 function execSetup(idx){var su=lastSetups[idx];if(!su)return;pendingTrade={action:su.d==="bull"?"BUY":"SELL",instrument:su.title,confidence:su.p,entry:su.e,sl:su.sl,target:su.t,why:su.desc};if(AT.active)qAT(pendingTrade);else showOrd();}
 
 // ═══════════════════════════════════════════
@@ -5128,18 +4990,40 @@ function loadSignalLog(){
     var s=localStorage.getItem("pt_siglog");
     if(s) SIGNAL_LOG=JSON.parse(s);
   }catch(e){SIGNAL_LOG=[];}
+  // FIX: a trade stuck in OPEN/T1_HIT status with no way to ever auto-close
+  // (e.g. from an app crash mid-session, or a bug that predates the dedup
+  // guards in autoLogSignal) would sit in SIGNAL_LOG indefinitely. Since
+  // _activeTradeSigs() renders every OPEN/T1_HIT entry per symbol+bias with
+  // no dedup against entries it has already rendered in the same pass, a
+  // 3-week-old stuck trade and a genuinely new one for the same symbol+bias
+  // both got shown as separate "LIVE" cards simultaneously — confirmed from
+  // a real screenshot: two NIFTY BEARISH cards, "First: 22 Jul" and
+  // "First: 7 Aug", identical entry/SL/T1/T2/P&L (the July one was frozen,
+  // never actually tracking the market, just displaying its last-known P&L).
+  // No intraday options trade should legitimately stay OPEN for days, let
+  // alone weeks — auto-close anything open longer than 2 trading days as a
+  // stale/orphaned entry, tagged clearly so it doesn't inflate win/loss
+  // stats as a real outcome.
+  var STALE_MS = 1000*60*60*24*2; // 2 days
+  var now = Date.now();
+  var cleaned = false;
+  SIGNAL_LOG.forEach(function(e){
+    if((e.status==="OPEN"||e.status==="T1_HIT") && e.ts && (now-e.ts)>STALE_MS){
+      e.status="MANUAL"; e.outcome="MANUAL";
+      e.exitTime = istDateTime();
+      e.exit_px = e.entry_px; // no reliable live price for a stale trade — flat exit, not a real signal outcome
+      e.pnl = 0;
+      e.notes = "Auto-closed: stale trade, was OPEN for over 2 days with no resolution (likely stuck from an app/session issue)";
+      delete _sigFirstSeen[e.sym+e.bias]; _saveSigFirstSeen();
+      cleaned = true;
+    }
+  });
+  if(cleaned) saveSignalLog();
 }
 
 function saveSignalLog(){
-  // FIX: removed the 500-entry cap per request — SIGNAL_LOG now keeps every
-  // trade indefinitely, no trimming. This does carry a real risk: browser
-  // localStorage has a per-origin size limit (typically 5-10MB depending on
-  // the browser), and an unbounded log will eventually approach it. Rather
-  // than silently trimming (the old behavior) or silently failing to save
-  // (what would happen without any safeguard), this now tries to save
-  // everything, and only if the browser genuinely rejects the write (quota
-  // exceeded) does it warn clearly — once — so you know your history needs
-  // exporting/archiving rather than losing data without any indication.
+  // No cap — keep full signal history. Guard against localStorage quota
+  // errors (rather than silently trimming) by warning once if a save fails.
   try{
     localStorage.setItem("pt_siglog",JSON.stringify(SIGNAL_LOG));
   }catch(e){
@@ -5314,11 +5198,6 @@ function checkSignalLevels(){
   if(changed){saveSignalLog();renderJ();renderPerformance();renderFeed();}
 }
 
-function _jShowMore(){
-  window._jShowCount = (window._jShowCount||30) + 30;
-  renderJ();
-}
-
 function renderJ(){
   var jList = document.getElementById("jList");
   var jStats = document.getElementById("jStats");
@@ -5365,22 +5244,12 @@ function renderJ(){
     });
   }
 
-  // Closed signals — most recent first (was in raw chronological/insertion
-  // order, so the old slice(0,30) below was actually showing the OLDEST 30
-  // trades, not the newest). Combined with removing the 500-entry storage
-  // cap, this also removes the silent display cutoff — a "Show more" control
-  // reveals the rest instead of trades being invisible even though they're
-  // fully captured in SIGNAL_LOG.
+  // Closed signals
   if(closed.length){
-    var closedSorted = closed.slice().reverse();
-    var jShowCount = window._jShowCount || 30;
     html += "<div style='font-size:.6rem;font-weight:700;letter-spacing:1px;color:var(--m);padding:10px 0 4px'>CLOSED SIGNALS ("+closed.length+")</div>";
-    closedSorted.slice(0,jShowCount).forEach(function(e){
+    closed.slice(0,30).forEach(function(e){
       html += renderSignalEntry(e, false);
     });
-    if(closed.length>jShowCount){
-      html += "<div onclick='_jShowMore()' style='padding:8px;text-align:center;font-size:.65rem;color:var(--m);cursor:pointer;border-top:1px solid var(--border)'>▼ Show "+Math.min(30,closed.length-jShowCount)+" more (of "+closed.length+" total)</div>";
-    }
   }
 
   if(!SIGNAL_LOG.length){
@@ -5659,43 +5528,10 @@ function renderPerformance(){
   var html="<div style='padding:4px 0 12px'>";
 
   // Overall stats
-  // ROI — capital-weighted average, per Mahesh's explicit choice.
-  // Mechanically this is total_pnl / total_capital-in-play (same shape as
-  // the original "consolidated" method), but with REALISTIC capital now:
-  //   INDEX (NIFTY/BANKNIFTY/FINNIFTY/SENSEX) → fixed ₹1,90,000 margin,
-  //     NOT entry_px×lot notional (full contract value was never actually
-  //     at risk on a futures/margin-based index trade — the margin was).
-  //   STOCKS → entry_px × lot_size (unchanged — direct equity buying).
-  // Weighting by capital means a trade that used more capital pulls the
-  // blended % harder, which answers "what's my overall return on the
-  // capital actually in play," size-adjusted — as opposed to a plain
-  // average which would let a small trade count equally to a large one.
-  var INDEX_SYMS = {"NIFTY":1,"BANKNIFTY":1,"FINNIFTY":1,"SENSEX":1,"MIDCPNIFTY":1};
-  var INDEX_MARGIN = 190000;
-  var capPerTrade = closed.map(function(e){
-    if(INDEX_SYMS[e.sym]) return INDEX_MARGIN;
-    var ls = e.lot_size || LOT_SIZES[e.sym] || LOT_SIZES.DEFAULT || 50;
-    return (e.entry_px||0) * ls;
-  });
-  var totalCapital = capPerTrade.reduce(function(a,b){return a+b;},0);
-  var roiPct = totalCapital>0 ? (totPnl/totalCapital*100) : 0;
-  // capitalDeployed shown as average capital-per-trade, for an intuitive
-  // "typical size" reference next to the blended ROI%.
-  var capitalDeployed = closed.length ? totalCapital/closed.length : 0;
-  var avgPnlPerTrade = closed.length ? Math.round(totPnl / closed.length) : 0;
-  var bestTrade = closed.reduce(function(a,e){return (e.pnl||0)>a?(e.pnl||0):a;},0);
-  var worstTrade = closed.reduce(function(a,e){return (e.pnl||0)<a?(e.pnl||0):a;},0);
-
   html+="<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px'>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>WIN RATE</div><div style='font-size:1.1rem;font-weight:800;color:"+(wr>=60?"var(--g)":wr>=40?"var(--y)":"var(--r)")+"'>"+wr+"%</div></div>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>SIGNALS</div><div style='font-size:1.1rem;font-weight:800;color:var(--t1)'>"+SIGNAL_LOG.length+"</div></div>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>TOTAL P&L</div><div style='font-size:.85rem;font-weight:800;color:"+(totPnl>=0?"var(--g)":"var(--r)")+"'>"+(totPnl>=0?"+":"")+"₹"+Math.abs(totPnl).toLocaleString("en-IN")+"</div></div>";
-  html+="</div>";
-  // ROI row
-  html+="<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px'>";
-  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>ROI (capital-weighted)</div><div style='font-size:1.1rem;font-weight:800;color:"+(roiPct>=0?"var(--g)":"var(--r)")+"'>"+(roiPct>=0?"+":"")+roiPct.toFixed(1)+"%</div><div style='font-size:.5rem;color:var(--m);margin-top:2px'>~₹"+Math.round(capitalDeployed).toLocaleString("en-IN")+" avg capital/trade</div></div>";
-  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>AVG / TRADE</div><div style='font-size:1.1rem;font-weight:800;color:"+(avgPnlPerTrade>=0?"var(--g)":"var(--r)")+"'>"+(avgPnlPerTrade>=0?"+":"")+"₹"+Math.abs(avgPnlPerTrade).toLocaleString("en-IN")+"</div></div>";
-  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>BEST / WORST</div><div style='font-size:.72rem;font-weight:800'><span style='color:var(--g)'>+₹"+bestTrade.toLocaleString("en-IN")+"</span><span style='color:var(--m)'> / </span><span style='color:var(--r)'>₹"+worstTrade.toLocaleString("en-IN")+"</span></div></div>";
   html+="</div>";
 
   // Setup Leaderboard
@@ -6007,7 +5843,6 @@ window.onload=function(){
   try{updAT();}catch(e){}
   try{buildSF();}catch(e){}
   try{renderFeed();}catch(e){}  // render AFTER SERVER_URL is set
-  try{renderScanner();}catch(e){}
   try{renderJ();}catch(e){}
   try{startTimer();}catch(e){}
   // Now fetch data - SERVER_URL is already set from loadSaved
@@ -6242,9 +6077,13 @@ function fetchLotSizes(){
       LOT_SIZES=d.data;
       var src=d.source||"unknown";
       console.log("[LotSizes] "+src+": "+JSON.stringify(d.data));
-      // Toast removed per request — lot sizes are still fetched and applied
-      // correctly (LOT_SIZES updated above), just no longer shown as a
-      // popup every time the app opens.
+      // Show once per session so user knows live lot sizes are active
+      if(src==="zerodha"&&!window._lotSizesLogged){
+        window._lotSizesLogged=true;
+        var ls=d.data;
+        var summary="NIFTY:"+ls.NIFTY+" · BANKNIFTY:"+ls.BANKNIFTY+" · SENSEX:"+ls.SENSEX+" · FINNIFTY:"+(ls.FINNIFTY||"—");
+        toast("📐 Lot Sizes Live",summary,"tg");
+      }
     }
   }).catch(function(){});
 }
@@ -6287,7 +6126,6 @@ function applyOIData(sym,o){
   s.cOI=o.ce_oi||0;s.pOI=o.pe_oi||0;s.cC=o.ce_chg||0;s.pC=o.pe_chg||0;
   s.pcr=o.pcr||0;s.mp=o.max_pain||0;s.iv=o.iv||0;s.cW=o.ce_wall||0;s.pW=o.pe_wall||0;
   s.buildup=o.buildup||"";s.pcr_interp=o.pcr_interp||"";s.mp_dist=o.mp_dist||0;
-  s.cC15=o.ce_chg_15m||0; s.pC15=o.pe_chg_15m||0; s.oi15Avail=o.oi_15m_available||false;
   if(o.expiry) s.exp=o.expiry;
   // Server-side authoritative staleness (set when Zerodha calls fail — most
   // often a daily Kite token expiry — and the server falls back to its own
@@ -6311,7 +6149,6 @@ function applyOIData(sym,o){
     updateOI(CS);  // render full OI strip
   }
   // Always re-scan signals when OI arrives (affects signal scoring for this sym)
-  try{renderScanner();}catch(e){}
 }
 
 // ══ MULTI-TF FETCH ══
@@ -6334,74 +6171,7 @@ function fetchMTF(sym){
   }).catch(function(){});
 }
 
-// ══ SCANNER ══
-var _scanSector="ALL",_scanSort="score";
-function setSector(btn,sec){document.querySelectorAll(".sflt").forEach(function(b){b.classList.remove("on");});btn.classList.add("on");_scanSector=sec;renderScanner();}
-function setSort(btn,srt){document.querySelectorAll(".ssort").forEach(function(b){b.classList.remove("on");});btn.classList.add("on");_scanSort=srt;renderScanner();}
 
-function renderScanner(){
-  var el=document.getElementById("scanList");if(!el)return;
-  var all=allS().filter(function(s){
-    if(!s.px)return false;
-    if(_scanSector==="ALL")return true;
-    if(_scanSector==="IDX")return SD.idx.some(function(i){return i.sym===s.sym;});
-    return s.sector===_scanSector;
-  }).map(function(s){
-    var smc=s.smc||{};
-    var score=0;
-    if(s.pcr>1.1||(s.pcr>0&&s.pcr<0.9))score++;
-    if(s.crossover==="GOLDEN_CROSS"||s.crossover==="DEATH_CROSS")score+=2;
-    if(s.breakout||s.breakdown)score+=2;
-    if(smc.sweep&&smc.sweep.length)score+=2;
-    if(smc.ob&&smc.ob.length)score++;
-    if(s.tfAlignment==="STRONG_BULL"||s.tfAlignment==="STRONG_BEAR")score+=2;
-    else if(s.tfAlignment==="BULL"||s.tfAlignment==="BEAR")score++;
-    if(s.buildup==="LONG_BUILDUP"||s.buildup==="SHORT_BUILDUP")score+=2;
-    s._scanScore=score;return s;
-  });
-  if(_scanSort==="score")all.sort(function(a,b){return b._scanScore-a._scanScore;});
-  else if(_scanSort==="chg")all.sort(function(a,b){return Math.abs(b.pct)-Math.abs(a.pct);});
-  else all.sort(function(a,b){return a.sym.localeCompare(b.sym);});
-
-  var h="";
-  all.forEach(function(s){
-    var px=s.px,chg=s.chg||0,pct=s.pct||0,up=chg>=0,score=s._scanScore;
-    var smc=s.smc||{};
-    var str=score>=5?"🔥 STRONG":score>=3?"⚡ MODERATE":"📊 WATCH";
-    var sc=score>=5?"var(--g)":score>=3?"var(--y)":"var(--m)";
-    var sp="–",spc="var(--m)";
-    if(s.sma20&&px){if(px>s.sma20&&s.sma50&&px>s.sma50){sp="↑ Above SMA20&50";spc="var(--g)";}else if(px<s.sma20&&s.sma50&&px<s.sma50){sp="↓ Below SMA20&50";spc="var(--r)";}else{sp=px>s.sma20?"↑ SMA20":"↓ SMA20";spc=px>s.sma20?"var(--g)":"var(--r)";}}
-    var buLabel="–",buCol="var(--m)";
-    if(s.buildup==="LONG_BUILDUP"){buLabel="📈 Long Build";buCol="var(--g)";}
-    else if(s.buildup==="SHORT_BUILDUP"){buLabel="📉 Short Build";buCol="var(--r)";}
-    else if(s.buildup==="SHORT_COVERING"){buLabel="↩ Short Cover";buCol="rgba(34,197,94,.8)";}
-    else if(s.buildup==="LONG_UNWINDING"){buLabel="↩ Long Unwind";buCol="rgba(239,68,68,.8)";}
-    var tfMap={"STRONG_BULL":"🟢 All Bull","BULL":"📈 2/3 Bull","STRONG_BEAR":"🔴 All Bear","BEAR":"📉 2/3 Bear","MIXED":"⚠ Mixed"};
-    var tfTxt=tfMap[s.tfAlignment||""]||"–";
-    var tfCol={"STRONG_BULL":"var(--g)","BULL":"rgba(34,197,94,.8)","STRONG_BEAR":"var(--r)","BEAR":"rgba(239,68,68,.8)","MIXED":"var(--y)"}[s.tfAlignment||""]||"var(--m)";
-    var smcTxt=(smc.structure&&smc.structure!=="UNKNOWN"?smc.structure:"")+((smc.sweep&&smc.sweep.length)?" | Liq Sweep":"");
-    var fvgs=(smc.fvg||[]).filter(function(f){return !f.filled;});
-    var isCur=CS&&CS.sym===s.sym;
-    h+="<div style='background:var(--card);border:1px solid "+(isCur?"var(--b)":"var(--border)")+";border-left:3px solid "+(score>=5?"var(--g)":score>=3?"var(--y)":"transparent")+";border-radius:10px;padding:10px;margin-bottom:6px;cursor:pointer' onclick=\"switchToSig(this.dataset.s)\" data-s='"+s.sym+"'>";
-    h+="<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:4px'>";
-    h+="<div><span style='font-size:.88rem;font-weight:800'>"+s.sym+"</span>";
-    if(s.sector)h+="<span style='font-size:.48rem;padding:1px 5px;border-radius:6px;background:rgba(255,255,255,.05);color:var(--m);margin-left:5px'>"+s.sector+"</span>";
-    h+="</div><div style='display:flex;align-items:center;gap:4px'>";
-    if(pct!==0)h+="<span style='font-size:.65rem;padding:1px 6px;border-radius:4px;background:"+(up?"rgba(34,197,94,.1)":"rgba(239,68,68,.1)")+";color:"+(up?"var(--g)":"var(--r)")+";font-weight:700'>"+(up?"+":"")+pct.toFixed(2)+"%</span>";
-    h+="<span style='font-size:.65rem;font-weight:700;color:"+sc+"'>"+str+"</span></div></div>";
-    h+="<div style='font-size:.95rem;font-weight:700;color:"+(up?"var(--g)":"var(--r)")+";margin-bottom:6px'>₹"+px.toLocaleString("en-IN")+"</div>";
-    h+="<div style='display:grid;grid-template-columns:1fr 1fr;gap:3px'>";
-    h+="<div style='background:rgba(255,255,255,.03);border-radius:5px;padding:4px 6px'><span style='color:var(--m);font-size:.46rem;text-transform:uppercase;display:block'>SMA</span><span style='color:"+spc+";font-size:.65rem;font-weight:700'>"+sp+"</span></div>";
-    h+="<div style='background:rgba(255,255,255,.03);border-radius:5px;padding:4px 6px'><span style='color:var(--m);font-size:.46rem;text-transform:uppercase;display:block'>TF Align</span><span style='color:"+tfCol+";font-size:.65rem;font-weight:700'>"+tfTxt+"</span></div>";
-    h+="<div style='background:rgba(255,255,255,.03);border-radius:5px;padding:4px 6px'><span style='color:var(--m);font-size:.46rem;text-transform:uppercase;display:block'>OI Activity</span><span style='color:"+buCol+";font-size:.65rem;font-weight:700'>"+buLabel+"</span></div>";
-    h+="<div style='background:rgba(255,255,255,.03);border-radius:5px;padding:4px 6px'><span style='color:var(--m);font-size:.46rem;text-transform:uppercase;display:block'>PCR</span><span style='color:"+(s.pcr>1.1?"var(--g)":s.pcr>0&&s.pcr<0.9?"var(--r)":"var(--m)")+";font-size:.65rem;font-weight:700'>"+(s.pcr?"PCR "+s.pcr:"–")+"</span></div>";
-    h+="</div>";
-    if(smcTxt||fvgs.length)h+="<div style='margin-top:4px;font-size:.58rem;color:var(--p)'>🏦 "+(smcTxt||(fvgs.length?"FVG zone nearby":""))+"</div>";
-    h+="<div style='font-size:.52rem;color:var(--m);text-align:right;margin-top:3px'>Tap → signals</div></div>";
-  });
-  if(!all.length)h="<div style='text-align:center;padding:25px;color:var(--m)'><div style='font-size:1.2rem'>📡</div><div style='font-size:.8rem;margin-top:6px;font-weight:600'>No data</div></div>";
-  el.innerHTML=h;
-}
 
 function switchToSig(sym){
   document.querySelectorAll(".nb").forEach(function(b){b.classList.remove("on");});
