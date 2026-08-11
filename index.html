@@ -4559,13 +4559,23 @@ function processScan(sigs){
 // symbol tab as the live signal, per the original request.
 function _activeTradeSigs(){
   var out=[];
-  var seen={}; // symbol+bias -> already pushed a card for this in THIS pass
-  // FIX: belt-and-suspenders dedup. loadSignalLog() now auto-closes stale
-  // (2+ day old) OPEN trades on load, which is the real fix for the root
-  // cause — but this loop itself never checked whether it had already
-  // pushed a card for a given symbol+bias, so if two OPEN/T1_HIT entries
-  // ever coexist for any reason, both would render as separate "LIVE"
-  // cards. Explicitly keep only the most recently-active one per key.
+  var seenKey={};  // symbol+bias -> already pushed a card for this exact direction
+  var seenSym={};  // symbol alone -> already pushed ANY card for this symbol
+  // FIX: belt-and-suspenders dedup, two layers now.
+  // Layer 1 (seenKey): loadSignalLog() auto-closes stale (2+ day old) OPEN
+  // trades on load — but this loop never checked whether it had already
+  // pushed a card for a given symbol+bias, so duplicate same-direction
+  // entries could both render.
+  // Layer 2 (seenSym): the REAL root cause behind a live bug — Guard 5 in
+  // autoLogSignal (which is supposed to auto-close an opposite-direction
+  // trade before logging a new one) only checked status==="OPEN", so a
+  // trade that had progressed to T1_HIT was invisible to it. A BEARISH
+  // BANKNIFTY trade at T1_HIT and a brand new BULLISH BANKNIFTY trade both
+  // ended up "active" simultaneously (confirmed via screenshot: +₹4,839
+  // bearish alongside -₹14,688 bullish, same symbol, same moment). Guard 5
+  // itself is now fixed to check T1_HIT too, but this render-time check
+  // stays as a second line of defense — no symbol should ever show two
+  // opposing-direction "LIVE" cards, full stop.
   var candidates = SIGNAL_LOG.filter(function(e){
     return (e.status==="OPEN"||e.status==="T1_HIT") &&
            !allSigs.some(function(a){return a.sym===e.sym && a.bias===e.bias;});
@@ -4573,8 +4583,10 @@ function _activeTradeSigs(){
   candidates.sort(function(a,b){return (b.ts||0)-(a.ts||0);}); // most recent first
   candidates.forEach(function(e){
     var key=e.sym+e.bias;
-    if(seen[key]) return; // already have a card for this symbol+bias
-    seen[key]=true;
+    if(seenKey[key]) return;       // already have a card for this exact symbol+bias
+    if(seenSym[e.sym]) return;     // already have a card (any direction) for this symbol
+    seenKey[key]=true;
+    seenSym[e.sym]=true;
     out.push({
       sym:e.sym, bias:e.bias, trade:e.trade||(e.sym+" "+e.bias),
       strategy:e.strategy||"", confidence:e.confidence||70,
@@ -5205,11 +5217,11 @@ function autoLogSignal(sig){
   if(!slPx||!t1Px) return;
 
   // Guard 4: DEDUP — same symbol + same direction
-  // Check OPEN status AND same-day signals (catches rapid re-entries within minutes)
+  // Check OPEN/T1_HIT status AND same-day signals (catches rapid re-entries within minutes)
   var todaySig = new Date().toLocaleDateString('en-IN');
   var recentSame = SIGNAL_LOG.filter(function(x){
     if(x.sym!==sig.sym||x.bias!==sig.bias) return false;
-    if(x.status==="OPEN") return true; // always block if still open
+    if(x.status==="OPEN"||x.status==="T1_HIT") return true; // always block if still active
     // Also block if same direction was already logged today (even if closed)
     // unless it was SL_HIT (then level block handles re-entry separately)
     var xDate = x.ts ? new Date(x.ts).toLocaleDateString('en-IN') : "";
@@ -5217,15 +5229,22 @@ function autoLogSignal(sig){
   });
   if(recentSame.length>0) return;
 
-  // Guard 5: if opposite direction OPEN for same symbol → auto-close it
-  // (NIFTY was bullish, now bearish → close the bullish signal as MANUAL)
+  // Guard 5: if opposite direction is still ACTIVE for same symbol → auto-close it.
+  // FIX: this used to only check status==="OPEN", so a trade that had already
+  // progressed to T1_HIT was invisible here — a new opposite-direction signal
+  // could open right alongside it, producing two simultaneously "live" cards
+  // fighting each other on the same symbol (confirmed from a live screenshot:
+  // BANKNIFTY BEARISH T1_HIT +₹4,839 running at the same time as BANKNIFTY
+  // BULLISH T1_HIT -₹14,688). T1_HIT is still an ACTIVE trade — it hasn't
+  // closed, it's just derisked to breakeven — so it must be checked here too.
   SIGNAL_LOG.forEach(function(x){
-    if(x.sym===sig.sym && x.bias!==sig.bias && x.status==="OPEN"){
+    if(x.sym===sig.sym && x.bias!==sig.bias && (x.status==="OPEN"||x.status==="T1_HIT")){
+      var wasStatus = x.status; // capture BEFORE overwriting, for an accurate note
       x.status  = "MANUAL";
       x.outcome = "MANUAL";
       x.exitTime= istDateTime();
       x.exit_px = entryPx; // last known price as exit
-      x.notes   = "Auto-closed: direction flipped to "+sig.bias;
+      x.notes   = "Auto-closed: direction flipped to "+sig.bias+" (was "+wasStatus+")";
       delete _sigFirstSeen[x.sym+x.bias]; _saveSigFirstSeen(); // trade closed — clear its "first seen" stamp
       if(x.entry_px&&x.exit_px){
         var diff = x.bias==="BULLISH"?x.exit_px-x.entry_px:x.entry_px-x.exit_px;
