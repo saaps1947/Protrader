@@ -381,6 +381,17 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
       <div class="ss-f"><label>Server URL (your Render.com URL)</label><input type="text" id="ss_srv" placeholder="https://your-server.onrender.com" oninput="srvSave()"></div>
       <div id="ss_srv_st" class="ss-st"></div>
       <button class="ss-btn ss-sec2" onclick="testServer()">🔍 Test Server Connection</button>
+      <div class="ss-f"><label>Server Secret (only if PROTRADER_API_SECRET is set on Render)</label><input type="password" id="ss_sec" placeholder="leave blank if not configured" oninput="setPtSecret(this.value)"></div>
+    </div>
+    <div class="ss-sec">
+      <div class="ss-sec-title">🛡 Live Order Safety</div>
+      <div class="ss-st" style="line-height:1.6">
+        Orders are placed as <b>MIS</b> (intraday, broker auto-square-off) and are
+        always <b>option BUYS</b> — a bearish signal buys a PE, it never sells one.
+        A protective <b>SL-M</b> stop is placed automatically on the fill price.
+      </div>
+      <div class="ss-f"><label>Premium Stop Loss (% of option premium paid)</label><input type="number" id="ss_slpct" value="30" min="5" max="80" step="5" oninput="setSlPct(this.value)"></div>
+      <button class="ss-btn ss-sec2" onclick="exitLastOrder()">🔻 Square Off Last Order</button>
     </div>
     <div class="ss-sec">
       <div class="ss-sec-title">🔧 Advanced</div>
@@ -924,6 +935,58 @@ var USDINR = 84.0;
 var LOT_SIZES = {"NIFTY":65,"BANKNIFTY":35,"FINNIFTY":65,"SENSEX":20,"MIDCPNIFTY":120,"DEFAULT":50};
 var AT = {active:false,capital:50000,maxTrades:3,conf:82,dir:"both",inst:"AUTO",trades:0,timer:null};
 var allSigs=[],bias="ALL",sfFilt="ALL",scanning=false,pendingTrade=null;
+// Protective stop as a % of the option PREMIUM paid (not the underlying).
+// 30% of premium is a reasonable intraday default for ATM/near-ATM options.
+var SL_PREMIUM_PCT=30;
+// Last live order — retained so it can be squared off from the app.
+var lastLiveOrder=null;
+// Optional shared secret. Only needed if PROTRADER_API_SECRET is set on the
+// server. Stored locally and sent as a header, never in a URL.
+var PT_SECRET="";
+try{PT_SECRET=localStorage.getItem("pt_secret")||"";}catch(e){}
+try{var _sp=parseInt(localStorage.getItem("pt_slpct"),10);if(!isNaN(_sp)&&_sp>=5&&_sp<=80)SL_PREMIUM_PCT=_sp;}catch(e){}
+// Kite credentials as HEADERS instead of query-string params, so access tokens
+// stop appearing in server request logs, proxy logs and browser history.
+// The server accepts either form, so this is backward compatible.
+function kiteHeaders(extra){
+  var h=extra||{};
+  if(KITE&&KITE.apiKey)      h["X-Kite-Key"]=KITE.apiKey;
+  if(KITE&&KITE.accessToken) h["X-Kite-Token"]=KITE.accessToken;
+  if(PT_SECRET)              h["X-PT-Secret"]=PT_SECRET;
+  return h;
+}
+function ptHeaders(){
+  var h={"Content-Type":"application/json"};
+  if(PT_SECRET) h["X-PT-Secret"]=PT_SECRET;
+  return h;
+}
+function setSlPct(v){
+  var n=parseInt(v,10);
+  if(isNaN(n)||n<5||n>80) return;
+  SL_PREMIUM_PCT=n;
+  try{localStorage.setItem("pt_slpct",""+n);}catch(e){}
+}
+function setPtSecret(v){
+  PT_SECRET=(v||"").trim();
+  try{localStorage.setItem("pt_secret",PT_SECRET);}catch(e){}
+  toast("Saved",PT_SECRET?"Server secret stored":"Server secret cleared","tg");
+}
+// Square off the last live order at market and cancel its resting stop.
+function exitLastOrder(){
+  if(!lastLiveOrder){toast("Nothing to exit","No live order placed from this device","ty");return;}
+  if(!SERVER_URL||!KITE.connected){toast("Not connected","Need server + Kite to exit","tr");return;}
+  if(!confirm("Square off "+lastLiveOrder.tradingsymbol+" at market?"))return;
+  setStatus("fetching","Exiting…");
+  fetch(SERVER_URL+"/exit_order",{method:"POST",headers:ptHeaders(),body:JSON.stringify({
+    sym:lastLiveOrder.sym,strike:lastLiveOrder.strike,option_type:lastLiveOrder.optType,
+    qty:lastLiveOrder.qty,product:"MIS",cancel_order_id:lastLiveOrder.stop_order_id,
+    key:KITE.apiKey,token:KITE.accessToken
+  })}).then(function(r){return r.json();}).then(function(d){
+    setStatus("live");
+    if(d.ok){toast("✅ Squared Off",d.tradingsymbol+(d.stop_cancelled?" · stop cancelled":""),"tg");lastLiveOrder=null;}
+    else toast("❌ Exit Failed",d.error||"Check Kite","tr");
+  }).catch(function(e){setStatus("live");toast("❌ Exit error",e.message,"tr");});
+}
 var lastSetups=[];
 var scanCd=180,scanTmr=null;
 var serverOk=false;
@@ -984,15 +1047,12 @@ function fetchFromServer(){
 function _doFetchFromServer(){
   if(!SERVER_URL){setStatus("noserver");return;}
   setStatus("fetching");
-  var mktUrl=SERVER_URL+"/market";
-  if(KITE.apiKey&&KITE.accessToken){
-    mktUrl+="?key="+encodeURIComponent(KITE.apiKey)+"&token="+encodeURIComponent(KITE.accessToken);
-  }
+  var mktUrl=SERVER_URL+"/market";  // credentials now travel as headers
 
   // Step 1: Fetch hero (indices only) IMMEDIATELY for fast display
   if(KITE.apiKey&&KITE.accessToken){
-    var heroUrl=SERVER_URL+"/hero?key="+encodeURIComponent(KITE.apiKey)+"&token="+encodeURIComponent(KITE.accessToken);
-    fetch(heroUrl,{signal:AbortSignal.timeout(8000)})
+    var heroUrl=SERVER_URL+"/hero";
+    fetch(heroUrl,{headers:kiteHeaders(),signal:AbortSignal.timeout(8000)})
     .then(function(r){return r.json();})
     .then(function(d){
       if(d&&d.ok&&d.data){
@@ -1011,7 +1071,7 @@ function _doFetchFromServer(){
       }
     }).catch(function(){});
   }
-  return fetch(mktUrl,{signal:AbortSignal.timeout(20000)})
+  return fetch(mktUrl,{headers:kiteHeaders(),signal:AbortSignal.timeout(20000)})
   .then(function(r){
     if(!r.ok)throw new Error("HTTP "+r.status);
     return r.json();
@@ -1441,10 +1501,9 @@ function gotoAT(){nav(document.querySelectorAll(".nb")[1],"auto");}
 // This is the fix for ORB always being 0% — /smc was getting no-credential
 // requests and falling back to Yahoo which has no reliable 9:15 candle.
 function _smcCreds(baseUrl){
-  var key = KITE&&KITE.apiKey ? encodeURIComponent(KITE.apiKey) : "";
-  var tok = KITE&&KITE.accessToken ? encodeURIComponent(KITE.accessToken) : "";
-  if(!key||!tok) return "";
-  return "?key="+key+"&token="+tok;
+  // Credentials now travel as headers (see kiteHeaders); kept as a no-op so
+  // existing call sites stay valid and tokens stop appearing in URLs/logs.
+  return "";
 }
 function gotoJournal(){nav(document.querySelectorAll(".nb")[2],"jour");}
 function setBias(btn,b){bias=b;document.querySelectorAll(".bb").forEach(function(x){x.classList.remove("on");});btn.classList.add("on");renderFeed();}
@@ -1574,7 +1633,7 @@ function captureSnapshot(s){
   }
   var smc=s.smc||{};
   var curSig=allSigs.filter(function(sg){return sg.sym===s.sym;})[0]||{};
-  SnapDB.save({
+  var snap={
     ts:ts, date:ts.slice(0,10), time:istTime(), sym:s.sym,
     // Price
     px:s.px, pct:s.pct||0, high:s.h||0, low:s.l||0, open:s.o||0,
@@ -1634,7 +1693,18 @@ function captureSnapshot(s){
     signal_bias:curSig.bias||"", signal_conf:curSig.confidence||0,
     signal_strategy:curSig.strategy||"", signal_setup:curSig.setupKey||"",
     signal_bull_score:curSig._bull||0, signal_bear_score:curSig._bear||0,
-  });
+  };
+  SnapDB.save(snap);   // existing local IndexedDB save — unchanged
+  // ADDITIVE: also push to Supabase via the server, so snapshots persist
+  // beyond this device/browser instead of only living in local IndexedDB.
+  // Fire-and-forget — this runs inside a ~55-symbol loop every scan, so it
+  // must never await or let a network hiccup slow down or break capture.
+  if(SERVER_URL){
+    try{
+      fetch(SERVER_URL+"/snapshot",{method:"POST",headers:ptHeaders(),body:JSON.stringify(snap)})
+        .catch(function(){}); // silent — local save already succeeded, this is a bonus sync
+    }catch(e){}
+  }
 }
 
 var _lastSnapTs=0;
@@ -3157,7 +3227,7 @@ function runScan(manual){
       // Silent timeout → afterPrimarySync fires without orb data → snapshot
       // captures s.orb=null → ORB always 0% despite server computing correctly.
       // 12s is still well inside the 50s snapshot window.
-      fetch(SERVER_URL+"/smc/"+sym+_smcCreds(),{signal:AbortSignal.timeout(12000)})
+      fetch(SERVER_URL+"/smc/"+sym+_smcCreds(),{headers:kiteHeaders(),signal:AbortSignal.timeout(12000)})
       .then(function(r){return r.json();})
       .then(function(d){applySmcData(sym,d);afterPrimarySync();})
       .catch(function(){afterPrimarySync();});
@@ -3166,7 +3236,7 @@ function runScan(manual){
     // Batch 2: liquid stocks — in background (staggered to avoid rate limits)
     smcLiquid.forEach(function(sym,i){
       safeTimeout(function(){
-        fetch(SERVER_URL+"/smc/"+sym+_smcCreds(),{signal:AbortSignal.timeout(8000)})
+        fetch(SERVER_URL+"/smc/"+sym+_smcCreds(),{headers:kiteHeaders(),signal:AbortSignal.timeout(8000)})
         .then(function(r){return r.json();})
         .then(function(d){applySmcData(sym,d);})
         .catch(function(){});
@@ -3180,7 +3250,7 @@ function runScan(manual){
 
     remaining.forEach(function(s,i){
       safeTimeout(function(){
-        fetch(SERVER_URL+"/smc/"+s.sym+_smcCreds(),{signal:AbortSignal.timeout(8000)})
+        fetch(SERVER_URL+"/smc/"+s.sym+_smcCreds(),{headers:kiteHeaders(),signal:AbortSignal.timeout(8000)})
         .then(function(r){return r.json();})
         .then(function(d){applySmcData(s.sym,d);})
         .catch(function(){});
@@ -3491,15 +3561,36 @@ function localSigs(){
     var smcBearCapped = Math.min(smcBearRaw, 5);
     // Trader-facing label instead of internal cap mechanics — same meaning,
     // describes WHAT confluence exists rather than HOW the score was computed.
+    //
+    // FIX: this note used to say "seek OI/price confirmation before sizing
+    // up" unconditionally, on every symbol. That's wrong in two specific
+    // ways this app already knows about elsewhere in its own logic:
+    //   - For MCX commodities, OI is deliberately excluded from scoring
+    //     (OI_MCX is empty — backtested at 48% direction-match, a coin
+    //     flip). Telling the trader to "seek OI confirmation" on a
+    //     commodity signal is advice the system can never actually satisfy.
+    //   - For index/F&O stocks with fresh OI, the OI confirmations block
+    //     runs later in this same scoring pass and will already fold PCR/
+    //     walls/writer-behavior into this signal's score before it's shown.
+    //     Telling the trader to separately "seek" it implies it hasn't been
+    //     checked, when the system's own hasOI/catDiverse gates already
+    //     require it for anything to reach HIGH confidence.
+    // The note is now specific to what's actually true for this symbol.
+    var oiFreshHere = (pcr>0||ceOI>0||peOI>0||ceWall>0||peWall>0||mp>0) && !oiIsStaleForScoring;
+    var smcConfirmNote = isMCX
+      ? "OI unavailable for MCX — confirm with price action/volume, not OI"
+      : oiFreshHere
+        ? "OI is already factored into this score — no separate check needed"
+        : "OI not fresh/available right now — confirm with price before sizing up";
     if(smcBullRaw>5){
       var bullConfluence = smcBullLog.length>=3 ? "Strong multi-factor SMC confluence" :
                             smcBullLog.length===2 ? "SMC confluence (2 factors)" : "Strong SMC signal";
-      smcBullLog.unshift("🏛 "+bullConfluence+" — seek OI/price confirmation before sizing up");
+      smcBullLog.unshift("🏛 "+bullConfluence+" — "+smcConfirmNote);
     }
     if(smcBearRaw>5){
       var bearConfluence = smcBearLog.length>=3 ? "Strong multi-factor SMC confluence" :
                             smcBearLog.length===2 ? "SMC confluence (2 factors)" : "Strong SMC signal";
-      smcBearLog.unshift("🏛 "+bearConfluence+" — seek OI/price confirmation before sizing up");
+      smcBearLog.unshift("🏛 "+bearConfluence+" — "+smcConfirmNote);
     }
     bullScore+=smcBullCapped; bullReasons=bullReasons.concat(smcBullLog);
     bearScore+=smcBearCapped; bearReasons=bearReasons.concat(smcBearLog);
@@ -4559,33 +4650,30 @@ function processScan(sigs){
 // symbol tab as the live signal, per the original request.
 function _activeTradeSigs(){
   var out=[];
-  var seenKey={};  // symbol+bias -> already pushed a card for this exact direction
-  var seenSym={};  // symbol alone -> already pushed ANY card for this symbol
-  // FIX: belt-and-suspenders dedup, two layers now.
-  // Layer 1 (seenKey): loadSignalLog() auto-closes stale (2+ day old) OPEN
-  // trades on load — but this loop never checked whether it had already
-  // pushed a card for a given symbol+bias, so duplicate same-direction
-  // entries could both render.
-  // Layer 2 (seenSym): the REAL root cause behind a live bug — Guard 5 in
-  // autoLogSignal (which is supposed to auto-close an opposite-direction
-  // trade before logging a new one) only checked status==="OPEN", so a
-  // trade that had progressed to T1_HIT was invisible to it. A BEARISH
-  // BANKNIFTY trade at T1_HIT and a brand new BULLISH BANKNIFTY trade both
-  // ended up "active" simultaneously (confirmed via screenshot: +₹4,839
-  // bearish alongside -₹14,688 bullish, same symbol, same moment). Guard 5
-  // itself is now fixed to check T1_HIT too, but this render-time check
-  // stays as a second line of defense — no symbol should ever show two
-  // opposing-direction "LIVE" cards, full stop.
+  var seenSym={};  // symbol alone -> already pushed a card for this symbol
+  // FIX (signal feed): this used to exclude a candidate only when allSigs
+  // already had the SAME bias for that symbol —
+  //   !allSigs.some(a => a.sym===e.sym && a.bias===e.bias)
+  // — so when the market genuinely flipped (old BEARISH trade still OPEN/
+  // T1_HIT in the journal, live scan now reads BULLISH but only at MEDIUM
+  // strength, below the 82%+ HIGH bar needed to trigger the auto-close-on-
+  // flip in _writeJournal) both cards rendered at once: a live BULLISH card
+  // from allSigs and a stale BEARISH "active trade" ghost card from here.
+  // That's the exact "double signal" pattern reported live and reproduced
+  // in testing. The live scan result is always the more current read, so
+  // the ghost card should only fill in when the live scan has NO opinion at
+  // all on that symbol right now — not when it disagrees with an old one.
+  // The underlying journal entry is untouched by this — it's still tracked
+  // in SIGNAL_LOG, still visible on the Journal tab, and checkSignalLevels()
+  // still watches it for a real SL/target close. This only stops the feed
+  // from showing two cards for one symbol.
   var candidates = SIGNAL_LOG.filter(function(e){
     return (e.status==="OPEN"||e.status==="T1_HIT") &&
-           !allSigs.some(function(a){return a.sym===e.sym && a.bias===e.bias;});
+           !allSigs.some(function(a){return a.sym===e.sym;});
   });
   candidates.sort(function(a,b){return (b.ts||0)-(a.ts||0);}); // most recent first
   candidates.forEach(function(e){
-    var key=e.sym+e.bias;
-    if(seenKey[key]) return;       // already have a card for this exact symbol+bias
     if(seenSym[e.sym]) return;     // already have a card (any direction) for this symbol
-    seenKey[key]=true;
     seenSym[e.sym]=true;
     out.push({
       sym:e.sym, bias:e.bias, trade:e.trade||(e.sym+" "+e.bias),
@@ -4904,13 +4992,13 @@ function _layerLiveStatus(s, bias){
 }
 
 function fpx(v){if(!v&&v!==0)return "–";var s=""+v;if(isNaN(parseFloat(s)))return s;return "₹"+parseFloat(s).toLocaleString("en-IN");}
-function execSig(idx){var sig=allSigs[idx];if(!sig)return;logSignalEntry(sig);pendingTrade={action:sig.bias==="BULLISH"?"BUY":"SELL",instrument:sig.trade,confidence:sig.confidence,entry:sig.entry,sl:sig.sl,target:sig.target1,why:sig.why,_bt:sig.isBTST||false};if(AT.active)qAT(pendingTrade);else showOrd();}
+function execSig(idx){var sig=allSigs[idx];if(!sig)return;logSignalEntry(sig);pendingTrade={action:"BUY",bias:sig.bias,optType:sig.bias==="BULLISH"?"CE":"PE",sym:sig.sym,instrument:sig.trade,confidence:sig.confidence,entry:sig.entry,sl:sig.sl,target:sig.target1,why:sig.why,_bt:sig.isBTST||false};if(AT.active)qAT(pendingTrade);else showOrd();}
 
 // ═══════════════════════════════════════════
 // SCANNER
 // ═══════════════════════════════════════════
 
-function execSetup(idx){var su=lastSetups[idx];if(!su)return;pendingTrade={action:su.d==="bull"?"BUY":"SELL",instrument:su.title,confidence:su.p,entry:su.e,sl:su.sl,target:su.t,why:su.desc};if(AT.active)qAT(pendingTrade);else showOrd();}
+function execSetup(idx){var su=lastSetups[idx];if(!su)return;pendingTrade={action:"BUY",bias:su.d==="bull"?"BULLISH":"BEARISH",optType:su.d==="bull"?"CE":"PE",instrument:su.title,confidence:su.p,entry:su.e,sl:su.sl,target:su.t,why:su.desc};if(AT.active)qAT(pendingTrade);else showOrd();}
 
 // ═══════════════════════════════════════════
 // EDGE SCORE
@@ -4934,15 +5022,20 @@ function edgeScore(){
 // ═══════════════════════════════════════════
 function showOrd(){
   var t=pendingTrade;if(!t)return;
-  var buy=t.action==="BUY",bc=buy?"var(--g)":"var(--r)";
+  // Colour/label follow the MARKET VIEW. Both directions are option BUYS,
+  // so keying the UI off t.action would paint every bear trade green.
+  var isBull=(t.bias!=="BEARISH"),bc=isBull?"var(--g)":"var(--r)";
+  var buy=isBull;
   var edge=edgeScore(),mul=edge>=75?1:edge>=50?0.5:0;
   var cap=AT.capital||50000,tc=Math.round(cap*mul);
-  document.getElementById("ord_t").textContent=(buy?"▲ BUY":"▼ SELL")+" Signal";
+  document.getElementById("ord_t").textContent=(isBull?"▲ BULLISH":"▼ BEARISH")+" Signal";
   document.getElementById("ord_t").style.color=bc;
   document.getElementById("ord_s").textContent=(t.source||"Manual")+" · "+t.confidence+"% confidence"+(t._bt?" · 🌙 BTST":"");
   document.getElementById("ord_d").innerHTML=
     "<div class='md-row'><span class='md-l'>Trade</span><span class='md-v' style='color:"+bc+"'>"+t.instrument+"</span></div>"+
-    "<div class='md-row'><span class='md-l'>Action</span><span class='md-v' style='color:"+bc+";font-size:.88rem;font-weight:800'>"+t.action+"</span></div>"+
+    "<div class='md-row'><span class='md-l'>Action</span><span class='md-v' style='color:"+bc+";font-size:.88rem;font-weight:800'>BUY "+(t.optType||(isBull?"CE":"PE"))+"</span></div>"+
+    "<div class='md-row'><span class='md-l'>Product</span><span class='md-v'>MIS <span style='font-size:.58rem;color:var(--m)'>(intraday)</span></span></div>"+
+    "<div class='md-row'><span class='md-l'>Premium SL</span><span class='md-v' style='color:var(--r)'>-"+SL_PREMIUM_PCT+"% <span style='font-size:.58rem;color:var(--m)'>(SL-M auto-placed)</span></span></div>"+
     "<div class='md-row'><span class='md-l'>Entry</span><span class='md-v' style='color:var(--b)'>"+fpx(t.entry)+"</span></div>"+
     "<div class='md-row'><span class='md-l'>Stop Loss</span><span class='md-v' style='color:var(--r)'>"+fpx(t.sl)+" <span style='font-size:.58rem;color:var(--m)'>(AI)</span></span></div>"+
     "<div class='md-row'><span class='md-l'>Target</span><span class='md-v' style='color:var(--g)'>"+fpx(t.target)+" <span style='font-size:.58rem;color:var(--m)'>(AI)</span></span></div>"+
@@ -4953,7 +5046,8 @@ function showOrd(){
   eb.style.cssText="background:rgba("+ec+",.07);border:1px solid rgba("+ec+",.2);color:var("+(edge>=75?"--g":edge>=50?"--y":"--r")+");padding:9px 11px;border-radius:7px;margin-bottom:9px;font-size:.7rem;font-weight:600;line-height:1.5";
   eb.innerHTML="<b>Edge "+edge+"/100 → "+(edge>=75?"Full":edge>=50?"Half":"Minimal")+" size</b><br>Deploy ₹"+tc.toLocaleString("en-IN")+" ("+(mul*100)+"% of ₹"+cap.toLocaleString("en-IN")+")";
   var wEl=document.getElementById("ord_w");if(wEl)wEl.style.display=KITE.connected?"none":"block";
-  var ob=document.getElementById("ord_b");ob.className=buy?"btn-buy":"btn-sell";ob.textContent="Execute "+t.action;
+  var ob=document.getElementById("ord_b");ob.className=isBull?"btn-buy":"btn-sell";
+  ob.textContent="Execute — BUY "+(t.optType||(isBull?"CE":"PE"));
   openOv("ordOv");
 }
 function doOrd(){
@@ -4976,7 +5070,11 @@ function doOrd(){
   var sym = (AT.active && AT.inst && AT.inst!=="AUTO") ? AT.inst : (t.sym||CS.sym);
   var s   = allS().filter(function(x){return x.sym===sym;})[0] || CS;
   var strike = s.atm || 0;
-  var optType = (t.action==="BUY" && (t.bias==="BULLISH"||(t.instrument&&t.instrument.indexOf("CE")>=0))) ? "CE" : "PE";
+  // Option type is decided by the MARKET VIEW (bias), never by the order side.
+  // We always BUY premium, so t.action is BUY for both directions.
+  var optType = t.optType || (t.bias==="BEARISH" ? "PE"
+                : t.bias==="BULLISH" ? "CE"
+                : (t.instrument&&t.instrument.indexOf("PE")>=0) ? "PE" : "CE");
 
   // Re-calculate ATM from the target instrument's CURRENT price (not stale s.atm)
   // This prevents SENSEX-level strikes being placed as NIFTY options
@@ -4999,7 +5097,9 @@ function doOrd(){
     sym:sym,
     strike:strike,
     option_type:optType,
-    action:t.action,
+    action:"BUY",              // always buying premium — never a naked short
+    product:"MIS",             // intraday: broker auto-squares off, lower margin
+    sl_pct:SL_PREMIUM_PCT,     // server attaches a real SL-M stop on the fill
     key:KITE.apiKey,
     token:KITE.accessToken,
     qty:LOT_SIZES[sym]||LOT_SIZES.DEFAULT||50
@@ -5008,15 +5108,24 @@ function doOrd(){
   setStatus("fetching","Placing order…");
   fetch(SERVER_URL+"/place_order",{
     method:"POST",
-    headers:{"Content-Type":"application/json"},
+    headers:ptHeaders(),
     body:JSON.stringify(payload)
   })
   .then(function(r){return r.json();})
   .then(function(d){
     setStatus("live");
     if(d.ok){
-      toast("✅ Order Placed","Kite: "+d.order_id+" — "+d.tradingsymbol,"tg");
-      if(AT.active){AT.trades++;addLog({ac:t.action,inst:d.tradingsymbol,conf:t.confidence,src:"Kite",st:"placed"});}
+      var st=d.stop||{};
+      if(st.placed){
+        toast("✅ Order + Stop Placed",d.tradingsymbol+" · SL-M @ ₹"+st.trigger+" (fill ₹"+st.fill_px+")","tg");
+      } else {
+        // Loud, because an unprotected option position is the failure mode
+        // this whole change exists to prevent.
+        toast("⚠ FILLED — NO STOP",d.tradingsymbol+" has no protective SL. "+(st.reason||"Set one in Kite now."),"tr");
+      }
+      lastLiveOrder={sym:sym,strike:strike,optType:optType,qty:payload.qty,
+                     order_id:d.order_id,stop_order_id:st.order_id||"",tradingsymbol:d.tradingsymbol};
+      if(AT.active){AT.trades++;addLog({ac:"BUY "+optType,inst:d.tradingsymbol,conf:t.confidence,src:"Kite",st:st.placed?"placed+SL":"placed NO-SL"});}
     } else {
       toast("❌ Order Failed",d.error||"Check Kite connection","tr");
       addLog({ac:"FAIL",inst:sym,conf:t.confidence,src:"Kite",st:"skip"});
@@ -5029,8 +5138,9 @@ function doOrd(){
   });
 }
 function demoOrd(t,cap){
-  if(AT.active){AT.trades++;addLog({ac:t.action,inst:t.instrument,conf:t.confidence,src:"Demo",st:"placed"});}
-  toast((t.action==="BUY"?"▲":"▼")+" Demo",t.instrument+" · ₹"+(cap||50000).toLocaleString("en-IN"),"tg");
+  var isBull=(t.bias!=="BEARISH");
+  if(AT.active){AT.trades++;addLog({ac:"BUY "+(t.optType||(isBull?"CE":"PE")),inst:t.instrument,conf:t.confidence,src:"Demo",st:"placed"});}
+  toast((isBull?"▲":"▼")+" Demo",t.instrument+" · ₹"+(cap||50000).toLocaleString("en-IN"),"tg");
 }
 
 // ═══════════════════════════════════════════
@@ -5112,7 +5222,12 @@ function atCycle(){
   var tradeOpt = sig.bias==="BULLISH" ? "CE" : "PE";
   var tradeStrike = tradeAtm + (sig.bias==="BULLISH" ? (tradeS&&tradeS.step||100) : 0);
   pendingTrade={
-    action:  sig.bias==="BULLISH" ? "BUY" : "SELL",
+    // A bearish view is expressed by BUYING a put, never by selling one.
+    // The old mapping (BEARISH -> SELL) sent a naked short PE to Kite, which
+    // is a BULLISH position with undefined risk. Direction now lives in
+    // `bias`/`optType`; `action` is always BUY because we buy premium.
+    action:  "BUY",
+    optType: tradeOpt,
     instrument: "Buy "+tradeStrike+" "+tradeOpt,   // correct strike for AT.inst
     sym:     tradeSym,                              // always AT.inst when fixed
     bias:    sig.bias,
@@ -5130,7 +5245,7 @@ function atCycle(){
 function qAT(sig){
   if(!AT.active)return;
   if((sig.confidence||0)<AT.conf)return;
-  pendingTrade={action:sig.action||(sig.bias==="BULLISH"?"BUY":"SELL"),instrument:sig.instrument||sig.trade||CS.sym,confidence:sig.confidence,entry:sig.entry,sl:sig.sl||sig.stopLoss,target:sig.target||sig.target1,why:sig.why||sig.reasoning||"",source:"Signal"};
+  pendingTrade={action:"BUY",bias:sig.bias||"BULLISH",optType:(sig.optType||(sig.bias==="BEARISH"?"PE":"CE")),sym:sig.sym||CS.sym,instrument:sig.instrument||sig.trade||CS.sym,confidence:sig.confidence,entry:sig.entry,sl:sig.sl||sig.stopLoss,target:sig.target||sig.target1,why:sig.why||sig.reasoning||"",source:"Signal"};
   showOrd();
 }
 function addLog(e){
@@ -5204,48 +5319,65 @@ function saveSignalLog(){
 }
 
 function autoLogSignal(sig){
-  // Guard 1: must be HIGH conviction
+  // Guard 1: only auto-fire the journal for HIGH conviction signals.
+  // Manual execute (logSignalEntry, below) intentionally skips this guard —
+  // a deliberate tap should be allowed to log a MEDIUM signal — but still
+  // goes through the shared dedup/flip/schema guards in _writeJournal.
   if(!sig||sig.urgency!=="HIGH"||sig.confidence<82) return;
+  _writeJournal(sig, "auto");
+}
+
+// ── SHARED JOURNAL WRITER ────────────────────────────────────────────────
+// Both the auto-logger (HIGH conviction signals) and the manual "Execute"
+// button on a signal card now write through this single guarded path.
+//
+// BUG THIS FIXES: logSignalEntry() used to push straight to SIGNAL_LOG with
+// zero checks — no same-direction dedup, no opposite-direction close, and a
+// DIFFERENT field schema (entry/sl/t1/t2) than everything else in the app
+// uses (entry_px/sl_px/t1_px/t2_px). That mismatch meant checkSignalLevels()
+// silently ignored manually-logged trades (it requires entry_px), so they
+// could never self-close on SL/target — they just sat OPEN forever. Tapping
+// Execute again, or executing the same signal a few minutes later while it
+// was still showing, added a second OPEN card next to the first, with
+// neither ever resolving. That's the "double signals open" bug.
+//
+// Returns {ok:true} on success, or {ok:false, reason:"..."} if blocked —
+// callers use this to tell the user why nothing happened, rather than
+// failing silently.
+function _writeJournal(sig, source){
+  if(!sig) return {ok:false, reason:"No signal data"};
 
   // Guard 2: must have valid price data — reject undefined/zero entry
   var entryPx = parseFloat(sig.entry)||0;
-  if(!entryPx||isNaN(entryPx)||entryPx<10) return; // clearly invalid
+  if(!entryPx||isNaN(entryPx)||entryPx<10) return {ok:false, reason:"Invalid entry price"};
 
   // Guard 3: must have valid SL and T1
   var slPx = parseFloat(sig.sl)||0;
-  var t1Px = parseFloat(sig.target1)||0;
-  if(!slPx||!t1Px) return;
+  var t1Px = parseFloat(sig.target1||sig.target)||0;
+  if(!slPx||!t1Px) return {ok:false, reason:"Missing SL or target"};
 
-  // Guard 4: DEDUP — same symbol + same direction
-  // Check OPEN/T1_HIT status AND same-day signals (catches rapid re-entries within minutes)
+  // Guard 4: DEDUP — same symbol + same direction already active.
+  // This is the check that was completely absent from the manual path.
   var todaySig = new Date().toLocaleDateString('en-IN');
   var recentSame = SIGNAL_LOG.filter(function(x){
     if(x.sym!==sig.sym||x.bias!==sig.bias) return false;
     if(x.status==="OPEN"||x.status==="T1_HIT") return true; // always block if still active
-    // Also block if same direction was already logged today (even if closed)
-    // unless it was SL_HIT (then level block handles re-entry separately)
     var xDate = x.ts ? new Date(x.ts).toLocaleDateString('en-IN') : "";
     return xDate===todaySig && x.status!=="SL_HIT";
   });
-  if(recentSame.length>0) return;
+  if(recentSame.length>0) return {ok:false, reason:"Already open — "+sig.sym+" "+sig.bias+" is already an active trade"};
 
   // Guard 5: if opposite direction is still ACTIVE for same symbol → auto-close it.
-  // FIX: this used to only check status==="OPEN", so a trade that had already
-  // progressed to T1_HIT was invisible here — a new opposite-direction signal
-  // could open right alongside it, producing two simultaneously "live" cards
-  // fighting each other on the same symbol (confirmed from a live screenshot:
-  // BANKNIFTY BEARISH T1_HIT +₹4,839 running at the same time as BANKNIFTY
-  // BULLISH T1_HIT -₹14,688). T1_HIT is still an ACTIVE trade — it hasn't
-  // closed, it's just derisked to breakeven — so it must be checked here too.
+  // T1_HIT counts as active — it's derisked to breakeven, not closed.
   SIGNAL_LOG.forEach(function(x){
     if(x.sym===sig.sym && x.bias!==sig.bias && (x.status==="OPEN"||x.status==="T1_HIT")){
-      var wasStatus = x.status; // capture BEFORE overwriting, for an accurate note
+      var wasStatus = x.status;
       x.status  = "MANUAL";
       x.outcome = "MANUAL";
       x.exitTime= istDateTime();
-      x.exit_px = entryPx; // last known price as exit
+      x.exit_px = entryPx;
       x.notes   = "Auto-closed: direction flipped to "+sig.bias+" (was "+wasStatus+")";
-      delete _sigFirstSeen[x.sym+x.bias]; _saveSigFirstSeen(); // trade closed — clear its "first seen" stamp
+      delete _sigFirstSeen[x.sym+x.bias]; _saveSigFirstSeen();
       if(x.entry_px&&x.exit_px){
         var diff = x.bias==="BULLISH"?x.exit_px-x.entry_px:x.entry_px-x.exit_px;
         x.pnl = Math.round(diff*(LOT_SIZES[x.sym]||LOT_SIZES.DEFAULT||50));
@@ -5265,22 +5397,20 @@ function autoLogSignal(sig){
     layers: sig.layers||0,
     hasOI: sig.hasOI||false,
     confidence: sig.confidence,
-    urgency: sig.urgency||"HIGH",
+    urgency: sig.urgency||(source==="manual"?"MANUAL":"HIGH"),
     entry_px: entryPx,
     sl_px: slPx,
     t1_px: t1Px,
     t2_px: parseFloat(sig.target2||sig.target1)||t1Px,
     rr: sig.rr||"1:2",
     why: sig.why||"",
-    vix: VIX,
+    vix: (typeof VIX!=="undefined"?VIX:0),
     timeframe: sig.timeframe||"",
     firstSeen: sig._firstSeen||istDateTime(),
     ts: new Date().toISOString(),
-    // FIX: was istTime() (time-only, e.g. "8:10 PM") — this is the field
-    // renderSignalEntry actually displays in the journal, so every entry
-    // showed time with no date. istDateTime() gives "20 Jun 8:10 PM".
     date: istDateTime(),
-    lot_size: LOT_SIZES[sig.sym]||LOT_SIZES.DEFAULT||50,  // stored so export always has it
+    lot_size: LOT_SIZES[sig.sym]||LOT_SIZES.DEFAULT||50,
+    source: source||"auto",   // "auto" (HIGH conviction) or "manual" (Execute tap)
     status: "OPEN",
     exit_px: null, pnl: null, outcome: null, exitTime: null, notes: ""
   };
@@ -5288,6 +5418,7 @@ function autoLogSignal(sig){
   saveSignalLog();
   renderJ();
   renderPerformance();
+  return {ok:true, entry:entry};
 }
 
 function updateSignalOutcome(id, outcome, exit_px, notes){
@@ -6133,11 +6264,23 @@ function setConvFilt(btn, f){
 // SIGNAL_LOG declared above at line 2165 — do not redeclare here
 // loadSignalLog and saveSignalLog defined above
 function logSignalEntry(sig){
-  var e={id:sig.sym+"_"+Date.now(),sym:sig.sym,bias:sig.bias,trade:sig.trade,strategy:sig.strategy,
-    confidence:sig.confidence,entry:parseFloat(sig.entry)||0,sl:parseFloat(sig.sl)||0,
-    t1:parseFloat(sig.target1||sig.target)||0,t2:parseFloat(sig.target2||sig.target1||sig.target)||0,
-    entryTime:istTime(),status:"OPEN",pnl:0,result:""};
-  SIGNAL_LOG.push(e);saveSignalLog();renderPerformance();renderJ();
+  // Was: pushed straight to SIGNAL_LOG with no checks at all — no dedup, no
+  // opposite-direction close, and a field schema (entry/sl/t1/t2) that
+  // checkSignalLevels() couldn't read, so these trades could never
+  // self-close. That's what let repeated "Execute" taps pile up as multiple
+  // OPEN cards for the same symbol that never resolved. Now goes through the
+  // same guards as the auto-logger.
+  var normalized = {
+    sym: sig.sym, bias: sig.bias, trade: sig.trade, strategy: sig.strategy||"Manual Trade",
+    confidence: sig.confidence||75, urgency: sig.urgency||"MANUAL",
+    entry: sig.entry, sl: sig.sl, target1: sig.target1||sig.target, target2: sig.target2,
+    setupKey: sig.setupKey, timeBucket: sig.timeBucket, regime: sig.regime,
+    layers: sig.layers, hasOI: sig.hasOI, rr: sig.rr, why: sig.why, timeframe: sig.timeframe,
+    _firstSeen: sig._firstSeen
+  };
+  var res = _writeJournal(normalized, "manual");
+  if(!res.ok) toast("⚠ Not logged", res.reason, "ty");
+  return res;
 }
 function perfBtn(b){
   var id=b.dataset.id,res=b.dataset.r,px=parseFloat(b.dataset.px)||0;
@@ -6197,7 +6340,7 @@ function updateBiasCounts(){
 function fetchSMC(sym){
   var url=SERVER_URL||localStorage.getItem("pt_server")||"";
   if(!url)return;
-  fetch(url+"/smc/"+sym+_smcCreds(url),{signal:AbortSignal.timeout(10000)})
+  fetch(url+"/smc/"+sym+_smcCreds(url),{headers:kiteHeaders(),signal:AbortSignal.timeout(10000)})
   .then(function(r){return r.json();})
   .then(function(d){
     if(!d||!d.ok||!d.smc)return;
@@ -6268,8 +6411,8 @@ var _nseReady=false,_nseTs=0;
 // Global so fetchFromServer can call it when server wakes up
 function fetchLotSizes(){
   if(!SERVER_URL||!KITE.apiKey||!KITE.accessToken) return;
-  fetch(SERVER_URL+"/lot_sizes?key="+encodeURIComponent(KITE.apiKey)+"&token="+encodeURIComponent(KITE.accessToken),
-    {signal:AbortSignal.timeout(20000)})
+  fetch(SERVER_URL+"/lot_sizes",
+    {headers:kiteHeaders(),signal:AbortSignal.timeout(20000)})
   .then(function(r){return r.json();})
   .then(function(d){
     if(d&&d.ok&&d.data){
@@ -6297,11 +6440,8 @@ function fetchOIMain(sym){
   // are price/technicals-driven only, same as any other non-OI symbol.
   // Server-side OI_ALL validates the symbol — no need to duplicate the list here
   if(!SERVER_URL)return Promise.resolve(null);
-  var url=SERVER_URL+"/zerodha_oi?sym="+sym;
-  if(KITE.apiKey&&KITE.accessToken){
-    url+="&key="+encodeURIComponent(KITE.apiKey)+"&token="+encodeURIComponent(KITE.accessToken);
-  }
-  return fetch(url,{signal:AbortSignal.timeout(25000)})
+  var url=SERVER_URL+"/zerodha_oi?sym="+sym;  // credentials travel as headers
+  return fetch(url,{headers:kiteHeaders(),signal:AbortSignal.timeout(25000)})
   .then(function(r){return r.json();})
   .then(function(d){
     if(d&&d.ok&&d.data){
