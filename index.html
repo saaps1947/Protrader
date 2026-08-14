@@ -1609,6 +1609,11 @@ var SnapDB=(function(){
     req.onerror=function(){console.warn("[SnapDB] open failed");};
   }
   function save(snap){open(function(db){db.transaction(ST,"readwrite").objectStore(ST).add(snap);});}
+  function clearAll(cb){open(function(db){
+    var r=db.transaction(ST,"readwrite").objectStore(ST).clear();
+    r.onsuccess=function(){if(cb)cb(true);};
+    r.onerror=function(){if(cb)cb(false);};
+  });}
   function getByDate(dt,cb){open(function(db){var r=db.transaction(ST,"readonly").objectStore(ST).index("date").getAll(dt);r.onsuccess=function(){cb(r.result||[]);};r.onerror=function(){cb([]);};});}
   function getAll(cb){open(function(db){var r=db.transaction(ST,"readonly").objectStore(ST).getAll();r.onsuccess=function(){cb(r.result||[]);};r.onerror=function(){cb([]);};});}
   function countByDate(dt,cb){open(function(db){var r=db.transaction(ST,"readonly").objectStore(ST).index("date").count(dt);r.onsuccess=function(){cb(r.result||0);};r.onerror=function(){cb(0);};});}
@@ -1619,7 +1624,7 @@ var SnapDB=(function(){
     cur.onsuccess=function(e){var c=e.target.result;if(c){c.delete();c.continue();}};
   });}
   function size(cb){getAll(function(r){cb(r.length,JSON.stringify(r).length);});}
-  return {save,getByDate,getAll,countByDate,purgeOld,size};
+  return {save,getByDate,getAll,countByDate,purgeOld,size,clearAll};
 })();
 
 function captureSnapshot(s){
@@ -1778,10 +1783,25 @@ function showSnapshotStats(id){
         "Size: <b style='color:var(--t)'>"+Math.round(bytes/1024)+"KB</b></div>"+
         "<div style='display:flex;gap:6px'>"+
         "<button onclick='exportSnapshots()' style='flex:1;padding:6px;border-radius:6px;background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.3);color:var(--b);font-size:.6rem;font-weight:700;cursor:pointer'>📥 Export Today</button>"+
-        "<button onclick='exportAllSnapshots()' style='flex:1;padding:6px;border-radius:6px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);color:var(--g);font-size:.6rem;font-weight:700;cursor:pointer'>📦 Export All</button></div>";
+        "<button onclick='exportAllSnapshots()' style='flex:1;padding:6px;border-radius:6px;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.2);color:var(--g);font-size:.6rem;font-weight:700;cursor:pointer'>📦 Export All</button></div>"+
+        "<div style='margin-top:6px'>"+
+        "<button onclick='clearLocalSnapshots()' style='width:100%;padding:6px;border-radius:6px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);color:var(--r);font-size:.6rem;font-weight:700;cursor:pointer'>🗑 Clear Local Snapshots</button>"+
+        "<div style='font-size:.55rem;color:var(--m);margin-top:3px;text-align:center'>Only clears this device — Supabase copy is untouched</div></div>";
     });
   });
   SnapDB.purgeOld(90);
+}
+
+function clearLocalSnapshots(){
+  if(!confirm("Clear all locally-stored snapshots on this device?\n\nThis does NOT affect Supabase — that copy stays intact. This only frees up space on this phone/tablet."))return;
+  SnapDB.clearAll(function(ok){
+    if(ok){
+      toast("✅ Cleared","Local snapshot storage cleared","tg");
+      try{showSnapshotStats("snapStatsPanel");}catch(e){}
+    } else {
+      toast("❌ Failed","Could not clear local snapshots — try again","tr");
+    }
+  });
 }
 
 // ═══════════════════════════════════════════
@@ -5477,21 +5497,39 @@ function checkSignalLevels(){
     var bull=e.bias==="BULLISH";
     var lotSize=LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
 
-    if(e.status==="OPEN"){
-      // SL hit check
-      if(e.sl_px>0){
-        var slBreached = bull ? px<=e.sl_px : px>=e.sl_px;
-        if(slBreached){
-          e.status="SL_HIT"; e.exit_px=e.sl_px; e.exitTime=istDateTime();
-          var diff=bull?e.sl_px-e.entry_px:e.entry_px-e.sl_px;
-          e.pnl=Math.round(diff*lotSize);
-          e.outcome="LOSS"; e.notes="Auto-detected: SL hit at ₹"+e.sl_px;
-          allSigs=allSigs.filter(function(a){return !(a.sym===e.sym&&a.bias===e.bias);});
-          delete _sigFirstSeen[e.sym+e.bias]; _saveSigFirstSeen(); // trade closed — clear its "first seen" stamp
-          toast("🔴 SL Hit — "+e.sym,e.trade+" auto-closed at ₹"+e.sl_px,"tr");
-          changed=true; return;
-        }
+    // ── SL / BREAKEVEN-STOP CHECK — runs for OPEN and T1_HIT alike ─────────
+    // BUG FIX: this used to be nested inside `if(e.status==="OPEN")`, so once
+    // a trade hit T1 and its stop moved to breakeven, that stop was never
+    // checked again — only T2 was, from here on. A trade could sit "active"
+    // indefinitely after a full reversal, since nothing ever closed it on
+    // the way back through its own stop. Confirmed live: a BEARISH NIFTY
+    // trade first seen 22 Jul, T1 hit, SL moved to breakeven ₹23,972.55 —
+    // price later moved to ₹24,374+ (400+ points through the stop, wrong
+    // direction) and the trade still showed "active" 23 days later, because
+    // nothing was watching it. This now checks e.sl_px regardless of
+    // whether it's the original stop (OPEN) or the breakeven stop (T1_HIT).
+    if((e.status==="OPEN"||e.status==="T1_HIT") && e.sl_px>0){
+      var slBreached = bull ? px<=e.sl_px : px>=e.sl_px;
+      if(slBreached){
+        var wasT1=e._t1Hit; // capture before overwriting anything below
+        e.status="SL_HIT"; e.exit_px=e.sl_px; e.exitTime=istDateTime();
+        var diff=bull?e.sl_px-e.entry_px:e.entry_px-e.sl_px;
+        e.pnl=Math.round(diff*lotSize);
+        // A post-T1 breakeven stop closes at ~0 P&L, not a real loss —
+        // label it distinctly so journal/setup-performance stats don't
+        // misreport a risk-free stop-out as a LOSS (that would corrupt
+        // exactly the win-rate numbers this app is built to track).
+        e.outcome = wasT1 ? "BREAKEVEN" : "LOSS";
+        e.notes=(e.notes||"")+" | Auto-detected: "+(wasT1?"breakeven stop":"SL")+" hit at ₹"+e.sl_px;
+        allSigs=allSigs.filter(function(a){return !(a.sym===e.sym&&a.bias===e.bias);});
+        delete _sigFirstSeen[e.sym+e.bias]; _saveSigFirstSeen(); // trade closed — clear its "first seen" stamp
+        toast(wasT1?"⚪ Breakeven Stop — "+e.sym:"🔴 SL Hit — "+e.sym,
+              e.trade+" auto-closed at ₹"+e.sl_px,wasT1?"ty":"tr");
+        changed=true; return;
       }
+    }
+
+    if(e.status==="OPEN"){
       // T1 hit check — milestone, not an exit. Full qty continues to T2.
       if(e.t1_px>0&&!e._t1Hit){
         var t1Hit = bull ? px>=e.t1_px : px<=e.t1_px;
