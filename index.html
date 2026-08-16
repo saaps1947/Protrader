@@ -885,7 +885,7 @@ var SD = {
     {sym:"WIPRO",     name:"Wipro",             px:0,chg:0,pct:0,h:0,l:0,o:0,atm:250,  pcr:0,mp:0,iv:0,exp:"",sector:"IT"},
     {sym:"HCLTECH",   name:"HCL Tech",          px:0,chg:0,pct:0,h:0,l:0,o:0,atm:1600, pcr:0,mp:0,iv:0,exp:"",sector:"IT"},
     {sym:"TECHM",     name:"Tech Mahindra",     px:0,chg:0,pct:0,h:0,l:0,o:0,atm:1500, pcr:0,mp:0,iv:0,exp:"",sector:"IT"},
-    {sym:"LTIM",      name:"LTIMindtree",       px:0,chg:0,pct:0,h:0,l:0,o:0,atm:5000, pcr:0,mp:0,iv:0,exp:"",sector:"IT"},
+    {sym:"LTM",       name:"LTM (was LTIMindtree)", px:0,chg:0,pct:0,h:0,l:0,o:0,atm:5000, pcr:0,mp:0,iv:0,exp:"",sector:"IT"},
     {sym:"RELIANCE",  name:"Reliance",          px:0,chg:0,pct:0,h:0,l:0,o:0,atm:1280, pcr:0,mp:0,iv:0,exp:"",sector:"ENERGY"},
     {sym:"ONGC",      name:"ONGC",              px:0,chg:0,pct:0,h:0,l:0,o:0,atm:260,  pcr:0,mp:0,iv:0,exp:"",sector:"ENERGY"},
     {sym:"BPCL",      name:"BPCL",              px:0,chg:0,pct:0,h:0,l:0,o:0,atm:300,  pcr:0,mp:0,iv:0,exp:"",sector:"ENERGY"},
@@ -893,7 +893,7 @@ var SD = {
     {sym:"NTPC",      name:"NTPC",              px:0,chg:0,pct:0,h:0,l:0,o:0,atm:350,  pcr:0,mp:0,iv:0,exp:"",sector:"ENERGY"},
     {sym:"COALINDIA", name:"Coal India",        px:0,chg:0,pct:0,h:0,l:0,o:0,atm:400,  pcr:0,mp:0,iv:0,exp:"",sector:"ENERGY"},
     {sym:"MARUTI",    name:"Maruti Suzuki",     px:0,chg:0,pct:0,h:0,l:0,o:0,atm:12000,pcr:0,mp:0,iv:0,exp:"",sector:"AUTO"},
-    {sym:"TATAMOTORS",name:"Tata Motors",       px:0,chg:0,pct:0,h:0,l:0,o:0,atm:750,  pcr:0,mp:0,iv:0,exp:"",sector:"AUTO"},
+    {sym:"TMPV",      name:"Tata Motors Pass. Veh.",px:0,chg:0,pct:0,h:0,l:0,o:0,atm:750,  pcr:0,mp:0,iv:0,exp:"",sector:"AUTO"},
     {sym:"M&M",       name:"Mahindra",          px:0,chg:0,pct:0,h:0,l:0,o:0,atm:2800, pcr:0,mp:0,iv:0,exp:"",sector:"AUTO"},
     {sym:"BAJAJ-AUTO",name:"Bajaj Auto",        px:0,chg:0,pct:0,h:0,l:0,o:0,atm:8000, pcr:0,mp:0,iv:0,exp:"",sector:"AUTO"},
     {sym:"EICHERMOT", name:"Eicher Motors",     px:0,chg:0,pct:0,h:0,l:0,o:0,atm:4500, pcr:0,mp:0,iv:0,exp:"",sector:"AUTO"},
@@ -922,7 +922,9 @@ var SD = {
     {sym:"HAL",       name:"HAL",               px:0,chg:0,pct:0,h:0,l:0,o:0,atm:4000, pcr:0,mp:0,iv:0,exp:"",sector:"INFRA"},
     {sym:"INDIGO",    name:"IndiGo",            px:0,chg:0,pct:0,h:0,l:0,o:0,atm:4500, pcr:0,mp:0,iv:0,exp:"",sector:"INFRA"},
     {sym:"BHARTIARTL",name:"Bharti Airtel",     px:0,chg:0,pct:0,h:0,l:0,o:0,atm:1700, pcr:0,mp:0,iv:0,exp:"",sector:"TELECOM"},
-    {sym:"SHRIRAMFIN",name:"Shriram Finance",   px:0,chg:0,pct:0,h:0,l:0,o:0,atm:600,  pcr:0,mp:0,iv:0,exp:"",sector:"FINANCE"}
+    {sym:"SHRIRAMFIN",name:"Shriram Finance",   px:0,chg:0,pct:0,h:0,l:0,o:0,atm:600,  pcr:0,mp:0,iv:0,exp:"",sector:"FINANCE"},
+    {sym:"BSE",       name:"BSE Ltd",           px:0,chg:0,pct:0,h:0,l:0,o:0,atm:3500, pcr:0,mp:0,iv:0,exp:"",sector:"EXCHANGE"},
+    {sym:"MCX",       name:"MCX Ltd",           px:0,chg:0,pct:0,h:0,l:0,o:0,atm:2900, pcr:0,mp:0,iv:0,exp:"",sector:"EXCHANGE"}
   ]
 };
 function allS(){return SD.idx.concat(SD.com).concat(SD.stk);}
@@ -3273,7 +3275,7 @@ function runScan(manual){
   // Batch 3: remaining stocks + MCX (best effort after scan)
   var smcPrimary=["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"];
   var smcLiquid=["HDFCBANK","ICICIBANK","SBIN","RELIANCE","KOTAKBANK","AXISBANK",
-                 "TCS","INFY","WIPRO","HCLTECH","TATAMOTORS","BAJFINANCE",
+                 "TCS","INFY","WIPRO","HCLTECH","TMPV","BAJFINANCE",
                  "BAJAJFINSV","INDUSINDBK","MARUTI","LT","ADANIPORTS","BHARTIARTL"];
   var smcDone=0;
 
