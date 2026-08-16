@@ -6734,8 +6734,21 @@ function switchToSig(sym){
 }
 
 
-// ══ Fetch stock data (separate from /market for speed) ══
-function fetchStocks(){
+// ══ FIX: this called SERVER_URL+"/stocks", a route that doesn't exist and
+// never has anywhere in server.py — confirmed by grep, zero matches. Every
+// call has always 404'd, for every user, for the whole life of this app.
+// Harmless in that it changed nothing (the empty .catch() below never
+// touched anything else), but it's been silently spamming a failing
+// request on every page load and every 5-minute cycle this whole time.
+// /market already delivers the exact same data (nested under
+// d.technicals.rsi14/trend/crossover/breakout/breakdown rather than flat,
+// but the same underlying values) through the response handler that's
+// been working correctly this entire build — this function never added
+// anything /market didn't already provide. Neutralized rather than
+// deleted, so its call sites (setTimeout/safeInterval elsewhere) don't
+// need touching.
+function fetchStocks(){ return; }
+function _fetchStocks_DEAD_unused(){
   if(!SERVER_URL)return;
   fetch(SERVER_URL+"/stocks",{signal:AbortSignal.timeout(30000)})
   .then(function(r){return r.json();})
