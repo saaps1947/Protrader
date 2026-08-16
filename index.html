@@ -633,6 +633,22 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- BACKTEST -->
 <div class="sec" id="sec-bt">
+  <!-- Today's Strategy Health — the new default view. Pulls the latest
+       AUTOMATED daily backtest result, no taps needed. Everything below
+       this (mode toggle, manual config, Replay, OI Impact) is real,
+       distinct capability — not redundant — but none of it is what you
+       need for a quick daily check, so it's collapsed by default now. -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
+    <div style="font-size:.85rem;font-weight:800;margin-bottom:10px">📊 Today's Strategy Health</div>
+    <div id="bt-health-body">
+      <div style="text-align:center;padding:16px;color:var(--m);font-size:.72rem">Loading…</div>
+    </div>
+  </div>
+
+  <details id="bt-advanced">
+    <summary style="cursor:pointer;font-size:.72rem;font-weight:700;color:var(--m);padding:8px 2px;list-style:none">
+      ⚙ Advanced — Custom Backtest, Replay &amp; OI Tools
+    </summary>
   <!-- Header + mode toggle -->
   <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px">
     <div style="font-size:.85rem;font-weight:800;margin-bottom:8px">🔬 Strategy Backtest</div>
@@ -784,6 +800,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
       </div>
     </div>
   </div>
+  </details>
 </div>
 
   <!-- OI IMPACT PANEL -->
@@ -1577,6 +1594,7 @@ function nav(el,id){
   if(id==="jour"){renderJ();renderPerformance();}
   if(id==="jour")renderJ();
   if(id==="auto")updAT();
+  if(id==="bt")loadBtHealth();
 }
 // FIX: was querySelectorAll(".nb")[2] (Auto tab), a hardcoded position that
 // assumed Signals(0)/Scanner(1)/Auto(2)/... — now that Scanner is removed,
@@ -1972,8 +1990,16 @@ function _btRenderResults(r){
 
   // MFE/MAE summary banner
   var mfe=r.mfe_stats||{};
+  // FIX: insertAdjacentHTML never removes a PREVIOUS banner — every call to
+  // _btRenderResults (a second manual run, a different config, or the new
+  // daily automated backtest completing) stacked another copy on top,
+  // forever. Confirmed live: 6 copies accumulated in one session. A stable
+  // id + explicit removal first guarantees exactly one exists at any time,
+  // regardless of how many times this function runs.
+  var _oldBanner = document.getElementById("bt-mfe-banner");
+  if(_oldBanner) _oldBanner.remove();
   if(mfe.avg_mfe_win){
-    var mfeBanner="<div style='background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px'>"+
+    var mfeBanner="<div id='bt-mfe-banner' style='background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px'>"+
       "<div style='font-size:.65rem;font-weight:700;margin-bottom:8px;color:var(--b)'>📈 MFE / MAE — Trade Path Analysis</div>"+
       "<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:8px'>"+
       _btCard("Win MFE avg","+"+mfe.avg_mfe_win+"%","var(--g)")+
@@ -2272,6 +2298,54 @@ var _rpResults = [];   // scored signal results
 var _rpRunning = false;
 
 // ── Mode toggle ─────────────────────────────────────────────────
+// ── TODAY'S STRATEGY HEALTH — the tab's new default view ─────────────────
+// Pulls the latest AUTOMATED daily backtest result. No taps, no mode
+// selection — the one thing worth seeing at a glance every time this tab
+// opens. Trend comparison only became possible once daily automated runs
+// started landing in Supabase — a single run has no "better or worse than
+// what" to compare against.
+function loadBtHealth(){
+  var el = document.getElementById("bt-health-body");
+  if(!el || !SERVER_URL) return;
+  fetch(SERVER_URL+"/latest_backtest_summary",{headers:ptHeaders(),signal:AbortSignal.timeout(10000)})
+    .then(function(r){return r.json();})
+    .then(function(d){ el.innerHTML = _btHealthHtml(d); })
+    .catch(function(){ el.innerHTML = _btHealthHtml(null); });
+}
+
+function _btHealthHtml(d){
+  if(!d || !d.ok){
+    return "<div style='text-align:center;padding:12px;color:var(--m);font-size:.68rem'>Couldn't reach the server — check connection</div>";
+  }
+  if(!d.available){
+    var msg = d.reason==="no_backtest_run_yet"
+      ? "No backtest has run yet — first automated run completes after today's market close, or tap Advanced below to run one now."
+      : "No data available yet.";
+    return "<div style='text-align:center;padding:12px;color:var(--m);font-size:.68rem'>"+msg+"</div>";
+  }
+  var wr = d.win_rate;
+  var color = wr>=55 ? "var(--g)" : wr>=40 ? "var(--b)" : "var(--r)";
+  var when = d.created_at ? new Date(d.created_at).toLocaleString('en-IN',
+    {day:'numeric',month:'short',hour:'numeric',minute:'2-digit',hour12:true}) : "";
+  var trendHtml = "";
+  if(d.trend){
+    var dir = d.trend.direction;
+    var arrow = dir==="up" ? "▲" : dir==="down" ? "▼" : "→";
+    var tColor = dir==="up" ? "var(--g)" : dir==="down" ? "var(--r)" : "var(--m)";
+    var chg = Math.abs(d.trend.change);
+    trendHtml = "<span style='font-size:.68rem;color:"+tColor+";margin-left:8px'>"+arrow+" "+chg+"pp vs last run</span>";
+  }
+  var reliabilityNote = d.reliable ? "" :
+    "<div style='font-size:.6rem;color:var(--y);margin-top:4px'>Small sample — treat as a lean, not a guarantee</div>";
+  return "<div style='display:flex;align-items:baseline;justify-content:space-between'>"+
+    "<span style='font-size:1.6rem;font-weight:800;color:"+color+"'>"+wr+"%</span>"+
+    trendHtml+
+    "</div>"+
+    "<div style='font-size:.68rem;color:var(--m);margin-top:4px'>"+d.closed+" closed trades of "+d.total+" · profit factor "+d.profit_factor+"</div>"+
+    reliabilityNote+
+    "<div style='font-size:.58rem;color:var(--m);margin-top:6px'>Last run: "+when+"</div>";
+}
+
 function btSetMode(mode){
   var isServer = mode === "server";
   var isReplay = mode === "replay";
