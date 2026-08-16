@@ -1265,8 +1265,17 @@ function _doFetchFromServer(){
     // Auto-detect SL/T1/T2 hits on every price update
     try{checkSignalLevels();}catch(e){}
     var t=istTime();
-    var isStale=mktData.stale||mktData.source==="cache_stale";
-    var ageMin=mktData.cached_age_s?Math.round(mktData.cached_age_s/60):0;
+    // FIX: this referenced `mktData`, a variable that has never existed
+    // anywhere in this file (confirmed — zero declarations, only these two
+    // uses). The enclosing .then(function(d){...}) handler's actual
+    // parameter is `d`. This threw a ReferenceError on every single
+    // successful /market response, for every user, the entire time —
+    // caught by the outer .catch(), which reset serverOk=false immediately
+    // after every success. That's the real root cause behind everything
+    // traced this session: not a worker-specific issue, an app-wide one
+    // that's been live this whole build.
+    var isStale=d.stale||d.source==="cache_stale";
+    var ageMin=d.cached_age_s?Math.round(d.cached_age_s/60):0;
     if(isStale){
       setStatus("live","Closed · Last: "+t);
       document.getElementById("dataSrc").textContent="⏸ Market closed — showing last data"+(ageMin>0?" ("+ageMin+"m ago)":"");
