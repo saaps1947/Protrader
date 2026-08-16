@@ -1100,7 +1100,14 @@ function _doFetchFromServer(){
     }
     if(wasDown){
       setTimeout(fetchStocks,2000);
-      if(KITE.connected){setTimeout(startOIFetch,1000);}
+      // FIX: was gated on KITE.connected (local login state) — but every
+      // data route this hits (/zerodha_oi etc.) already falls back to the
+      // server's own cached Kite session regardless of local login, same
+      // as /market. Gating on local login meant OI silently never refreshed
+      // after a reconnect for anyone who hadn't done the interactive Kite
+      // login in THIS browser tab specifically — including a headless
+      // worker, which never does that login at all.
+      if(SERVER_URL){setTimeout(startOIFetch,1000);}
       setTimeout(function(){try{runScan(false);}catch(e){}},3000);
       setTimeout(fetchLotSizes,3000); // Get live lot sizes
     }
@@ -1288,8 +1295,19 @@ function startPolling(){
     if(serverOk&&SERVER_URL) fetchFromServer();
   },30000);
   // OI refresh — 90s (has its own lock)
+  // BUG FIX: this used to only refresh CS.sym (whichever tab the user has
+  // open), and /market's own periodic poll never includes index OI at all
+  // (that merge is explicitly stocks-only — see /market's "Merge cached
+  // stock OI" block). So a user parked on the NIFTY tab all day would have
+  // BANKNIFTY/FINNIFTY/SENSEX OI go stale after the one-time page-load
+  // fetch and never refresh again. For a headless worker with no tab
+  // selection at all, only the very first index would ever refresh, for
+  // the entire runtime. Now refreshes all 4 indices every cycle, staggered
+  // so they don't all hit the server in the same instant.
   safeInterval(function(){
-    if(CS&&CS.sym&&serverOk) fetchOI(CS.sym);
+    if(!serverOk) return;
+    var _idxSyms=["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"];
+    _idxSyms.forEach(function(sym,i){ setTimeout(function(){fetchOI(sym);}, i*4000); });
   },90000);
   // Snapshot capture — every 5 min during market hours
   safeInterval(function(){
@@ -4635,6 +4653,26 @@ function processScan(sigs){
       }
     }
     if(idx>=0)allSigs[idx]=sig;else allSigs.unshift(sig);
+
+    // ADDITIVE: push every processed signal to Supabase (via the server),
+    // same fire-and-forget pattern as snapshot capture. This is what lets
+    // the always-on worker's headless scans persist real signal history —
+    // the phone app contributes here too whenever it's open, same as it
+    // always has for snapshots. Never blocks or affects the live feed.
+    if(SERVER_URL){
+      try{
+        var _ingestPayload = {
+          sym:sig.sym, bias:sig.bias, confidence:sig.confidence, urgency:sig.urgency,
+          bullScore:sig._bull, bearScore:sig._bear, neutralScore:sig._neutral,
+          layers:sig.layers, hasOI:sig.hasOI, setupKey:sig.setupKey, regime:sig.regime,
+          entry:sig.entry, sl:sig.sl, target1:sig.target1, target2:sig.target2,
+          rr:sig.rr, why:sig.why, vix:(typeof VIX!=="undefined"?VIX:0),
+          _source: window.IS_WORKER ? "worker" : "client"
+        };
+        fetch(SERVER_URL+"/ingest_signal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(_ingestPayload)})
+          .catch(function(){});
+      }catch(e){}
+    }
   });
   // Remove signals not seen in last 30 min from the LIVE feed list — but do NOT
   // delete their _sigFirstSeen record here. That record is meant to survive
@@ -5364,6 +5402,20 @@ function autoLogSignal(sig){
 // Returns {ok:true} on success, or {ok:false, reason:"..."} if blocked —
 // callers use this to tell the user why nothing happened, rather than
 // failing silently.
+// ADDITIVE: fire-and-forget POST of one journal entry (creation or status
+// change) to Supabase via the server. Same pattern as snapshot/signal
+// ingest — never blocks, never surfaces errors to the caller. This is what
+// lets Supabase's journal table reflect the SAME trade lifecycle the app
+// tracks locally (OPEN → T1_HIT → SL_HIT/T2_HIT/MANUAL), from any device
+// or from the always-on worker.
+function ingestJournalEntry(e){
+  if(!SERVER_URL||!e) return;
+  try{
+    fetch(SERVER_URL+"/ingest_journal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(e)})
+      .catch(function(){});
+  }catch(err){}
+}
+
 function _writeJournal(sig, source){
   if(!sig) return {ok:false, reason:"No signal data"};
 
@@ -5402,6 +5454,7 @@ function _writeJournal(sig, source){
         var diff = x.bias==="BULLISH"?x.exit_px-x.entry_px:x.entry_px-x.exit_px;
         x.pnl = Math.round(diff*(LOT_SIZES[x.sym]||LOT_SIZES.DEFAULT||50));
       }
+      ingestJournalEntry(x);
     }
   });
 
@@ -5436,6 +5489,7 @@ function _writeJournal(sig, source){
   };
   SIGNAL_LOG.unshift(entry);
   saveSignalLog();
+  ingestJournalEntry(entry);
   renderJ();
   renderPerformance();
   return {ok:true, entry:entry};
@@ -5457,6 +5511,7 @@ function updateSignalOutcome(id, outcome, exit_px, notes){
   }
   e.outcome = outcome==="SL_HIT"?"LOSS":outcome==="T2_HIT"?"BIG WIN":"WIN";
   saveSignalLog();
+  ingestJournalEntry(e);
   renderJ();
   renderPerformance();
 }
@@ -5525,6 +5580,7 @@ function checkSignalLevels(){
         delete _sigFirstSeen[e.sym+e.bias]; _saveSigFirstSeen(); // trade closed — clear its "first seen" stamp
         toast(wasT1?"⚪ Breakeven Stop — "+e.sym:"🔴 SL Hit — "+e.sym,
               e.trade+" auto-closed at ₹"+e.sl_px,wasT1?"ty":"tr");
+        ingestJournalEntry(e);
         changed=true; return;
       }
     }
@@ -5543,6 +5599,7 @@ function checkSignalLevels(){
           e.notes=(e.notes||"")+" | ✅ T1 hit ₹"+e.t1_px+" — SL moved to breakeven, full qty to T2";
           allSigs.forEach(function(a){if(a.sym===e.sym&&a.bias===e.bias){a.sl=""+e.entry_px;a._slMoved=true;}});
           toast("✅ T1 Hit — "+e.sym,"SL at breakeven ₹"+e.entry_px+" | Full qty running to T2","tg");
+          ingestJournalEntry(e);
           changed=true; return;
         }
       }
@@ -5559,6 +5616,7 @@ function checkSignalLevels(){
         allSigs=allSigs.filter(function(a){return !(a.sym===e.sym&&a.bias===e.bias);});
         delete _sigFirstSeen[e.sym+e.bias]; _saveSigFirstSeen(); // trade closed — clear its "first seen" stamp
         toast("🏆 T2 Hit — "+e.sym,e.trade+" ₹"+e.t2_px+" | Total P&L: ₹"+e.pnl,"tg");
+        ingestJournalEntry(e);
         changed=true;
       }
     }
