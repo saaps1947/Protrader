@@ -4682,6 +4682,68 @@ function _saveSigFirstSeen(){
   try{ localStorage.setItem('pt_sigFirstSeen', JSON.stringify(_sigFirstSeen)); }catch(e){}
 }
 
+// ── SETUP WIN-RATE — historical confidence badge on signal cards ─────────
+// Reads from the backtest engine's own by_setup/by_setup_regime breakdown,
+// via /setup_winrate — a fast Supabase read, not a live re-simulation.
+// Cached client-side per setup_key+regime combo for _WINRATE_CACHE_MS,
+// since the underlying backtest_runs data only changes when a NEW backtest
+// completes (not every 3-min scan), so re-fetching the same combo on every
+// cycle would just be redundant load for an answer that hasn't changed.
+var _winrateCache = {};        // "setupKey|regime" -> {data, ts}
+var _WINRATE_CACHE_MS = 10*60*1000;   // 10 min
+
+function fetchSetupWinrate(setupKey, regime, cb){
+  if(!setupKey || !SERVER_URL){ cb(null); return; }
+  var key = setupKey+"|"+(regime||"");
+  var cached = _winrateCache[key];
+  if(cached && (Date.now()-cached.ts) < _WINRATE_CACHE_MS){ cb(cached.data); return; }
+  fetch(SERVER_URL+"/setup_winrate?setup_key="+encodeURIComponent(setupKey)+
+        "&regime="+encodeURIComponent(regime||""), {headers:ptHeaders(),signal:AbortSignal.timeout(10000)})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      _winrateCache[key] = {data:d, ts:Date.now()};
+      cb(d);
+    })
+    .catch(function(){ cb(null); });
+}
+
+// Renders the historical-winrate row for a signal card. Three genuinely
+// different honesty tiers, styled distinctly on purpose — collapsing them
+// into one generic "X% historical" badge would misrepresent an approximate
+// match as being for the exact same setup, which is exactly the kind of
+// false confidence this feature must not create.
+function _winrateBadgeHtml(sig){
+  var w = sig._winrate;
+  if(!w) return "";
+  if(w.loading){
+    return "<div style='padding:3px 10px 6px;font-size:.62rem;color:var(--m)'>📊 Checking history…</div>";
+  }
+  if(!w.available){
+    return ""; // nothing useful to say — omit rather than clutter with an empty state
+  }
+  var wr = w.win_rate, n = w.n;
+  var color = wr>=60 ? "var(--g)" : wr>=45 ? "var(--y)" : "var(--r)";
+  var label, icon, sub;
+  if(w.match_type==="approximate"){
+    icon = "≈"; label = "Similar setup"; 
+    sub = "Backtest can't reproduce OI/Structure exactly — closest comparable match";
+  } else if(w.match_type==="exact_setup_and_regime"){
+    icon = "📊"; label = "This exact setup + regime";
+    sub = w.reliable ? "" : "Small sample — treat as a lean, not a guarantee";
+  } else {
+    icon = "📊"; label = "This setup (any regime)";
+    sub = w.reliable ? "" : "Small sample — treat as a lean, not a guarantee";
+  }
+  return "<div style='padding:4px 10px 7px;border-bottom:1px solid rgba(255,255,255,.05);"+
+    "display:flex;align-items:center;justify-content:space-between'>"+
+    "<div>"+
+    "<span style='font-size:.64rem;color:var(--m)'>"+icon+" "+label+"</span>"+
+    (sub?"<div style='font-size:.56rem;color:var(--m);margin-top:1px'>"+sub+"</div>":"")+
+    "</div>"+
+    "<span style='font-size:.72rem;font-weight:700;color:"+color+"'>"+wr+"% <span style='font-size:.58rem;color:var(--m);font-weight:500'>("+n+" trades)</span></span>"+
+    "</div>";
+}
+
 function processScan(sigs){
   window._lastScanTs = Date.now();
   sigs.forEach(function(sig){
@@ -4729,6 +4791,17 @@ function processScan(sigs){
       }
     }
     if(idx>=0)allSigs[idx]=sig;else allSigs.unshift(sig);
+
+    // Historical win-rate badge — fire-and-forget, updates the card in
+    // place once it resolves. Purely additive display, never blocks or
+    // gates anything about the signal itself.
+    sig._winrate = sig._winrate || {loading:true};
+    (function(sigRef){
+      fetchSetupWinrate(sigRef.setupKey, sigRef.regime, function(d){
+        sigRef._winrate = d || {available:false};
+        try{renderFeed();}catch(e){}
+      });
+    })(sig);
 
     // ADDITIVE: push every processed signal to Supabase (via the server),
     // same fire-and-forget pattern as snapshot capture. This is what lets
@@ -5085,6 +5158,7 @@ function renderFeed(){
       "<div style='display:flex;align-items:center;justify-content:space-between;padding:3px 10px 7px;border-bottom:1px solid rgba(255,255,255,.05)'>"+
       "<span style='font-size:.7rem;color:var(--m)'>Conviction</span>"+
       "<span style='background:"+ccbg+";border:1px solid "+ccbd+";border-radius:20px;padding:3px 12px;font-size:.88rem;font-weight:800;color:"+cc+"'>"+sig.confidence+"% — "+convLbl+"</span></div>"+
+      _winrateBadgeHtml(sig)+
       "<div class='sc-dir'><span class='sc-dt' style='color:"+dc+"'>"+ico+" "+sig.bias+"</span><span class='sc-tr'>"+sig.trade+"</span></div>"+
       "<div class='sc-why'>"+sig.why+"</div>"+
       liveStatusHtml+
