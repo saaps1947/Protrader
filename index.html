@@ -1310,6 +1310,13 @@ function _doFetchFromServer(){
     }
   })
   .catch(function(e){
+    // FIX: this handler computed the error message but never logged it
+    // anywhere — every failure in this chain has been completely silent,
+    // in both real browser DevTools and the worker's log pipe. That's why
+    // "serverOk resets to false" was undiagnosable: a caught exception
+    // never triggers a 'pageerror' event, so there was nothing for any
+    // console/error listener to see. This is the actual missing piece.
+    console.error('[fetchFromServer] failed:', e && e.message, e && e.stack);
     serverOk=false;
     _serverRetryCount++;
     var msg=e&&e.message||"";
