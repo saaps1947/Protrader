@@ -394,6 +394,18 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
       <button class="ss-btn ss-sec2" onclick="exitLastOrder()">🔻 Square Off Last Order</button>
     </div>
     <div class="ss-sec">
+      <div class="ss-sec-title">📊 Historical Data Backfill</div>
+      <div class="ss-st" style="line-height:1.6">
+        Pulls 60 days of 5-min candles from Zerodha for every tracked symbol
+        into Supabase — foundation for setup win-rate stats on new signals.
+        Takes a couple of minutes. Safe to re-run any time.
+        MCX commodities won't get a real 60 days (Kite's historical API
+        doesn't cover MCX — falls back to Yahoo's ~2-day window instead).
+      </div>
+      <button class="ss-btn ss-sec2" id="backfillBtn" onclick="startCandleBackfill()">⬇️ Backfill 60-Day Candles</button>
+      <div id="backfillStatus" style="font-size:.68rem;color:var(--m);margin-top:6px"></div>
+    </div>
+    <div class="ss-sec">
       <div class="ss-sec-title">🔧 Advanced</div>
       <div class="ss-st" id="ss_st"></div>
       <div class="ss-f"><label>API Key</label><input type="text" id="ss_key" placeholder="API Key" oninput="ssSave()"></div>
@@ -986,6 +998,45 @@ function exitLastOrder(){
     if(d.ok){toast("✅ Squared Off",d.tradingsymbol+(d.stop_cancelled?" · stop cancelled":""),"tg");lastLiveOrder=null;}
     else toast("❌ Exit Failed",d.error||"Check Kite","tr");
   }).catch(function(e){setStatus("live");toast("❌ Exit error",e.message,"tr");});
+}
+
+function startCandleBackfill(){
+  if(!SERVER_URL){toast("Not connected","Need server URL configured","tr");return;}
+  var btn=document.getElementById("backfillBtn");
+  var statusEl=document.getElementById("backfillStatus");
+  if(btn)btn.disabled=true;
+  if(statusEl)statusEl.textContent="Starting…";
+  fetch(SERVER_URL+"/backfill_candles",{method:"POST",headers:ptHeaders()})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok){ if(statusEl)statusEl.textContent="Failed to start"; if(btn)btn.disabled=false; return; }
+      _pollBackfillStatus(d.job_id, btn, statusEl);
+    })
+    .catch(function(e){
+      if(statusEl)statusEl.textContent="Error: "+e.message;
+      if(btn)btn.disabled=false;
+    });
+}
+
+function _pollBackfillStatus(jobId, btn, statusEl){
+  fetch(SERVER_URL+"/backfill_status/"+jobId,{headers:ptHeaders()})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok){ if(statusEl)statusEl.textContent="Lost track of job"; if(btn)btn.disabled=false; return; }
+      if(statusEl)statusEl.textContent=d.message+" ("+(d.progress||0)+"%)";
+      if(d.status==="done"){
+        if(btn)btn.disabled=false;
+        toast("✅ Backfill Complete",d.message,"tg");
+      } else if(d.status==="error"){
+        if(btn)btn.disabled=false;
+        toast("❌ Backfill Failed",d.message,"tr");
+      } else {
+        setTimeout(function(){_pollBackfillStatus(jobId, btn, statusEl);}, 2000);
+      }
+    })
+    .catch(function(){
+      setTimeout(function(){_pollBackfillStatus(jobId, btn, statusEl);}, 3000); // transient — keep trying
+    });
 }
 var lastSetups=[];
 var scanCd=180,scanTmr=null;
@@ -4748,6 +4799,63 @@ function _activeTradeSigs(){
   return out;
 }
 
+// ── CLOSED-MARKET REFERENCE VIEW ────────────────────────────────────────
+// Shows the most recent real signal per symbol from Supabase when the
+// market is shut and the live feed is empty. Strictly read-only display —
+// no execute action anywhere in this render path, by design.
+var _lastSession = null;          // null=not fetched, []=fetched empty, [...]=data
+var _lastSessionFetching = false;
+
+function _fetchLastSessionIfNeeded(){
+  if(_lastSession!==null || _lastSessionFetching || !SERVER_URL) return;
+  _lastSessionFetching = true;
+  fetch(SERVER_URL+"/last_session_signals",{headers:ptHeaders(),signal:AbortSignal.timeout(15000)})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      _lastSession = (d&&d.ok&&d.signals) ? d.signals : [];
+      _lastSessionFetching = false;
+      renderFeed(); // re-render now that data has arrived
+    })
+    .catch(function(){ _lastSession=[]; _lastSessionFetching=false; renderFeed(); });
+}
+
+function _renderLastSessionView(){
+  _fetchLastSessionIfNeeded();
+  var header = "<div class='empty' style='padding-bottom:4px'>"+
+    "<div style='font-size:1.8rem;margin-bottom:7px'>🌙</div>"+
+    "<div style='font-size:.78rem;font-weight:600'>Market Closed</div>"+
+    "<div style='font-size:.68rem;margin-top:4px;color:var(--m)'>Showing the last real signals — reference only, not tradeable</div>"+
+    "</div>";
+
+  if(_lastSession===null){
+    return header+"<div style='text-align:center;padding:12px;color:var(--m);font-size:.7rem'>Loading last session…</div>";
+  }
+  if(_lastSession.length===0){
+    return header+"<div style='text-align:center;padding:12px;color:var(--m);font-size:.7rem'>No recent signal history available yet</div>";
+  }
+
+  var rows = _lastSession.map(function(s){
+    var bull = s.bias==="BULLISH";
+    var color = bull ? "var(--g)" : "var(--r)";
+    var when = s.created_at ? new Date(s.created_at).toLocaleString('en-IN',
+      {day:'numeric',month:'short',hour:'numeric',minute:'2-digit',hour12:true}) : "";
+    return "<div style='opacity:.68;filter:grayscale(35%);border:1px solid rgba(255,255,255,.08);"+
+      "border-radius:10px;padding:10px 12px;margin-bottom:8px;background:rgba(255,255,255,.02)'>"+
+      "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px'>"+
+      "<span style='font-weight:700;font-size:.82rem'>"+s.sym+"</span>"+
+      "<span style='font-size:.6rem;padding:2px 7px;border-radius:5px;background:rgba(255,255,255,.06);color:var(--m)'>🔒 NOT TRADEABLE</span>"+
+      "</div>"+
+      "<div style='color:"+color+";font-weight:600;font-size:.74rem'>"+(bull?"▲ BULLISH":"▼ BEARISH")+
+      " · "+(s.confidence||0)+"% · "+(s.urgency||"")+"</div>"+
+      "<div style='font-size:.64rem;color:var(--m);margin-top:3px'>Entry ₹"+(s.entry_px||"—")+
+      " · SL ₹"+(s.sl_px||"—")+" · T1 ₹"+(s.t1_px||"—")+"</div>"+
+      "<div style='font-size:.6rem;color:var(--m);margin-top:4px'>"+when+"</div>"+
+      "</div>";
+  }).join("");
+
+  return header+"<div style='padding:0 2px'>"+rows+"</div>";
+}
+
 function renderFeed(){
   var feed=document.getElementById("sigFeed");if(!feed)return;
   var f=allSigs.concat(_activeTradeSigs());
@@ -4757,6 +4865,17 @@ function renderFeed(){
   var cnt=document.getElementById("sigCnt");
   if(cnt)cnt.textContent=allSigs.length?"("+f.length+"/"+allSigs.length+")":"";
   if(!f.length){
+    // Market-closed reference view. Deliberately NOT merged into allSigs —
+    // that array is read by _activeTradeSigs(), execSig(), and auto-trade
+    // logic, all of which assume "this is live, potentially tradeable
+    // data." Keeping this in its own variable/render path is what
+    // guarantees a stale Friday price can never be mistaken for a live one
+    // by anything else in the app.
+    var allClosed = !isOpen() && !isMCXOpen();
+    if(bias!=="BTST" && allClosed){
+      feed.innerHTML=_renderLastSessionView();
+      return;
+    }
     var emptyMsg=bias==="BTST"?"No BTST setups right now":"AI scanning markets...";
     feed.innerHTML="<div class='empty'><div style='font-size:1.8rem;margin-bottom:7px'>"+(bias==="BTST"?"🌙":"🔍")+"</div><div style='font-size:.78rem;font-weight:600'>"+emptyMsg+"</div><div style='font-size:.68rem;margin-top:4px'>Auto-scans every 3 min</div></div>";
     return;
