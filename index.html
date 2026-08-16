@@ -3341,9 +3341,15 @@ function runScan(manual){
     });
 
     // Batch 2: liquid stocks — in background (staggered to avoid rate limits)
+    // FIX: was 8000ms — the same class of problem Batch 1 (indices) already
+    // hit and got bumped to 12s for (see that comment: Render's outbound
+    // calls, e.g. the Yahoo Finance fallback inside /smc, can take 6-10s).
+    // Confirmed in production logs: several stock SMC calls timing out with
+    // net::ERR_ABORTED at exactly this 8s mark. Same fix, applied where it
+    // was missed the first time.
     smcLiquid.forEach(function(sym,i){
       safeTimeout(function(){
-        fetch(SERVER_URL+"/smc/"+sym+_smcCreds(),{headers:kiteHeaders(),signal:AbortSignal.timeout(8000)})
+        fetch(SERVER_URL+"/smc/"+sym+_smcCreds(),{headers:kiteHeaders(),signal:AbortSignal.timeout(12000)})
         .then(function(r){return r.json();})
         .then(function(d){applySmcData(sym,d);})
         .catch(function(){});
@@ -3357,7 +3363,8 @@ function runScan(manual){
 
     remaining.forEach(function(s,i){
       safeTimeout(function(){
-        fetch(SERVER_URL+"/smc/"+s.sym+_smcCreds(),{headers:kiteHeaders(),signal:AbortSignal.timeout(8000)})
+        // Same fix as Batch 2 above — matches Batch 1's already-proven 12s.
+        fetch(SERVER_URL+"/smc/"+s.sym+_smcCreds(),{headers:kiteHeaders(),signal:AbortSignal.timeout(12000)})
         .then(function(r){return r.json();})
         .then(function(d){applySmcData(s.sym,d);})
         .catch(function(){});
