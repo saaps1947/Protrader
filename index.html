@@ -4316,7 +4316,19 @@ function localSigs(){
           sym:s.sym, bias:"NEUTRAL", trade:"⛔ No Trade",
           strategy:"NO-TRADE Filter Active",
           why:noTradeReasons[0],
-          confidence:0, entry:"—", sl:"—", target1:"—", target2:"—",
+          // FIX: entry/sl/target1/target2 used to be the STRING "—" — meant
+          // purely for display, but this object flows into the same
+          // pipeline as real signals (ingest_signal payload, and
+          // captureSnapshot's curSig lookup), sending "—" straight into
+          // Postgres numeric columns (entry_px/sl_px/t1_px/t2_px), which
+          // correctly rejected it — confirmed directly in production logs,
+          // repeated write_signal AND write_snapshot failures. null is the
+          // semantically correct "no value" here, and safe: fpx() (the
+          // live card's own price formatter) already falls back to its own
+          // dash character for null — zero visual change on screen. rr
+          // deliberately left as "—" — confirmed it's a text column in
+          // Supabase, was never actually part of this bug.
+          confidence:0, entry:null, sl:null, target1:null, target2:null,
           rr:"—", urgency:"LOW", isBTST:false, btstNote:"",
           _score:0, _reasons:noTradeReasons, _noTrade:true,
           timeframe:"", regime:regimeCode
@@ -4882,7 +4894,15 @@ function processScan(sigs){
     // the always-on worker's headless scans persist real signal history —
     // the phone app contributes here too whenever it's open, same as it
     // always has for snapshots. Never blocks or affects the live feed.
-    if(SERVER_URL){
+    // FIX: no-trade advisory cards (sig._noTrade) used to be sent here too
+    // — they're not real trading opportunities, so they have zero
+    // analytical value in a signal-history table, and were the direct
+    // cause of repeated Postgres write failures (their entry/sl/target
+    // fields were placeholder display strings, not real numbers). Excluded
+    // outright as a second, independent layer on top of fixing those
+    // fields at the source — even if a future bug reintroduces a bad
+    // value in a no-trade card, it can't reach Supabase if it's never sent.
+    if(SERVER_URL && !sig._noTrade){
       try{
         var _ingestPayload = {
           sym:sig.sym, bias:sig.bias, confidence:sig.confidence, urgency:sig.urgency,
