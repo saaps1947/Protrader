@@ -6457,7 +6457,14 @@ function testServer(){
   var st=document.getElementById("ss_srv_st");
   if(!url){st.className="ss-st err";st.textContent="❌ Enter server URL first";return;}
   st.className="ss-st info";st.textContent="⏳ Testing...";
-  fetch(url+"/",{signal:AbortSignal.timeout(8000)})
+  // FIX: was 8000ms — the tightest timeout anywhere in this app, tighter
+  // than the main page's own successful fetch (20000ms for the same kind
+  // of request). A connectivity-check button should be at least as
+  // patient as ordinary app usage, not less — this made it fail exactly
+  // when the server was briefly slow (real, known contention: single
+  // gunicorn worker, now two continuous clients) even while the main page
+  // was working fine moments later with more patience.
+  fetch(url+"/",{signal:AbortSignal.timeout(20000)})
   .then(function(r){return r.json();})
   .then(function(d){
     if(d.status){
