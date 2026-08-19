@@ -854,6 +854,50 @@ window.addEventListener("error", function(e){
   }catch(ignored){}
 });
 // ═══════════════════════════════════════════
+// ON-SCREEN DIAGNOSTIC LOG — same motivation as the error banner above,
+// but for the [Premium ✅/❌] lines specifically. Those already print to
+// console.log/warn, but the browser console isn't practically reachable
+// on iOS Safari without a Mac for remote debugging — which defeats the
+// point of having the diagnostic at all if it's not actually visible.
+// Wraps console.log/warn to ALSO surface anything matching "[Premium"
+// on screen, while still calling the real console.log/warn underneath —
+// nothing is lost if remote debugging ever IS available.
+(function(){
+  var _origLog = console.log, _origWarn = console.warn;
+  function showOnScreen(msg){
+    try{
+      var el = document.getElementById("_diagBanner");
+      if(!el){
+        el = document.createElement("div");
+        el.id = "_diagBanner";
+        el.style.cssText = "position:fixed;bottom:0;left:0;right:0;z-index:99998;"+
+          "background:#1e3a5f;color:#dbeafe;padding:8px 10px;font-size:10px;"+
+          "font-family:monospace;white-space:pre-wrap;word-break:break-word;"+
+          "max-height:30vh;overflow-y:auto;border-top:2px solid #60a5fa";
+        var closeBtn = document.createElement("div");
+        closeBtn.textContent = "✕ clear";
+        closeBtn.style.cssText = "position:absolute;top:4px;right:8px;cursor:pointer;color:#93c5fd;font-weight:bold";
+        closeBtn.onclick = function(){ el.remove(); };
+        (document.body||document.documentElement).appendChild(el);
+        el.appendChild(closeBtn);
+      }
+      var line = document.createElement("div");
+      line.textContent = "["+new Date().toLocaleTimeString()+"] "+msg;
+      el.appendChild(line);
+    }catch(ignored){}
+  }
+  console.log = function(){
+    var msg = Array.prototype.slice.call(arguments).join(" ");
+    if(msg.indexOf("[Premium")>=0) showOnScreen(msg);
+    return _origLog.apply(console, arguments);
+  };
+  console.warn = function(){
+    var msg = Array.prototype.slice.call(arguments).join(" ");
+    if(msg.indexOf("[Premium")>=0) showOnScreen(msg);
+    return _origWarn.apply(console, arguments);
+  };
+})();
+// ═══════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════
 var SERVER_URL = ""; // Set from settings - your Render.com URL
@@ -5911,9 +5955,20 @@ function ingestJournalEntry(e){
 function _writeJournal(sig, source){
   if(!sig) return {ok:false, reason:"No signal data"};
 
-  // Guard 2: must have valid price data — reject undefined/zero entry
+  // Guard 2: must have valid price data — reject undefined/zero/negative entry
+  // FIX: this used to require entryPx>=10 — a sensible floor when entry was
+  // always the UNDERLYING's price (always well above 10 for any real index
+  // or stock). Now that entry is the actual option premium, that floor is
+  // wrong — a cheap, far-OTM, or near-expiry option can genuinely be
+  // priced at ₹2-9. The server already guarantees any successful premium
+  // fetch is a real, positive number before it ever reaches here
+  // (get_option_premium rejects premium<=0 outright), so this arbitrary
+  // magnitude threshold was redundant at best, silently rejecting valid
+  // signals at worst — very likely the actual cause of "5 HIGH signals,
+  // only 1 in journal": some number of the other 4 may simply have had a
+  // real premium under 10, correctly fetched, wrongly rejected here.
   var entryPx = parseFloat(sig.entry)||0;
-  if(!entryPx||isNaN(entryPx)||entryPx<10) return {ok:false, reason:"Invalid entry price"};
+  if(!entryPx||isNaN(entryPx)||entryPx<=0) return {ok:false, reason:"Invalid entry price"};
 
   // Guard 3: must have valid SL and T1
   var slPx = parseFloat(sig.sl)||0;
