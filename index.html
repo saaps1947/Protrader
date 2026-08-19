@@ -830,6 +830,30 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 <script>
 "use strict";
 // ═══════════════════════════════════════════
+// GLOBAL ERROR VISIBILITY — installed first, before anything else runs, so
+// it catches errors regardless of what stage of script execution they
+// happen at. Deliberately does NOT depend on toast() or any other app
+// function (those are defined much later, and could themselves be part of
+// what's broken) — builds its own minimal, self-contained banner instead.
+// Exists specifically so a crash is visible directly on the phone, without
+// needing a Mac for Safari's remote web inspector.
+window.addEventListener("error", function(e){
+  try{
+    var el = document.getElementById("_jsErrBanner");
+    if(!el){
+      el = document.createElement("div");
+      el.id = "_jsErrBanner";
+      el.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99999;"+
+        "background:#7f1d1d;color:#fff;padding:10px 12px;font-size:11px;"+
+        "font-family:monospace;white-space:pre-wrap;word-break:break-word;"+
+        "max-height:40vh;overflow-y:auto;border-bottom:2px solid #fca5a5";
+      (document.body||document.documentElement).appendChild(el);
+    }
+    var line = "⚠ JS ERROR: "+(e.message||"unknown")+"\n  at "+(e.filename||"?")+":"+(e.lineno||"?")+":"+(e.colno||"?");
+    el.textContent = (el.textContent?el.textContent+"\n\n":"") + line;
+  }catch(ignored){}
+});
+// ═══════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════
 var SERVER_URL = ""; // Set from settings - your Render.com URL
@@ -4844,9 +4868,20 @@ function refreshLivePremium(sym, strike, optType){
 
 function fetchRealPremium(sym, strike, optType, cb){
   if(!sym || !strike || !optType || !SERVER_URL){ cb(null); return; }
+  // FIX: was ptHeaders() — that sends no Kite credentials at all, only
+  // Content-Type and an optional secret. /option_premium genuinely needs
+  // Kite auth to reach Zerodha's own quote API. This "worked" only when
+  // the server happened to have cached credentials from some unrelated
+  // recent request — otherwise it failed silently, and since a failed
+  // premium fetch is designed to skip journaling rather than log a wrong
+  // number, this meant signals could fire and display correctly while
+  // NEVER reaching the journal at all. Confirmed directly: a real HIGH
+  // signal (SHRIRAMFIN, 82%) showed in the live feed but the journal
+  // stayed completely empty. kiteHeaders() is the correct one — same
+  // function every other Kite-dependent call in this app already uses.
   fetch(SERVER_URL+"/option_premium?sym="+encodeURIComponent(sym)+
         "&strike="+encodeURIComponent(strike)+"&type="+encodeURIComponent(optType),
-        {headers:ptHeaders(),signal:AbortSignal.timeout(15000)})
+        {headers:kiteHeaders(),signal:AbortSignal.timeout(15000)})
     .then(function(r){return r.json();})
     .then(function(d){ cb(d&&d.ok ? d : null); })
     .catch(function(){ cb(null); });
