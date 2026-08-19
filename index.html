@@ -4868,23 +4868,30 @@ function refreshLivePremium(sym, strike, optType){
 
 function fetchRealPremium(sym, strike, optType, cb){
   if(!sym || !strike || !optType || !SERVER_URL){ cb(null); return; }
-  // FIX: was ptHeaders() — that sends no Kite credentials at all, only
-  // Content-Type and an optional secret. /option_premium genuinely needs
-  // Kite auth to reach Zerodha's own quote API. This "worked" only when
-  // the server happened to have cached credentials from some unrelated
-  // recent request — otherwise it failed silently, and since a failed
-  // premium fetch is designed to skip journaling rather than log a wrong
-  // number, this meant signals could fire and display correctly while
-  // NEVER reaching the journal at all. Confirmed directly: a real HIGH
-  // signal (SHRIRAMFIN, 82%) showed in the live feed but the journal
-  // stayed completely empty. kiteHeaders() is the correct one — same
-  // function every other Kite-dependent call in this app already uses.
   fetch(SERVER_URL+"/option_premium?sym="+encodeURIComponent(sym)+
         "&strike="+encodeURIComponent(strike)+"&type="+encodeURIComponent(optType),
         {headers:kiteHeaders(),signal:AbortSignal.timeout(15000)})
     .then(function(r){return r.json();})
-    .then(function(d){ cb(d&&d.ok ? d : null); })
-    .catch(function(){ cb(null); });
+    .then(function(d){
+      // FIX: this used to fail completely silently — success, a
+      // server-reported error (bad auth, contract not found, no valid
+      // quote), and a network/timeout failure all looked identical from
+      // the outside: null, no explanation. That made "why didn't this
+      // signal reach the journal" undiagnosable without guessing. The
+      // server ALREADY returns a specific reason on failure (d.error) —
+      // this was simply never being surfaced anywhere.
+      if(d && d.ok){
+        console.log("[Premium ✅] "+sym+" "+strike+optType+" = ₹"+d.premium);
+        cb(d);
+      } else {
+        console.warn("[Premium ❌] "+sym+" "+strike+optType+" failed: "+(d&&d.error||"unknown — bad response shape"));
+        cb(null);
+      }
+    })
+    .catch(function(e){
+      console.warn("[Premium ❌] "+sym+" "+strike+optType+" network/timeout: "+(e&&e.message||e));
+      cb(null);
+    });
 }
 
 function fetchSetupWinrate(setupKey, regime, cb){
