@@ -5360,7 +5360,12 @@ function renderFeed(){
       }
       var curPx = livePremium; // null if pending or if this is a pre-fix entry
       var lotSz = LOT_SIZES[sig.sym] || LOT_SIZES.DEFAULT || 50;
-      var diff = curPx!==null ? (activeTrade.bias==="BULLISH" ? (curPx-activeTrade.entry_px) : (activeTrade.entry_px-curPx)) : 0;
+      // FIX: same class of bug as checkSignalLevels — was
+      // bias==="BULLISH" ? (curPx-entry) : (entry-curPx), correct for
+      // tracking the underlying's price but backwards for the option's
+      // own premium. You're always long the option, so rising premium is
+      // always profit, regardless of bullish/bearish bias.
+      var diff = curPx!==null ? (curPx-activeTrade.entry_px) : 0;
       var livePnl = curPx!==null ? Math.round(diff * lotSz) : null;
       var pnlPct = (curPx!==null && activeTrade.entry_px) ? (diff/activeTrade.entry_px*100) : 0;
       var isProfit = livePnl!==null && livePnl >= 0;
@@ -6103,11 +6108,23 @@ function checkSignalLevels(){
     // nothing was watching it. This now checks e.sl_px regardless of
     // whether it's the original stop (OPEN) or the breakeven stop (T1_HIT).
     if((e.status==="OPEN"||e.status==="T1_HIT") && e.sl_px>0){
-      var slBreached = bull ? px<=e.sl_px : px>=e.sl_px;
+      // FIX: was `bull ? px<=e.sl_px : px>=e.sl_px` — that direction logic
+      // was correct for tracking the UNDERLYING's price (a bearish bet
+      // wants the underlying to fall), but is backwards now that this
+      // tracks the OPTION'S OWN premium. You are always LONG the option
+      // (buying CE or PE), so the premium always needs to RISE for profit
+      // and FALL for loss — regardless of bullish/bearish bias. The old
+      // logic checked px>=sl_px for bearish trades, which is true almost
+      // immediately (entry premium starts above the SL threshold by
+      // definition — SL is always 30% below entry), firing a false SL_HIT
+      // on nearly every bearish trade right after it opened. Confirmed
+      // directly against real data: EICHERMOT, entry 77.8, SL 54.46 —
+      // 77.8>=54.46 was true from the very first check.
+      var slBreached = px<=e.sl_px;
       if(slBreached){
         var wasT1=e._t1Hit; // capture before overwriting anything below
         e.status="SL_HIT"; e.exit_px=e.sl_px; e.exitTime=istDateTime();
-        var diff=bull?e.sl_px-e.entry_px:e.entry_px-e.sl_px;
+        var diff=e.sl_px-e.entry_px; // always negative — sl_px is always below entry
         e.pnl=Math.round(diff*lotSize);
         // A post-T1 breakeven stop closes at ~0 P&L, not a real loss —
         // label it distinctly so journal/setup-performance stats don't
@@ -6127,7 +6144,9 @@ function checkSignalLevels(){
     if(e.status==="OPEN"){
       // T1 hit check — milestone, not an exit. Full qty continues to T2.
       if(e.t1_px>0&&!e._t1Hit){
-        var t1Hit = bull ? px>=e.t1_px : px<=e.t1_px;
+        // Same fix as the SL check above — premium rising is always
+        // profit when you're long the option, regardless of bias.
+        var t1Hit = px>=e.t1_px;
         if(t1Hit){
           e._t1Hit=true;
           e.status="T1_HIT"; e.outcome="WIN";
@@ -6146,9 +6165,10 @@ function checkSignalLevels(){
 
     // T2 hit — full position P&L (no partial was booked at T1)
     if(e.t2_px>0){
-      var t2Hit = bull ? px>=e.t2_px : px<=e.t2_px;
+      // Same fix as SL/T1 above.
+      var t2Hit = px>=e.t2_px;
       if(t2Hit){
-        var t2diff=bull?e.t2_px-e.entry_px:e.entry_px-e.t2_px;
+        var t2diff=e.t2_px-e.entry_px; // always positive — t2_px is always above entry
         e.status="T2_HIT"; e.exit_px=e.t2_px; e.exitTime=istDateTime();
         e.pnl=Math.round(t2diff*lotSize); // full position throughout
         e.outcome="BIG WIN"; e.notes=(e.notes||"")+" | 🏆 T2 hit ₹"+e.t2_px;
@@ -6265,14 +6285,18 @@ function renderSignalEntry(e, isOpen){
   var unrealPnl = null, unrealPct = null;
   if(isOpen && cmp!==null && e.entry_px){
     var lotSize = LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
-    var diff = e.bias==="BULLISH" ? cmp-e.entry_px : e.entry_px-cmp;
+    // FIX: same class of bug as checkSignalLevels and the live feed
+    // banner — was bias-conditional, correct for the underlying's price,
+    // backwards for the option's own premium. Always long the option, so
+    // rising premium is always profit.
+    var diff = cmp-e.entry_px;
     unrealPnl = Math.round(diff*lotSize);
     unrealPct = Math.round((diff/e.entry_px)*100*10)/10;
   }
   // T1_HIT: show combined (booked T1 P&L + unrealised remaining)
   if(e.status==="T1_HIT" && cmp!==null && e.entry_px){
     var lotSize2 = LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
-    var diff2 = e.bias==="BULLISH" ? cmp-e.entry_px : e.entry_px-cmp;
+    var diff2 = cmp-e.entry_px;
     var remainPnl = Math.round(diff2*lotSize2*0.5);
     unrealPnl = (e.pnl||0) + remainPnl; // booked + remaining
     unrealPct = null;
