@@ -4807,6 +4807,41 @@ var _WINRATE_CACHE_MS = 10*60*1000;   // 10 min
 // fetchSetupWinrate — a premium is only meaningful at the exact moment a
 // signal fires, reusing a stale one from a different moment would
 // reintroduce a different version of the same problem.
+// ── LIVE PREMIUM FOR OPEN POSITIONS — separate from fetchRealPremium above.
+// That one is uncached (only meaningful once, at the exact moment a signal
+// fires). This one gets called on every card render for an open position,
+// so it needs caching — a 60s TTL is a reasonable balance between staying
+// current and not hammering the server on every re-render. Fixes the
+// "live P&L in lakhs" bug: the card was comparing the underlying's live
+// price against the option's premium-based entry — confirmed directly,
+// CRUDEOIL's shown 8194 matched the underlying's price exactly, not any
+// option premium, while entry_px was the real premium (409.1).
+var _livePremiumCache = {};   // "sym|strike|optType" -> {premium, ts}
+var _LIVE_PREMIUM_TTL_MS = 60*1000;
+
+function getLivePremiumCached(sym, strike, optType){
+  var key = sym+"|"+strike+"|"+optType;
+  var c = _livePremiumCache[key];
+  if(c && (Date.now()-c.ts) < _LIVE_PREMIUM_TTL_MS) return c.premium;
+  return null; // not cached / stale — caller triggers a fetch, doesn't block on it
+}
+
+function refreshLivePremium(sym, strike, optType){
+  if(!sym || !strike || !optType || !SERVER_URL) return;
+  var key = sym+"|"+strike+"|"+optType;
+  if(_livePremiumCache[key] && _livePremiumCache[key]._fetching) return; // already in flight
+  _livePremiumCache[key] = _livePremiumCache[key] || {};
+  _livePremiumCache[key]._fetching = true;
+  fetchRealPremium(sym, strike, optType, function(prem){
+    _livePremiumCache[key] = {
+      premium: prem && prem.premium ? prem.premium : null,
+      ts: Date.now(), _fetching: false
+    };
+    try{renderJ();}catch(e){}      // refresh the journal view once it lands
+    try{renderFeed();}catch(e){}   // and any live card showing this trade
+  });
+}
+
 function fetchRealPremium(sym, strike, optType, cb){
   if(!sym || !strike || !optType || !SERVER_URL){ cb(null); return; }
   fetch(SERVER_URL+"/option_premium?sym="+encodeURIComponent(sym)+
@@ -4923,6 +4958,16 @@ function processScan(sigs){
           sigRef.sl = ""+(p*0.70).toFixed(2);
           sigRef.target1 = ""+(p*1.50).toFixed(2);
           sigRef.target2 = ""+(p*2.00).toFixed(2);
+          // FIX: confirmed via direct analysis of a real signal report —
+          // rr was left untouched here, still showing the OLD ratio
+          // computed from the underlying's technical levels (before this
+          // premium rewrite), completely disconnected from the entry/SL/T1
+          // numbers displayed right next to it on the same card and in the
+          // same journal row. The 30/50/100% scheme is fixed, so this is
+          // now always the same real ratio, not a leftover from a
+          // different calculation.
+          var riskPct = p - (p*0.70), rewardPct = (p*1.50) - p;
+          sigRef.rr = "1:"+(rewardPct/riskPct).toFixed(2);
           sigRef.premiumTradingsymbol = prem.tradingsymbol;
           sigRef.premiumExpiry = prem.expiry;
           try{autoLogSignal(sigRef);}catch(e){}
@@ -5245,27 +5290,53 @@ function renderFeed(){
     })[0];
     var liveStatusHtml = "";
     if(activeTrade && activeTrade.entry_px){
-      var curPx = s.px || activeTrade.entry_px;
+      // FIX: was `s.px || activeTrade.entry_px` — s.px is the UNDERLYING's
+      // own live price, not the option's premium. Confirmed directly from
+      // a real report: CRUDEOIL showed "+₹7,78,490" on an open position —
+      // that number only makes sense as (underlying_price - premium) ×
+      // lot_size, not any real option P&L. Now uses the option's own
+      // cached live premium. Older journal entries logged before strike/
+      // optType were tracked have no way to know which contract to price —
+      // for those, showing "unavailable" is honest; showing a wrong
+      // number computed from the underlying would not be.
+      var livePremium = null, premiumPending = false;
+      if(activeTrade.strike && activeTrade.optType){
+        livePremium = getLivePremiumCached(sig.sym, activeTrade.strike, activeTrade.optType);
+        if(livePremium===null){
+          premiumPending = true;
+          refreshLivePremium(sig.sym, activeTrade.strike, activeTrade.optType);
+        }
+      }
+      var curPx = livePremium; // null if pending or if this is a pre-fix entry
       var lotSz = LOT_SIZES[sig.sym] || LOT_SIZES.DEFAULT || 50;
-      var diff = activeTrade.bias==="BULLISH" ? (curPx-activeTrade.entry_px) : (activeTrade.entry_px-curPx);
-      var livePnl = Math.round(diff * lotSz);
-      var pnlPct = activeTrade.entry_px ? (diff/activeTrade.entry_px*100) : 0;
-      var isProfit = livePnl >= 0;
+      var diff = curPx!==null ? (activeTrade.bias==="BULLISH" ? (curPx-activeTrade.entry_px) : (activeTrade.entry_px-curPx)) : 0;
+      var livePnl = curPx!==null ? Math.round(diff * lotSz) : null;
+      var pnlPct = (curPx!==null && activeTrade.entry_px) ? (diff/activeTrade.entry_px*100) : 0;
+      var isProfit = livePnl!==null && livePnl >= 0;
       var statusLbl = activeTrade.status==="T1_HIT" ? "T1 HIT — Risk-Free" : "LIVE";
       var statusIcon = activeTrade.status==="T1_HIT" ? "🔒" : "🟢";
-      var pnlColor = isProfit ? "var(--g)" : "var(--r)";
-      var bgTint = isProfit ? "rgba(34,197,94,.12)" : "rgba(239,68,68,.12)";
-      var borderTint = isProfit ? "rgba(34,197,94,.35)" : "rgba(239,68,68,.35)";
+      var pnlColor = livePnl===null ? "var(--m)" : (isProfit ? "var(--g)" : "var(--r)");
+      var bgTint = livePnl===null ? "rgba(148,163,184,.10)" : (isProfit ? "rgba(34,197,94,.12)" : "rgba(239,68,68,.12)");
+      var borderTint = livePnl===null ? "rgba(148,163,184,.30)" : (isProfit ? "rgba(34,197,94,.35)" : "rgba(239,68,68,.35)");
+      // Three genuinely different states, shown distinctly rather than
+      // collapsed into one number: a real live P&L, "still fetching the
+      // real premium" (first render of a fresh open position), and
+      // "unavailable" (a journal entry logged before strike/optType were
+      // tracked — no way to know which contract to price, so no number is
+      // shown rather than a wrong one).
+      var pnlDisplay = livePnl!==null
+        ? "<div style='font-size:.78rem;font-weight:800;color:"+pnlColor+"'>"+(isProfit?"+":"")+"₹"+Math.abs(livePnl).toLocaleString("en-IN")+"</div>"+
+          "<div style='font-size:.55rem;color:"+pnlColor+"'>"+(isProfit?"+":"")+pnlPct.toFixed(2)+"%</div>"
+        : premiumPending
+          ? "<div style='font-size:.68rem;color:var(--m)'>⏳ fetching…</div>"
+          : "<div style='font-size:.62rem;color:var(--m)'>Live P&amp;L unavailable</div>";
       liveStatusHtml =
         "<div style='margin:0 10px 8px;padding:8px 10px;background:"+bgTint+";border:1px solid "+borderTint+";border-radius:8px;display:flex;align-items:center;justify-content:space-between'>"+
           "<div style='display:flex;align-items:center;gap:6px'>"+
             "<span style='font-size:.62rem;font-weight:800;color:"+pnlColor+"'>"+statusIcon+" "+statusLbl+"</span>"+
             "<span style='font-size:.58rem;color:var(--m)'>Entry ₹"+activeTrade.entry_px.toLocaleString("en-IN")+" 🔒</span>"+
           "</div>"+
-          "<div style='text-align:right'>"+
-            "<div style='font-size:.78rem;font-weight:800;color:"+pnlColor+"'>"+(isProfit?"+":"")+"₹"+Math.abs(livePnl).toLocaleString("en-IN")+"</div>"+
-            "<div style='font-size:.55rem;color:"+pnlColor+"'>"+(isProfit?"+":"")+pnlPct.toFixed(2)+"%</div>"+
-          "</div>"+
+          "<div style='text-align:right'>"+pnlDisplay+"</div>"+
         "</div>";
 
       // LIVE LAYER STATUS — placed inside the collapsible "Show analysis
@@ -5854,6 +5925,12 @@ function _writeJournal(sig, source){
     sl_px: slPx,
     t1_px: t1Px,
     t2_px: parseFloat(sig.target2||sig.target1)||t1Px,
+    // Needed to fetch the CORRECT option's live premium for open-position
+    // P&L — without these, live P&L has no way to know which contract's
+    // price to check, only the underlying's (the bug this whole fix
+    // addresses in the first place).
+    strike: sig.strike||0,
+    optType: sig.optType||"",
     rr: sig.rr||"1:2",
     why: sig.why||"",
     vix: (typeof VIX!=="undefined"?VIX:0),
@@ -6022,11 +6099,18 @@ function renderJ(){
   var avgPnl = closed.length ? Math.round(totPnl/closed.length) : 0;
 
   // Stats bar
+  // FIX: same bug as renderSignalEntry — was comparing the underlying's
+  // live price (liveS.px) against entry_px (now a real premium). Sums
+  // only positions with a real, currently-known premium; skips positions
+  // still fetching or without strike/optType recorded, rather than mixing
+  // in a wrong number that would silently corrupt this total.
   var unrealTotal=0;
   open.forEach(function(e){
-    var liveS=allS().filter(function(x){return x.sym===e.sym;})[0];
-    if(liveS&&liveS.px&&e.entry_px){
-      var diff=e.bias==="BULLISH"?liveS.px-e.entry_px:e.entry_px-liveS.px;
+    if(!e.strike || !e.optType) return;
+    var cachedPrem = getLivePremiumCached(e.sym, e.strike, e.optType);
+    if(cachedPrem===null){ refreshLivePremium(e.sym, e.strike, e.optType); return; }
+    if(cachedPrem && e.entry_px){
+      var diff=e.bias==="BULLISH"?cachedPrem-e.entry_px:e.entry_px-cachedPrem;
       unrealTotal+=Math.round(diff*(LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50));
     }
   });
@@ -6079,20 +6163,31 @@ function renderSignalEntry(e, isOpen){
   var bColor = e.bias==="BULLISH"?"var(--g)":"var(--r)";
   var pnlStr = e.pnl!=null ? ((e.pnl>=0?"+":"")+"₹"+Math.abs(e.pnl).toLocaleString("en-IN")) : "–";
 
-  // ── Get live CMP from allS() ──
-  var liveS = allS().filter(function(x){return x.sym===e.sym;})[0];
-  var cmp = liveS&&liveS.px ? liveS.px : 0;
+  // FIX: this whole block used to compare the UNDERLYING's live price
+  // (liveS.px) against e.entry_px — but entry_px is now a real option
+  // premium. Confirmed directly from a real report: CRUDEOIL's shown
+  // "+₹7,78,490" only makes sense as (underlying_price - premium) × lot
+  // size — the underlying's price (8194) matched exactly what was
+  // displayed at the top of the card. Uses the option's own cached live
+  // premium now, with the same three-state handling (real value / still
+  // fetching / unavailable for pre-fix entries with no strike recorded)
+  // as the equivalent fix on the live feed card.
+  var cmp = null, cmpPending = false;
+  if(e.strike && e.optType){
+    cmp = getLivePremiumCached(e.sym, e.strike, e.optType);
+    if(cmp===null){ cmpPending = true; refreshLivePremium(e.sym, e.strike, e.optType); }
+  }
 
-  // ── Unrealised P&L (only for open signals with live price) ──
+  // ── Unrealised P&L (only for open signals with a real live premium) ──
   var unrealPnl = null, unrealPct = null;
-  if(isOpen && cmp && e.entry_px){
+  if(isOpen && cmp!==null && e.entry_px){
     var lotSize = LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
     var diff = e.bias==="BULLISH" ? cmp-e.entry_px : e.entry_px-cmp;
     unrealPnl = Math.round(diff*lotSize);
     unrealPct = Math.round((diff/e.entry_px)*100*10)/10;
   }
   // T1_HIT: show combined (booked T1 P&L + unrealised remaining)
-  if(e.status==="T1_HIT" && cmp && e.entry_px){
+  if(e.status==="T1_HIT" && cmp!==null && e.entry_px){
     var lotSize2 = LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
     var diff2 = e.bias==="BULLISH" ? cmp-e.entry_px : e.entry_px-cmp;
     var remainPnl = Math.round(diff2*lotSize2*0.5);
@@ -6120,6 +6215,9 @@ function renderSignalEntry(e, isOpen){
       uPrefix+"₹"+Math.abs(unrealPnl).toLocaleString("en-IN")+
       (e.status==="T1_HIT"?" (T1+)":"")+
       "</span>";
+  } else if(isOpen || e.status==="T1_HIT"){
+    unrealStr = "<span style='margin-left:auto;font-size:.6rem;color:var(--m)'>"+
+      (cmpPending ? "⏳ fetching…" : "Live P&amp;L unavailable")+"</span>";
   }
   h += "<div style='padding:2px 12px 8px;display:flex;align-items:center;gap:8px'>" +
     "<span style='font-size:12px;font-weight:700;color:"+bColor+"'>"+
