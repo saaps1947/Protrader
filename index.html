@@ -1240,8 +1240,20 @@ function _doFetchFromServer(){
         // directly, which is more accurate than guessing from client-side
         // fetch timing alone (that only catches OUR fetch failing, not a
         // stale value the server itself is recycling from its own cache).
-        sc.oiServerStale = sd.oi.stale || sd.oi.cached || false;
+        // FIX: "cached:true" and "stale:true" were being treated as the
+        // SAME thing (sc.oiServerStale = sd.oi.stale || sd.oi.cached).
+        // Being served from cache is architecturally ALWAYS true — that's
+        // how the background-thread refresh pipeline works — so this
+        // marked essentially every stock's OI as stale regardless of its
+        // real age. Now only the explicit stale flag OR a genuinely old
+        // cache_age_min (server now sends this — was previously absent
+        // entirely for stock OI) determines staleness.
+        sc.oiServerStale = sd.oi.stale || false;
         sc.oiServerAgeMin = sd.oi.cache_age_min || 0;
+        // Disambiguates "genuinely 0 minutes old" from "server sent no age
+        // at all" — the ||0 fallback above can't tell those apart on its
+        // own, and the scoring loop needs to know which one it's looking at.
+        sc.oiServerAgeKnown = (sd.oi.cache_age_min !== undefined && sd.oi.cache_age_min !== null);
         sc.oiFetchedAt = Date.now();
         sc.cC15 = sd.oi.ce_chg_15m||0; sc.pC15 = sd.oi.pe_chg_15m||0;
         sc.oi15Avail = sd.oi.oi_15m_available||false;
@@ -3542,9 +3554,15 @@ function localSigs(){
     var isMCX = isSymMCX(s.sym);
     // Combined OI staleness — matches the card's own "⚠ STALE" display
     // check exactly, so scoring never trusts OI the UI is simultaneously
-    // telling the user not to trust. Catches both an explicit server-side
-    // stale flag AND the client-side fallback (no fresh fetch in 10 min).
-    var _oiAgeMinChk = s.oiServerStale ? s.oiServerAgeMin
+    // telling the user not to trust.
+    // FIX: this used to only trust the server's accurate age
+    // (oiServerAgeMin) when oiServerStale was ALREADY true — backwards,
+    // since the whole point of the age is to DETERMINE staleness, not be
+    // consulted only after staleness is already known some other way. Now
+    // prefers the server's real age whenever it's genuinely known (see
+    // oiServerAgeKnown above), falling back to client-side fetch timing
+    // only when the server sent no age info at all.
+    var _oiAgeMinChk = s.oiServerAgeKnown ? s.oiServerAgeMin
                       : (s.oiFetchedAt ? Math.round((Date.now()-s.oiFetchedAt)/60000) : null);
     var oiIsStaleForScoring = s.oiServerStale || _oiAgeMinChk===null || _oiAgeMinChk>10;
     if(isMCX){ if(!isMCXOpen()) return; } else { if(!isOpen()) return; }
@@ -4621,6 +4639,7 @@ function localSigs(){
         sym:s.sym, bias:"BULLISH", trade:"Buy "+(atm+step)+" CE", strategy:strat,
         why:whyText, confidence:conf,
         entry:""+rr.entry, sl:""+rr.sl, target1:""+rr.t1, target2:""+rr.t2,
+        strike:atm+step, optType:"CE",
         rr:rr.rr, urgency:urg, entryNote:rr.entryNote||"",
         timeframe:golden?"Daily":orbBreakout?"5M":cprNarrow?"15M":bullOB?"1H":"5M",
         isBTST:isBtst,
@@ -4671,6 +4690,7 @@ function localSigs(){
         sym:s.sym, bias:"BEARISH", trade:"Buy "+atm+" PE", strategy:strat2,
         why:whyBear, confidence:conf2,
         entry:""+rr2.entry, sl:""+rr2.sl, target1:""+rr2.t1, target2:""+rr2.t2,
+        strike:atm, optType:"PE",
         rr:rr2.rr, urgency:urg2, entryNote:rr2.entryNote||"",
         timeframe:death?"Daily":orbBreakdown?"5M":cprNarrow?"15M":bearOB?"1H":"5M",
         isBTST:false, btstNote:"",
@@ -4778,6 +4798,25 @@ function _saveSigFirstSeen(){
 var _winrateCache = {};        // "setupKey|regime" -> {data, ts}
 var _WINRATE_CACHE_MS = 10*60*1000;   // 10 min
 
+// ── REAL OPTION PREMIUM — fixes entry_px/sl_px/t1_px/t2_px reflecting the
+// underlying's own price instead of the actual option's premium. Found via
+// direct analysis of a real signal report: GOLD showed "Capital Deployed"
+// of ₹1.55 crore because entry_px was GOLD's own price (~₹155,253,
+// essentially the strike itself), not the option's real premium (a real
+// premium would be a small fraction of that). Deliberately NOT cached like
+// fetchSetupWinrate — a premium is only meaningful at the exact moment a
+// signal fires, reusing a stale one from a different moment would
+// reintroduce a different version of the same problem.
+function fetchRealPremium(sym, strike, optType, cb){
+  if(!sym || !strike || !optType || !SERVER_URL){ cb(null); return; }
+  fetch(SERVER_URL+"/option_premium?sym="+encodeURIComponent(sym)+
+        "&strike="+encodeURIComponent(strike)+"&type="+encodeURIComponent(optType),
+        {headers:ptHeaders(),signal:AbortSignal.timeout(15000)})
+    .then(function(r){return r.json();})
+    .then(function(d){ cb(d&&d.ok ? d : null); })
+    .catch(function(){ cb(null); });
+}
+
 function fetchSetupWinrate(setupKey, regime, cb){
   if(!setupKey || !SERVER_URL){ cb(null); return; }
   var key = setupKey+"|"+(regime||"");
@@ -4861,8 +4900,36 @@ function processScan(sigs){
       _saveSigFirstSeen(); // persist so page reload keeps original timestamp
     }
 
-    // Auto-log HIGH conviction signals
-    if(sig.urgency==="HIGH") try{autoLogSignal(sig);}catch(e){}
+    // FIX: this used to call autoLogSignal(sig) immediately, synchronously,
+    // using entry/sl/target1/target2 computed from the UNDERLYING's own
+    // technical levels — the exact bug found in a real signal report
+    // analysis (GOLD's "Capital Deployed" was 1.55 crore because entry_px
+    // was GOLD's own price, not its option's actual premium). Now fetches
+    // the REAL premium for the exact contract this signal recommends
+    // first, rewrites entry/sl/target1/target2 in terms of that real
+    // premium (30% SL / 50% T1 / 100% T2 — confirmed convention), and only
+    // THEN logs — so the journal never records underlying-price-based
+    // numbers again. Mutates the same sig object the card itself displays,
+    // so the card updates to the real premium too, not just the journal.
+    // If the premium fetch fails, the signal still displays normally with
+    // its technical levels as a fallback — it simply doesn't get
+    // auto-journaled that cycle, rather than journal a wrong number.
+    if(sig.urgency==="HIGH" && sig.confidence>=82 && sig.strike && sig.optType){
+      (function(sigRef){
+        fetchRealPremium(sigRef.sym, sigRef.strike, sigRef.optType, function(prem){
+          if(!prem || !prem.premium) return; // fetch failed — skip, don't journal a guess
+          var p = prem.premium;
+          sigRef.entry = ""+p;
+          sigRef.sl = ""+(p*0.70).toFixed(2);
+          sigRef.target1 = ""+(p*1.50).toFixed(2);
+          sigRef.target2 = ""+(p*2.00).toFixed(2);
+          sigRef.premiumTradingsymbol = prem.tradingsymbol;
+          sigRef.premiumExpiry = prem.expiry;
+          try{autoLogSignal(sigRef);}catch(e){}
+          try{renderFeed();}catch(e){} // reflect the real premium on the card too
+        });
+      })(sig);
+    }
 
     // FIX 3: Match slot by sym+bias (not sym alone) — prevents a NEUTRAL refresh
     // from evicting a BULLISH signal and resetting its firstSeen on return
