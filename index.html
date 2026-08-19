@@ -5981,7 +5981,10 @@ function checkSignalLevels(){
   SIGNAL_LOG.filter(function(x){return x.status==="OPEN"||x.status==="T1_HIT";}).forEach(function(e){
     var s=allS().filter(function(x){return x.sym===e.sym;})[0];
     if(!s||!s.px||!e.entry_px) return;
-    var px=s.px;
+    var px=s.px; // underlying's own price — legitimate for the layer-
+                 // breakdown thesis check below, which is about whether the
+                 // UNDERLYING's own technical setup still holds, nothing to
+                 // do with the option's premium.
 
     // ── LAYER-BREAKDOWN DETECTION — LOG-ONLY MODE ──
     // Detects when 2+ layers disagree with the trade's original direction
@@ -6007,6 +6010,24 @@ function checkSignalLevels(){
 
     var bull=e.bias==="BULLISH";
     var lotSize=LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
+
+    // ── CRITICAL FIX: SL/T1/T2 auto-detection below was comparing the
+    // UNDERLYING's live price (px, set above) against PREMIUM-based
+    // targets — confirmed directly from a real, live case: CRUDEOIL's
+    // t2_px is 818.2 (a real option premium), but the underlying trades
+    // in the thousands (strike 8250), so px>=818.2 was true almost
+    // immediately, firing a false T2_HIT while the actual option (per
+    // Zerodha) had barely moved from entry. This silently, actively
+    // corrupted journal outcomes for every trade opened since the premium
+    // fix shipped — not a display bug, a real wrong status transition.
+    // Now requires the option's own real cached premium before any of the
+    // checks below run. If it isn't cached yet, this triggers a refresh
+    // and skips the check entirely for this cycle — never falls back to
+    // the underlying's price, which is exactly the bug being fixed.
+    if(!e.strike || !e.optType) return; // pre-fix entry — no way to know which contract, don't guess
+    var optPx = getLivePremiumCached(e.sym, e.strike, e.optType);
+    if(optPx===null){ refreshLivePremium(e.sym, e.strike, e.optType); return; }
+    px = optPx; // every check below now compares against the real premium
 
     // ── SL / BREAKEVEN-STOP CHECK — runs for OPEN and T1_HIT alike ─────────
     // BUG FIX: this used to be nested inside `if(e.status==="OPEN")`, so once
