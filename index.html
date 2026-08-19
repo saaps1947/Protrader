@@ -1636,10 +1636,33 @@ function nav(el,id){
   document.querySelectorAll(".sec").forEach(function(s){s.classList.remove("on");});
   document.getElementById("sec-"+id).classList.add("on");
   window.scrollTo(0,0);
-  if(id==="jour"){renderJ();renderPerformance();}
+  // FIX: renderJ() used to only fire once, on tab open — after that,
+  // nothing re-checked whether the cached premium (60s TTL) had gone
+  // stale while the user was actively looking at open positions. Real
+  // concern, confirmed: staying on this tab could silently show a P&L
+  // number that's minutes old. Starts a periodic refresh ONLY while this
+  // tab is actually visible — stopped immediately on navigating away, so
+  // it's not wastefully polling in the background for a view nobody's
+  // looking at.
+  stopJournalAutoRefresh();
+  if(id==="jour"){renderJ();renderPerformance();startJournalAutoRefresh();}
   if(id==="jour")renderJ();
   if(id==="auto")updAT();
   if(id==="bt")loadBtHealth();
+}
+var _journalRefreshTimer = null;
+function startJournalAutoRefresh(){
+  stopJournalAutoRefresh(); // never allow two overlapping timers
+  _journalRefreshTimer = setInterval(function(){
+    try{ renderJ(); }catch(e){} // renderJ -> renderSignalEntry already
+    // checks the cache and triggers a fresh fetch for anything expired —
+    // this timer's only job is to make that check happen periodically
+    // instead of only once.
+  }, 30000); // 30s — inside the 60s cache TTL, so a position never sits
+             // stale for more than one missed tick while being watched
+}
+function stopJournalAutoRefresh(){
+  if(_journalRefreshTimer){ clearInterval(_journalRefreshTimer); _journalRefreshTimer=null; }
 }
 // FIX: was querySelectorAll(".nb")[2] (Auto tab), a hardcoded position that
 // assumed Signals(0)/Scanner(1)/Auto(2)/... — now that Scanner is removed,
