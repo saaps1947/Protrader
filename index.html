@@ -993,6 +993,16 @@ function tradeable(){
 
 var CS = SD.idx[0];
 var VIX = 17.5;
+// FIX: found via systematic AST-based review — _lastTokenExpiredAlert was
+// read and assigned (line ~1198) but never actually declared anywhere in
+// the file. In strict mode this throws a ReferenceError, every single
+// time — meaning the Kite-token-expiry alert has very likely never once
+// fired since it was built. Worse than a missing alert: this sits inside
+// the main /market response callback with no surrounding try/catch, so
+// the crash could be silently truncating whatever processing comes after
+// it in that same callback, every day the token expires, until someone
+// notices something is wrong and manually regenerates it.
+var _lastTokenExpiredAlert = 0;
 var USDINR = 84.0;
 // Fallback lot sizes — overwritten by /lot_sizes endpoint on startup (live from Zerodha NFO CSV)
 // Updated to current SEBI values (Nov 2024): NIFTY 65, BANKNIFTY 35, FINNIFTY 65
@@ -1925,7 +1935,14 @@ function _downloadSnapCSV(rows,fname){
   rows.forEach(function(r){
     csv.push(cols.map(function(c){
       var v=r[c]==null?"":String(r[c]);
-      return v.indexOf(",")>=0?'"'+v+'"':v;
+      // FIX: found via systematic review — this only wrapped a field in
+      // quotes if it contained a comma, but never escaped embedded double
+      // quotes within it. A field with BOTH a comma and a quote would
+      // produce genuinely malformed CSV (the unescaped quote prematurely
+      // closes the field). Now matches the already-correct pattern proven
+      // in the backtest export below — double any embedded quotes first,
+      // and also check for embedded newlines, not just commas.
+      return (v.indexOf(",")>=0||v.indexOf('"')>=0||v.indexOf("\n")>=0)?'"'+v.replace(/"/g,'""')+'"':v;
     }).join(","));
   });
   var a=document.createElement("a");
@@ -6047,7 +6064,12 @@ function _writeJournal(sig, source){
       x.notes   = "Auto-closed: direction flipped to "+sig.bias+" (was "+wasStatus+")";
       delete _sigFirstSeen[x.sym+x.bias]; _saveSigFirstSeen();
       if(x.entry_px&&x.exit_px){
-        var diff = x.bias==="BULLISH"?x.exit_px-x.entry_px:x.entry_px-x.exit_px;
+        // FIX: found via systematic review — same backwards direction bug
+        // as checkSignalLevels/renderSignalEntry/the live feed banner, just
+        // never caught here since this direction-flip auto-close path
+        // isn't triggered often. Must be unconditional now — premium
+        // rising is always profit, regardless of the closed trade's bias.
+        var diff = x.exit_px-x.entry_px;
         x.pnl = Math.round(diff*(LOT_SIZES[x.sym]||LOT_SIZES.DEFAULT||50));
       }
       ingestJournalEntry(x);
@@ -6105,9 +6127,10 @@ function updateSignalOutcome(id, outcome, exit_px, notes){
   e.exitTime = istDateTime();
   e.notes    = notes||"";
   if(e.entry_px && e.exit_px){
-    var diff = e.bias==="BULLISH" ?
-      e.exit_px - e.entry_px :
-      e.entry_px - e.exit_px;
+    // FIX: found via systematic review — same bug as elsewhere, just never
+    // caught here since it's only triggered by the manual SL/T1/T2/Manual
+    // buttons on a journal card, not the auto-detection path.
+    var diff = e.exit_px - e.entry_px;
     var lotSize = LOT_SIZES[e.sym] || LOT_SIZES["DEFAULT"] || 50;
     e.pnl = Math.round(diff * lotSize);
   }
@@ -6292,7 +6315,11 @@ function renderJ(){
     var cachedPrem = getLivePremiumCached(e.sym, e.strike, e.optType);
     if(cachedPrem===null){ refreshLivePremium(e.sym, e.strike, e.optType); return; }
     if(cachedPrem && e.entry_px){
-      var diff=e.bias==="BULLISH"?cachedPrem-e.entry_px:e.entry_px-cachedPrem;
+      // FIX: found via systematic review — the underlying-vs-premium part
+      // of this line was already fixed, but the bull/bear direction bug
+      // sitting right next to it was missed at the time. Must be
+      // unconditional — premium rising is always profit.
+      var diff=cachedPrem-e.entry_px;
       unrealTotal+=Math.round(diff*(LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50));
     }
   });
@@ -6551,8 +6578,14 @@ function exportJ(){
     var pnlPerLot = (e.pnl!=null && ls) ? Math.round(e.pnl / (ls * qty)) : "";
     rows.push([
       e.id, e.sym, e.bias,
-      '"'+(e.trade||"").replace(/"/g,"'")+'"',
-      '"'+(e.strategy||"").replace(/"/g,"'")+'"',
+      // FIX: found via systematic review — trade/strategy only escaped
+      // quotes, not commas, unlike why (below) which correctly does both.
+      // Current naming conventions happen to avoid commas ("OB Resistance
+      // + VWAP"), so this hasn't visibly broken anything yet, but any
+      // future value containing one would silently shift every column
+      // after it. Now consistent with why's escaping.
+      '"'+(e.trade||"").replace(/"/g,"'").replace(/,/g," ")+'"',
+      '"'+(e.strategy||"").replace(/"/g,"'").replace(/,/g," ")+'"',
       e.setupKey||"Unknown",
       e.confidence||"", e.urgency||"HIGH", e.layers||"",
       ls, qty, capDep,
@@ -6859,6 +6892,18 @@ function ssSave(){
   KITE.apiKey=document.getElementById("ss_key").value.trim();
   KITE.accessToken=document.getElementById("ss_tok").value.trim();
   try{localStorage.setItem("protrader_api",JSON.stringify({apiKey:KITE.apiKey,accessToken:KITE.accessToken,apiSecret:KITE.apiSecret}));}catch(e){}
+  // FIX: found via systematic review — this saved and correctly used the
+  // credentials (kiteHeaders() reads straight from KITE.apiKey/accessToken,
+  // so the app was never actually broken), but never set KITE.connected or
+  // refreshed the badge, unlike saveConn() which does both. Someone who
+  // manually typed credentials here (instead of using the OAuth login
+  // button) would see "Not Connected" in the UI even while the app was
+  // working correctly, until their next reload — when a separate,
+  // startup-only restoration path would finally infer connected=true.
+  if(KITE.apiKey && KITE.accessToken){
+    KITE.connected=true;
+    updBadges(true);
+  }
 }
 function ssLogin(){var k=document.getElementById("ss_key").value.trim()||KITE.apiKey;if(!k){var s=document.getElementById("ss_st");s.className="ss-st err";s.textContent="Enter API Key first";return;}window.open("https://kite.zerodha.com/connect/login?api_key="+k+"&v=3","_blank");}
 function clearAll(){if(!confirm("Clear all saved data?"))return;try{localStorage.clear();}catch(e){}KITE={apiKey:"",accessToken:"",apiSecret:"",connected:false};SERVER_URL="";updBadges(false);}
