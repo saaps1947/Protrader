@@ -5276,7 +5276,16 @@ function renderFeed(){
     var convLbl=sig.confidence>=88?"Very High":sig.confidence>=82?"High":sig.confidence>=76?"Moderate":"Watch";
     var badge=bt?"<span class='sc-badge bbtst'>🌙 BTST</span>":sig._isNew?"<span class='sc-badge bnew'>NEW</span>":"<span class='sc-badge bupd'>UPD</span>";
     var hbadge=sig.urgency==="HIGH"?"<span class='bhigh'>🔥 HIGH</span>":"";
-    var age=sig._firstSeenTs?Math.round((Date.now()-sig._firstSeenTs)/60000):0;
+    // FIX: age could show "NaNh NaNm ago" — traced to sig._firstSeenTs
+    // sometimes being a truthy-but-non-numeric value (e.g. a stale
+    // localStorage entry from before this field's shape was established).
+    // Date.now() minus a non-numeric value produces NaN, which the
+    // original ternary chain had no guard against — NaN fails every
+    // comparison (even NaN<1), so it fell through to the final "Xh Ym"
+    // branch with garbage in both slots. Now explicitly validates it's a
+    // real, finite number first.
+    var _tsValid = typeof sig._firstSeenTs==="number" && isFinite(sig._firstSeenTs) && sig._firstSeenTs>0;
+    var age=_tsValid?Math.round((Date.now()-sig._firstSeenTs)/60000):0;
     var ageStr=age<1?"just now":age===1?"1 min":age<60?age+" min":Math.floor(age/60)+"h "+(age%60)+"m";
     var firstSeenStr=sig._firstSeen||sig._time||"";
     var timeDisplay=sig._isNew?
@@ -6695,7 +6704,16 @@ function ckGenerate(){
         closeCS();
         toast("⚡ Zerodha Live","Connected successfully","tg");
         // Immediately fetch with new token — don't wait for next auto-cycle
-        _hasLoaded=false; // reset so fetch lock allows immediate load
+        // FIX: this referenced _hasLoaded, a variable that was never
+        // declared anywhere in the file — confirmed by the on-screen
+        // error banner catching it live: "ReferenceError: Can't find
+        // variable: _hasLoaded". The real throttle this was trying to
+        // reset lives in safeFetch()'s own _fetchTimestamps[key] map —
+        // fetchFromServer() calls safeFetch("market", ...), so clearing
+        // that specific key is what actually allows the immediate fetch
+        // right after to bypass the normal 10s minimum interval, matching
+        // the original intent exactly.
+        delete _fetchTimestamps["market"];
         fetchFromServer();
       },2000);
     }else{
