@@ -4875,6 +4875,27 @@ var _WINRATE_CACHE_MS = 10*60*1000;   // 10 min
 var _livePremiumCache = {};   // "sym|strike|optType" -> {premium, ts}
 var _LIVE_PREMIUM_TTL_MS = 60*1000;
 
+// FIX: neither this cache nor _winrateCache ever removed an entry, only
+// ever added or overwrote one. A stale entry (TTL expired) just gets
+// ignored on read, not deleted — the key stays in memory forever. Given
+// strikes change every time the underlying moves, across ~55 tracked
+// symbols on a continuously-running worker, this could plausibly grow to
+// hundreds or thousands of entries within a single session — a real,
+// previously-uncounted contributor to the worker's repeated OOM restarts.
+// Runs independently of anything tab-specific, since the worker's
+// headless browser never has any "tab" open in the way a real phone does.
+setInterval(function(){
+  try{
+    var cutoff = Date.now() - 30*60*1000; // 30 min — comfortably past any real TTL (60s/10min)
+    Object.keys(_livePremiumCache).forEach(function(k){
+      if(_livePremiumCache[k] && _livePremiumCache[k].ts < cutoff) delete _livePremiumCache[k];
+    });
+    Object.keys(_winrateCache).forEach(function(k){
+      if(_winrateCache[k] && _winrateCache[k].ts < cutoff) delete _winrateCache[k];
+    });
+  }catch(e){}
+}, 5*60*1000); // check every 5 min — cheap, no need to run more often than that
+
 function getLivePremiumCached(sym, strike, optType){
   var key = sym+"|"+strike+"|"+optType;
   var c = _livePremiumCache[key];
@@ -5869,6 +5890,19 @@ function loadSignalLog(){
   try{
     var s=localStorage.getItem("pt_siglog");
     if(s) SIGNAL_LOG=JSON.parse(s);
+    // FIX: the cap in saveSignalLog() only takes effect the next time a
+    // save happens — an already-bloated entry from before that fix would
+    // still be fully parsed here, in full, on every single page load,
+    // regardless of the cap existing elsewhere. Worse, the cleanup below
+    // only calls saveSignalLog() if it actually finds a stale trade to
+    // close — if it doesn't, an oversized log never gets saved (and
+    // therefore never gets capped) at all. Applying the same cap directly
+    // here means it takes effect on THIS load, not some future one.
+    var MAX_LOCAL_SIGNALS_ON_LOAD = 300;
+    if(SIGNAL_LOG.length > MAX_LOCAL_SIGNALS_ON_LOAD){
+      SIGNAL_LOG = SIGNAL_LOG.slice(0, MAX_LOCAL_SIGNALS_ON_LOAD);
+      saveSignalLog(); // persist the trim immediately, don't wait for the next natural save
+    }
   }catch(e){SIGNAL_LOG=[];}
   // FIX: a trade stuck in OPEN/T1_HIT status with no way to ever auto-close
   // (e.g. from an app crash mid-session, or a bug that predates the dedup
@@ -5902,8 +5936,21 @@ function loadSignalLog(){
 }
 
 function saveSignalLog(){
-  // No cap — keep full signal history. Guard against localStorage quota
-  // errors (rather than silently trimming) by warning once if a save fails.
+  // FIX: this used to deliberately keep unlimited history in localStorage
+  // — a real, earlier decision, not an oversight. Reversing it now because
+  // the situation that decision didn't account for: this app runs
+  // continuously via the always-on worker, and unlike the in-memory
+  // premium/winrate caches (which reset every 90-min restart), this array
+  // is PERSISTED — it survives every restart and just keeps growing,
+  // indefinitely, contributing directly to the worker's repeated
+  // out-of-memory restarts. Safe to cap because it doesn't actually lose
+  // history: Supabase already has the full, permanent record via
+  // ingestJournalEntry — this local copy exists for the app's own recent-
+  // activity display, not as the archive. Keeps the most recent 300.
+  var MAX_LOCAL_SIGNALS = 300;
+  if(SIGNAL_LOG.length > MAX_LOCAL_SIGNALS){
+    SIGNAL_LOG = SIGNAL_LOG.slice(0, MAX_LOCAL_SIGNALS);
+  }
   try{
     localStorage.setItem("pt_siglog",JSON.stringify(SIGNAL_LOG));
   }catch(e){
