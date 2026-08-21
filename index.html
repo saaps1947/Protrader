@@ -5155,16 +5155,26 @@ function processScan(sigs){
           layers:sig.layers, hasOI:sig.hasOI, setupKey:sig.setupKey, regime:sig.regime,
           entry:sig.entry, sl:sig.sl, target1:sig.target1, target2:sig.target2,
           rr:sig.rr, why:sig.why, vix:(typeof VIX!=="undefined"?VIX:0),
-          // FIX: these were missing entirely — the server's push notification
-          // builds its body text from trade/strategy, which meant every push
-          // (had any fired) would have shown an empty " · " with nothing on
-          // either side.
           trade:sig.trade, strategy:sig.strategy,
           _source: window.IS_WORKER ? "worker" : "client"
         };
+        // FIX: found via direct evidence in a real access log — /snapshot
+        // fired constantly, /option_premium fired successfully for a real
+        // signal, but /ingest_signal never appeared even once in the same
+        // window, despite it running BEFORE the premium fetch in this same
+        // code path for that same signal. Something here was failing
+        // silently — both the outer try/catch and the fetch's own .catch
+        // swallowed everything with no trace. Now logs explicitly on
+        // either kind of failure, so the next signal gives a definitive
+        // answer instead of another round of static code reading.
         fetch(SERVER_URL+"/ingest_signal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(_ingestPayload)})
-          .catch(function(){});
-      }catch(e){}
+          .then(function(r){
+            if(!r.ok) console.warn("[Ingest ❌] "+sig.sym+" — server returned HTTP "+r.status);
+          })
+          .catch(function(e){ console.warn("[Ingest ❌] "+sig.sym+" — network/fetch failure: "+(e&&e.message||e)); });
+      }catch(e){
+        console.warn("[Ingest ❌] "+sig.sym+" — synchronous error building/sending payload: "+(e&&e.message||e));
+      }
     }
   });
   // Remove signals not seen in last 30 min from the LIVE feed list — but do NOT
