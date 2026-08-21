@@ -605,6 +605,10 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
     <div style="font-size:.82rem;font-weight:800;margin-bottom:8px">📊 Signal Performance</div>
     <div id="perfSection"></div>
   </div>
+  <!-- Auto-journal diagnostic — added specifically to answer "why is the
+       journal count so much lower than the HIGH signal count" with real
+       numbers instead of more guessing. Session-only, resets on reload. -->
+  <div id="journalDiagBox" style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:10px;font-size:.66rem;color:var(--m)"></div>
   <!-- Stats bar -->
   <div class="j-stats" id="jStats"></div>
   <!-- Action buttons -->
@@ -4893,6 +4897,14 @@ var _WINRATE_CACHE_MS = 10*60*1000;   // 10 min
 // CRUDEOIL's shown 8194 matched the underlying's price exactly, not any
 // option premium, while entry_px was the real premium (409.1).
 var _livePremiumCache = {};   // "sym|strike|optType" -> {premium, ts}
+
+// FIX: added to directly answer a recurring, specific concern — "26 HIGH
+// signals showing, only 3 in the journal" — with real numbers instead of
+// more speculation. Tracks exactly what happens to every HIGH-conviction
+// signal this session: did it even attempt to journal, did the premium
+// fetch succeed, and if not, specifically why. Session-only (resets on
+// reload) — this is a live diagnostic, not a permanent record.
+var _journalDiag = { attempted: 0, succeeded: 0, premiumFailed: 0, dedupBlocked: 0, otherFailed: 0 };
 var _LIVE_PREMIUM_TTL_MS = 60*1000;
 
 // FIX: neither this cache nor _winrateCache ever removed an entry, only
@@ -5065,9 +5077,10 @@ function processScan(sigs){
     // its technical levels as a fallback — it simply doesn't get
     // auto-journaled that cycle, rather than journal a wrong number.
     if(sig.urgency==="HIGH" && sig.confidence>=82 && sig.strike && sig.optType){
+      _journalDiag.attempted++;
       (function(sigRef){
         fetchRealPremium(sigRef.sym, sigRef.strike, sigRef.optType, function(prem){
-          if(!prem || !prem.premium) return; // fetch failed — skip, don't journal a guess
+          if(!prem || !prem.premium){ _journalDiag.premiumFailed++; return; } // fetch failed — skip, don't journal a guess
           var p = prem.premium;
           sigRef.entry = ""+p;
           sigRef.sl = ""+(p*0.70).toFixed(2);
@@ -5085,7 +5098,12 @@ function processScan(sigs){
           sigRef.rr = "1:"+(rewardPct/riskPct).toFixed(2);
           sigRef.premiumTradingsymbol = prem.tradingsymbol;
           sigRef.premiumExpiry = prem.expiry;
-          try{autoLogSignal(sigRef);}catch(e){}
+          try{
+            var _jr = autoLogSignal(sigRef);
+            if(_jr && _jr.ok){ _journalDiag.succeeded++; }
+            else if(_jr && _jr.reason && _jr.reason.indexOf("Already open")>=0){ _journalDiag.dedupBlocked++; }
+            else { _journalDiag.otherFailed++; console.warn("[Journal ❌] "+sigRef.sym+": "+(_jr&&_jr.reason||"unknown")); }
+          }catch(e){ _journalDiag.otherFailed++; }
           try{renderFeed();}catch(e){} // reflect the real premium on the card too
         });
       })(sig);
@@ -5137,6 +5155,11 @@ function processScan(sigs){
           layers:sig.layers, hasOI:sig.hasOI, setupKey:sig.setupKey, regime:sig.regime,
           entry:sig.entry, sl:sig.sl, target1:sig.target1, target2:sig.target2,
           rr:sig.rr, why:sig.why, vix:(typeof VIX!=="undefined"?VIX:0),
+          // FIX: these were missing entirely — the server's push notification
+          // builds its body text from trade/strategy, which meant every push
+          // (had any fired) would have shown an empty " · " with nothing on
+          // either side.
+          trade:sig.trade, strategy:sig.strategy,
           _source: window.IS_WORKER ? "worker" : "client"
         };
         fetch(SERVER_URL+"/ingest_signal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(_ingestPayload)})
@@ -5986,8 +6009,13 @@ function autoLogSignal(sig){
   // Manual execute (logSignalEntry, below) intentionally skips this guard —
   // a deliberate tap should be allowed to log a MEDIUM signal — but still
   // goes through the shared dedup/flip/schema guards in _writeJournal.
-  if(!sig||sig.urgency!=="HIGH"||sig.confidence<82) return;
-  _writeJournal(sig, "auto");
+  if(!sig||sig.urgency!=="HIGH"||sig.confidence<82) return {ok:false, reason:"Below auto-log threshold"};
+  // FIX: this used to call _writeJournal without ever using its return
+  // value — the caller had no way to know whether it actually succeeded
+  // or silently hit a guard (invalid price, missing SL, dedup block).
+  // Now returned, so the diagnostic counter below can attribute a real
+  // reason instead of just knowing "something happened."
+  return _writeJournal(sig, "auto");
 }
 
 // ── SHARED JOURNAL WRITER ────────────────────────────────────────────────
@@ -6292,6 +6320,19 @@ function renderJ(){
   var jList = document.getElementById("jList");
   var jStats = document.getElementById("jStats");
   if(!jList) return;
+
+  var diagBox = document.getElementById("journalDiagBox");
+  if(diagBox){
+    var d = _journalDiag;
+    var missing = d.attempted - d.succeeded - d.premiumFailed - d.dedupBlocked - d.otherFailed;
+    diagBox.innerHTML =
+      "<b style='color:var(--t1)'>Auto-journal this session:</b> "+d.attempted+" HIGH signals attempted → "+
+      "<span style='color:var(--g)'>"+d.succeeded+" journaled</span>, "+
+      "<span style='color:var(--y)'>"+d.premiumFailed+" premium fetch failed</span>, "+
+      "<span style='color:var(--b)'>"+d.dedupBlocked+" already open (correctly skipped)</span>, "+
+      "<span style='color:var(--r)'>"+d.otherFailed+" other reason</span>"+
+      (missing>0 ? " <span style='color:var(--m)'>("+missing+" still in flight)</span>" : "");
+  }
 
   var open   = SIGNAL_LOG.filter(function(x){return x.status==="OPEN";});
   var closed = SIGNAL_LOG.filter(function(x){return x.status!=="OPEN";});
