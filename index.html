@@ -857,7 +857,17 @@ window.addEventListener("error", function(e){
       (document.body||document.documentElement).appendChild(el);
     }
     var line = "⚠ JS ERROR: "+(e.message||"unknown")+"\n  at "+(e.filename||"?")+":"+(e.lineno||"?")+":"+(e.colno||"?");
-    el.textContent = (el.textContent?el.textContent+"\n\n":"") + line;
+    // FIX: this used to append forever, with no cap — on a worker session
+    // running continuously for hours, even an error that fires once every
+    // few minutes would accumulate into an ever-growing string, each
+    // append re-rendering the whole thing into the DOM. Confirmed via a
+    // real memory graph showing repeated OOM restarts. Now keeps only the
+    // most recent 10 errors — still enough to diagnose a real, recurring
+    // issue, but can never grow unbounded regardless of session length.
+    var existing = el.textContent ? el.textContent.split("\n\n") : [];
+    existing.push(line);
+    if(existing.length > 10) existing = existing.slice(existing.length - 10);
+    el.textContent = existing.join("\n\n");
   }catch(ignored){}
 });
 // ═══════════════════════════════════════════
