@@ -6978,12 +6978,23 @@ function subscribeToPush(reg){
     }
     return fetch(SERVER_URL+"/push_vapid_public_key", {headers:ptHeaders()})
       .then(function(r){ return r.json(); })
+      .catch(function(e){ throw new Error("[fetch key] "+(e&&e.message||e)); })
       .then(function(d){
-        if(!d || !d.ok || !d.key){ throw new Error(d&&d.error || "server has no VAPID key configured"); }
+        if(!d || !d.ok || !d.key){ throw new Error("[key response] "+(d&&d.error || "server has no VAPID key configured")); }
+        // Logged so a failure here shows exactly what was received —
+        // whitespace, truncation, or encoding drift would be visible here
+        // rather than only surfacing as a downstream decode error.
+        console.log("[Push] VAPID key received, length="+d.key.length+": "+d.key);
+        var keyBytes;
+        try{
+          keyBytes = urlBase64ToUint8Array(d.key);
+        }catch(e){
+          throw new Error("[decode key] "+(e&&e.message||e)+" — raw key was: "+d.key);
+        }
         return reg.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(d.key)
-        });
+          applicationServerKey: keyBytes
+        }).catch(function(e){ throw new Error("[pushManager.subscribe] "+(e&&e.message||e)); });
       })
       .then(function(subscription){
         var subJson = subscription.toJSON();
@@ -6991,7 +7002,7 @@ function subscribeToPush(reg){
           method: "POST",
           headers: Object.assign({"Content-Type":"application/json"}, ptHeaders()),
           body: JSON.stringify(subJson)
-        });
+        }).catch(function(e){ throw new Error("[post subscription] "+(e&&e.message||e)); });
       })
       .then(function(r){ return r.json(); })
       .then(function(d){
