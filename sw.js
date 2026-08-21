@@ -12,7 +12,7 @@ self.addEventListener("activate", function(event) {
 });
 
 self.addEventListener("push", function(event) {
-  var data = { title: "PRO Trader", body: "New update", url: "/" };
+  var data = { title: "PRO Trader", body: "New update", url: "/", tag: "protrader-signal" };
   try {
     if (event.data) data = event.data.json();
   } catch (e) {
@@ -25,7 +25,17 @@ self.addEventListener("push", function(event) {
     icon: undefined, // uses the PWA's own icon by default on iOS
     badge: undefined,
     data: { url: data.url || "/" },
-    tag: "protrader-signal", // a new push replaces an unread one instead of stacking
+    // FIX: flagged in an independent review — this used one hardcoded tag
+    // for every notification, meaning a second HIGH signal for a
+    // DIFFERENT symbol would silently replace the first one before the
+    // user ever saw it, since same-tag notifications collapse into one on
+    // the lock screen. The server now sends a per-symbol tag
+    // ("protrader-signal-NIFTY" vs "protrader-signal-BANKNIFTY"), so
+    // different symbols no longer overwrite each other — while repeat
+    // signals for the SAME symbol still correctly collapse into one,
+    // rather than stacking into noise. Falls back to the old shared tag
+    // only if a payload somehow arrives without one.
+    tag: data.tag || "protrader-signal",
     renotify: true
   };
 

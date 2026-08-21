@@ -1058,10 +1058,15 @@ function exitLastOrder(){
   if(!SERVER_URL||!KITE.connected){toast("Not connected","Need server + Kite to exit","tr");return;}
   if(!confirm("Square off "+lastLiveOrder.tradingsymbol+" at market?"))return;
   setStatus("fetching","Exiting…");
-  fetch(SERVER_URL+"/exit_order",{method:"POST",headers:ptHeaders(),body:JSON.stringify({
+  // FIX: flagged in an independent review — key/token were sitting in the
+  // JSON request body, which could show up in server-side request logging.
+  // The server's own credential resolution already checks headers first
+  // (before falling back to the body), so this is a safe, direct fix —
+  // matching what /market, /smc, and every other Kite-dependent GET call
+  // in this file already does.
+  fetch(SERVER_URL+"/exit_order",{method:"POST",headers:kiteHeaders(),body:JSON.stringify({
     sym:lastLiveOrder.sym,strike:lastLiveOrder.strike,option_type:lastLiveOrder.optType,
-    qty:lastLiveOrder.qty,product:"MIS",cancel_order_id:lastLiveOrder.stop_order_id,
-    key:KITE.apiKey,token:KITE.accessToken
+    qty:lastLiveOrder.qty,product:"MIS",cancel_order_id:lastLiveOrder.stop_order_id
   })}).then(function(r){return r.json();}).then(function(d){
     setStatus("live");
     if(d.ok){toast("✅ Squared Off",d.tradingsymbol+(d.stop_cancelled?" · stop cancelled":""),"tg");lastLiveOrder=null;}
@@ -1342,7 +1347,7 @@ function _doFetchFromServer(){
     updateHero();updTicker();updateOI(CS);showTech(CS);
     try{savePriceCache();}catch(e){}
     // Auto-detect SL/T1/T2 hits on every price update
-    try{checkSignalLevels();}catch(e){}
+    try{checkSignalLevels();}catch(e){console.error("[checkSignalLevels] threw — SL/T1/T2 auto-detection skipped this cycle:",e);}
     var t=istTime();
     // FIX: this referenced `mktData`, a variable that has never existed
     // anywhere in this file (confirmed — zero declarations, only these two
@@ -3443,7 +3448,22 @@ function runScan(manual){
   _fetchTimestamps["scan"]=Date.now();
   scanning=true;
   var sp=document.getElementById("spinWrap");if(sp)sp.classList.add("show");
-  var tr=tradeable();
+  // FIX: found via systematic audit — this call was completely unprotected,
+  // before doScan's own try/catch/finally ever gets a chance to run. If
+  // tradeable() ever throws, this whole function exits here, `scanning`
+  // never gets reset (doScan's finally never runs), and every future scan
+  // this session would silently return immediately at the `if(scanning)
+  // return` guard at the top — permanently disabling scanning until reload,
+  // with zero indication anywhere why.
+  var tr;
+  try{
+    tr = tradeable();
+  }catch(e){
+    console.error("[runScan] tradeable() threw — scan aborted:", e);
+    scanning=false;
+    if(sp)sp.classList.remove("show");
+    return;
+  }
 
   // Safety: always run scan after 6s max, even if SMC fetches fail/timeout
   var scanFired=false;
@@ -3462,6 +3482,18 @@ function runScan(manual){
   var smcDone=0;
 
   function applySmcData(sym,d){
+    // FIX: found via systematic audit — every call site's .catch() treats
+    // a genuine network failure and a crash inside this function's own
+    // body identically and silently. If a specific symbol's response
+    // shape ever breaks an assumption here, that would look exactly like
+    // an ordinary timeout, with no way to tell the difference.
+    try{
+      _applySmcDataInner(sym,d);
+    }catch(e){
+      console.error("[applySmcData] threw for "+sym+" — data may be malformed:", e);
+    }
+  }
+  function _applySmcDataInner(sym,d){
     var s=allS().filter(function(x){return x.sym===sym;})[0];
     if(!s||!d) return;
     if(d.smc)s.smc=d.smc;
@@ -5770,15 +5802,15 @@ function doOrd(){
     action:"BUY",              // always buying premium — never a naked short
     product:"MIS",             // intraday: broker auto-squares off, lower margin
     sl_pct:SL_PREMIUM_PCT,     // server attaches a real SL-M stop on the fill
-    key:KITE.apiKey,
-    token:KITE.accessToken,
     qty:LOT_SIZES[sym]||LOT_SIZES.DEFAULT||50
   };
 
   setStatus("fetching","Placing order…");
+  // FIX: same as exit_order above — key/token moved out of the body and
+  // into headers, where they belong for every Kite-dependent call.
   fetch(SERVER_URL+"/place_order",{
     method:"POST",
-    headers:ptHeaders(),
+    headers:kiteHeaders(),
     body:JSON.stringify(payload)
   })
   .then(function(r){return r.json();})
@@ -6053,10 +6085,22 @@ function autoLogSignal(sig){
 // or from the always-on worker.
 function ingestJournalEntry(e){
   if(!SERVER_URL||!e) return;
+  // FIX: found via systematic audit, same exact pattern already confirmed
+  // real for /ingest_signal (traced via a real access log — the endpoint
+  // never fired despite the signal it belonged to clearly being
+  // processed). This is the same silent double-swallow: an outer
+  // try/catch around an inner .catch(function(){}) with no logging
+  // anywhere. If this fails the same way, the Supabase journal table
+  // could be silently missing real trade history with zero trace.
   try{
     fetch(SERVER_URL+"/ingest_journal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(e)})
-      .catch(function(){});
-  }catch(err){}
+      .then(function(r){
+        if(!r.ok) console.warn("[IngestJournal ❌] "+(e.sym||"?")+" — server returned HTTP "+r.status);
+      })
+      .catch(function(err){ console.warn("[IngestJournal ❌] "+(e.sym||"?")+" — network/fetch failure: "+(err&&err.message||err)); });
+  }catch(err){
+    console.warn("[IngestJournal ❌] "+(e.sym||"?")+" — synchronous error: "+(err&&err.message||err));
+  }
 }
 
 function _writeJournal(sig, source){
