@@ -831,7 +831,19 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   <div class="nb on" onclick="nav(this,'sig')"><div class="nb-ico">🎯</div><div class="nb-lbl">Signals</div></div>
   <div class="nb" onclick="nav(this,'auto')"><div class="nb-ico">⚡</div><div class="nb-lbl">Auto</div></div>
   <div class="nb" onclick="nav(this,'jour')"><div class="nb-ico">📔</div><div class="nb-lbl">Journal</div></div>
+  <!-- Backtest tab removed for now — the underlying engine has confirmed,
+       real divergence from what actually trades live (different MTF
+       calculation, no OI, no SMC, underlying price instead of real option
+       premium), and Zerodha's API cannot provide historical option data
+       for expired contracts at all, making a true option-premium backtest
+       structurally dependent on this app's own snapshot capture maturing
+       over real time. Rather than keep showing a number that could be
+       mistaken for validation, removing access to it entirely until a
+       genuine V2 exists. All the underlying HTML/JS below is untouched,
+       not deleted — this tab is fully restorable by adding this button
+       back, and will be the reference point when V2 gets built properly.
   <div class="nb" onclick="nav(this,'bt')"><div class="nb-ico">🔬</div><div class="nb-lbl">Backtest</div></div>
+  -->
 </nav>
 
 <script>
@@ -5042,6 +5054,16 @@ function fetchSetupWinrate(setupKey, regime, cb){
 // match as being for the exact same setup, which is exactly the kind of
 // false confidence this feature must not create.
 function _winrateBadgeHtml(sig){
+  // Disabled alongside the backtest tab removal — this derived its win-rate
+  // percentage from the same backtest data that's been confirmed to
+  // diverge from what actually trades live. Showing it while hiding the
+  // tab it came from would undermine the whole point of removing backtest
+  // numbers that could be mistaken for validation. Function kept (not
+  // deleted) so restoring this is a one-line change alongside the tab
+  // whenever a genuine V2 exists.
+  return "";
+}
+function _winrateBadgeHtml_DISABLED(sig){
   var w = sig._winrate;
   if(!w) return "";
   if(w.loading){
@@ -5165,16 +5187,18 @@ function processScan(sigs){
     }
     if(idx>=0)allSigs[idx]=sig;else allSigs.unshift(sig);
 
-    // Historical win-rate badge — fire-and-forget, updates the card in
-    // place once it resolves. Purely additive display, never blocks or
-    // gates anything about the signal itself.
-    sig._winrate = sig._winrate || {loading:true};
-    (function(sigRef){
-      fetchSetupWinrate(sigRef.setupKey, sigRef.regime, function(d){
-        sigRef._winrate = d || {available:false};
-        try{renderFeed();}catch(e){}
-      });
-    })(sig);
+    // Historical win-rate badge fetch — disabled alongside the backtest
+    // tab removal. The badge itself is already hidden (_winrateBadgeHtml
+    // returns ""), but there's no point still making this network request
+    // on every signal if the result can never be shown. To restore both
+    // together later:
+    //   sig._winrate = sig._winrate || {loading:true};
+    //   (function(sigRef){
+    //     fetchSetupWinrate(sigRef.setupKey, sigRef.regime, function(d){
+    //       sigRef._winrate = d || {available:false};
+    //       try{renderFeed();}catch(e){}
+    //     });
+    //   })(sig);
 
     // ADDITIVE: push every processed signal to Supabase (via the server),
     // same fire-and-forget pattern as snapshot capture. This is what lets
