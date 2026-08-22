@@ -6,7 +6,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <meta name="version" content="9.0.4-20260822">
-<meta name="build" content="20260527-1000">
+<meta name="build" content="20260822-1730">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -587,8 +587,8 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
         <div class="at-f"><label>Capital (₹)</label><input type="number" id="at_cap" value="50000" step="5000" oninput="updAT()"></div>
         <div class="at-f"><label>Max Trades/Day</label><input type="number" id="at_max" value="3" min="1" max="10" oninput="updAT()"></div>
         <div class="at-f at-full"><label>Direction</label><select id="at_dir"><option value="both">Both</option><option value="long">Long Only</option><option value="short">Short Only</option></select></div>
-        <div class="at-f at-full"><label>Min Confidence: <span id="at_cl" style="color:var(--g)">82%</span></label>
-          <div class="sld-wrap"><input type="range" class="sld" id="at_sld" min="70" max="95" value="82" style="--p:80%" oninput="updConf(this.value)"><span class="sld-v" id="at_sv">82%</span></div>
+        <div class="at-f at-full"><label>Min Conviction Score: <span id="at_cl" style="color:var(--g)">82</span></label>
+          <div class="sld-wrap"><input type="range" class="sld" id="at_sld" min="70" max="95" value="82" style="--p:80%" oninput="updConf(this.value)"><span class="sld-v" id="at_sv">82</span></div>
         </div>
       </div>
       <div class="ai-note">💡 <b style="color:var(--t)">AI sets SL & Target</b> from OI walls + Max Pain. Always BUY options (defined risk).</div>
@@ -5835,20 +5835,32 @@ function doOrd(){
       var st=d.stop||{};
       if(st.placed){
         toast("✅ Order + Stop Placed",d.tradingsymbol+" · SL-M @ ₹"+st.trigger+" (fill ₹"+st.fill_px+")","tg");
+        lastLiveOrder={sym:sym,strike:strike,optType:optType,qty:payload.qty,
+                       order_id:d.order_id,stop_order_id:st.order_id||"",tradingsymbol:d.tradingsymbol};
       } else {
-        // Loud, because an unprotected option position is the failure mode
-        // this whole change exists to prevent.
-        toast("⚠ FILLED — NO STOP",d.tradingsymbol+" has no protective SL. "+(st.reason||"Set one in Kite now."),"tr");
-        // FIX: flagged in an independent review — a toast alone isn't
-        // sufficient here. It disappears in a few seconds; an unprotected
-        // real-money position doesn't. This stays on screen until
-        // manually dismissed, since the risk itself doesn't go away just
-        // because the toast did.
-        showUnprotectedPositionBanner(d.tradingsymbol, st.reason);
+        // FIX: the server now attempts to automatically close the position
+        // when the stop fails to attach, rather than leaving it open —
+        // flagged in an independent review as the remaining gap after the
+        // earlier detection-only fix. This must now distinguish two
+        // genuinely different outcomes, not treat them the same:
+        var sq = d.auto_squareoff || {};
+        if(sq.attempted && sq.ok){
+          // Position is ALREADY CLOSED — critically, do NOT set
+          // lastLiveOrder here. Doing so would let "Square Off Last Order"
+          // later try to exit a position that no longer exists.
+          toast("🛡️ Auto-Closed — No Stop Available",d.tradingsymbol+" — stop couldn't attach, so the position was immediately closed at market instead of left unprotected.","ty");
+        } else {
+          // The true worst case: stop failed AND the auto-close attempt
+          // also failed. The position genuinely is open and unprotected —
+          // this is the ONLY case where tracking it and showing the
+          // persistent banner is still correct.
+          toast("🚨 FILLED — NO STOP — AUTO-CLOSE ALSO FAILED",d.tradingsymbol+" is open with NO protection. "+(sq.error?"Close attempt failed: "+sq.error+". ":"")+"Exit manually in Kite NOW.","tr");
+          showUnprotectedPositionBanner(d.tradingsymbol, (st.reason||"")+(sq.error?" — auto-close also failed: "+sq.error:""));
+          lastLiveOrder={sym:sym,strike:strike,optType:optType,qty:payload.qty,
+                         order_id:d.order_id,stop_order_id:st.order_id||"",tradingsymbol:d.tradingsymbol};
+        }
       }
-      lastLiveOrder={sym:sym,strike:strike,optType:optType,qty:payload.qty,
-                     order_id:d.order_id,stop_order_id:st.order_id||"",tradingsymbol:d.tradingsymbol};
-      if(AT.active){AT.trades++;addLog({ac:"BUY "+optType,inst:d.tradingsymbol,conf:t.confidence,src:"Kite",st:st.placed?"placed+SL":"placed NO-SL"});}
+      if(AT.active){AT.trades++;addLog({ac:"BUY "+optType,inst:d.tradingsymbol,conf:t.confidence,src:"Kite",st:st.placed?"placed+SL":(d.auto_squareoff&&d.auto_squareoff.ok?"placed then auto-closed (no SL)":"placed NO-SL, unprotected")});}
     } else {
       toast("❌ Order Failed",d.error||"Check Kite connection","tr");
       addLog({ac:"FAIL",inst:sym,conf:t.confidence,src:"Kite",st:"skip"});
@@ -5869,7 +5881,7 @@ function demoOrd(t,cap){
 // ═══════════════════════════════════════════
 // AUTO TRADE
 // ═══════════════════════════════════════════
-function updConf(v){AT.conf=parseInt(v,10);var p=((v-70)/25*100).toFixed(0);document.getElementById("at_sld").style.setProperty("--p",p+"%");document.getElementById("at_sv").textContent=v+"%";document.getElementById("at_cl").textContent=v+"%";}
+function updConf(v){AT.conf=parseInt(v,10);var p=((v-70)/25*100).toFixed(0);document.getElementById("at_sld").style.setProperty("--p",p+"%");document.getElementById("at_sv").textContent=v;document.getElementById("at_cl").textContent=v;}
 function updAT(){AT.capital=parseInt(document.getElementById("at_cap").value,10)||50000;AT.maxTrades=parseInt(document.getElementById("at_max").value,10)||3;AT.dir=document.getElementById("at_dir").value;AT.inst=document.getElementById("at_inst").value;}
 function togAT(on){if(on)startAT();else stopAT();}
 function clickAT(){if(AT.active)stopAT();else{document.getElementById("atTog").checked=true;startAT();}}
