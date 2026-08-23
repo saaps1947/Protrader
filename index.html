@@ -1468,7 +1468,9 @@ function updateOI(s){
 function nav(el,id){
   document.querySelectorAll(".nb").forEach(function(b){b.classList.remove("on");});el.classList.add("on");
   document.querySelectorAll(".sec").forEach(function(s){s.classList.remove("on");});
-  document.getElementById("sec-"+id).classList.add("on");
+  var target = document.getElementById("sec-"+id);
+  if(!target) return; // defensive: every real onclick="nav(this,'X')" in this file points to a section that exists, but this avoids a null-dereference footgun if that ever isn't true (e.g. a new tab added without its matching section)
+  target.classList.add("on");
   window.scrollTo(0,0);
   // FIX: renderJ() used to only fire once, on tab open — after that,
   // nothing re-checked whether the cached premium (60s TTL) had gone
@@ -1482,7 +1484,6 @@ function nav(el,id){
   if(id==="jour"){renderJ();renderPerformance();startJournalAutoRefresh();}
   if(id==="jour")renderJ();
   if(id==="auto")updAT();
-  if(id==="bt")loadBtHealth();
 }
 var _journalRefreshTimer = null;
 function startJournalAutoRefresh(){
@@ -5973,39 +5974,17 @@ function switchToSig(sym){
 }
 
 
-// ══ FIX: this called SERVER_URL+"/stocks", a route that doesn't exist and
+// FIX: this called SERVER_URL+"/stocks", a route that doesn't exist and
 // never has anywhere in server.py — confirmed by grep, zero matches. Every
 // call has always 404'd, for every user, for the whole life of this app.
-// Harmless in that it changed nothing (the empty .catch() below never
-// touched anything else), but it's been silently spamming a failing
-// request on every page load and every 5-minute cycle this whole time.
 // /market already delivers the exact same data (nested under
 // d.technicals.rsi14/trend/crossover/breakout/breakdown rather than flat,
 // but the same underlying values) through the response handler that's
 // been working correctly this entire build — this function never added
-// anything /market didn't already provide. Neutralized rather than
-// deleted, so its call sites (setTimeout/safeInterval elsewhere) don't
-// need touching.
+// anything /market didn't already provide. The broken implementation
+// itself is fully removed now rather than kept dead-but-present; its
+// call sites (setTimeout/safeInterval below) are unaffected by this no-op.
 function fetchStocks(){ return; }
-function _fetchStocks_DEAD_unused(){
-  if(!SERVER_URL)return;
-  fetch(SERVER_URL+"/stocks",{signal:AbortSignal.timeout(30000)})
-  .then(function(r){return r.json();})
-  .then(function(d){
-    if(!d||!d.data)return;
-    Object.keys(d.data).forEach(function(sym){
-      var s=allS().filter(function(x){return x.sym===sym;})[0];
-      if(!s)return;
-      var sd=d.data[sym];
-      if(sd.px){s.px=sd.px;s.chg=sd.chg||0;s.pct=sd.pct||0;s.h=sd.high||0;s.l=sd.low||0;s.o=sd.open||0;}
-      if(sd.sma20){s.sma20=sd.sma20;s.sma50=sd.sma50;s.rsi=sd.rsi;s.trend=sd.trend;s.crossover=sd.crossover;s.breakout=sd.breakout;s.breakdown=sd.breakdown;}
-    });
-    buildTicker();
-    if(CS)updateHero();
-    console.log("[Stocks] Updated "+Object.keys(d.data).length+" stocks");
-  })
-  .catch(function(){});
-}
 </script>
 </body>
 </html>
