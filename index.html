@@ -3114,16 +3114,26 @@ function localSigs(){
       // get differentiated scores (94% was a hard ceiling killing separation)
       var conf=Math.min(97,Math.max(62,68+bullScore*2.5-(bearScore*2)));
       if(bullLayers<2) conf=Math.min(conf,74);         // 1 layer = LOW only
-      if(!hasOI)       conf=Math.min(conf,82);         // no OI = max MEDIUM-HIGH
+      if(!hasOI)       conf=Math.min(conf, isIndex?88:82);  // no OI = max MEDIUM-HIGH — FIX: was a flat 82, which only achieves the comment's own stated intent for stocks; for indices (whose HIGH threshold is 88) it silently meant "max MEDIUM" instead, a second instance of the same threshold-mismatch bug as the layer cap above
       if(!catDiverseBull) conf=Math.min(conf,79);      // no OI category = capped
-      // FIX: live signal data showed INDEX trades with 4-5 layers firing
-      // simultaneously had the WORST outcomes (24-29% WR, net losses), while
-      // 3 layers was the best-performing tier (53% WR). On indices, several
-      // layers agreeing at once is often the same move being double-counted
-      // by correlated signals rather than genuine independent confirmation,
-      // and often marks exhaustion just before a reversal. Does NOT apply to
-      // stocks, where more layers correctly correlates with better outcomes.
-      if(isIndex && bullLayers>=4) conf=Math.min(conf,85);
+      // FIX: this cap (originally 85) sat BELOW the isIndex HIGH threshold
+      // (88, see minConfThreshold/urg below) — combined with minScore
+      // requiring indices to have 4+ layers just to be created as a valid
+      // signal at all, this made it structurally near-impossible for any
+      // index to ever reach HIGH: the moment enough layers agreed to even
+      // qualify as a signal, confidence got capped below what HIGH itself
+      // required. Confirmed directly against a real signal export — zero
+      // NIFTY/BANKNIFTY/SENSEX/FINNIFTY signals across an 8-day window
+      // while every other tracked symbol appeared normally. Not deleting
+      // the underlying risk signal here — the historical data behind it
+      // (24-29% WR on 4-5 layer index setups vs 53% on 3-layer) is real
+      // and worth keeping some suppression for. Raised to exactly match
+      // the qualifying threshold instead: a maximally-confirmed index
+      // signal can now just barely clear HIGH if its underlying score
+      // genuinely earns it, rather than being categorically blocked
+      // regardless of strength — while remaining well below the 97
+      // ceiling available to signals this specific caution doesn't apply to.
+      if(isIndex && bullLayers>=4) conf=Math.min(conf,88);
       // Morning session: tiered confidence requirements
       // 9:30-9:44 AM = 92% (ORB unconfirmed, OI spike noise)
       // 9:45-9:59 AM = 89% (ORB confirmed but session still volatile)
@@ -3185,10 +3195,12 @@ function localSigs(){
       var catDiverseBear = oiConfirmsBear || (!hasOI && bearLayers >= 3);
       var conf2=Math.min(97,Math.max(62,68+bearScore*2.5-(bullScore*2)));
       if(bearLayers<2)    conf2=Math.min(conf2,74);
-      if(!hasOI)          conf2=Math.min(conf2,82);
+      if(!hasOI)          conf2=Math.min(conf2, isIndex?88:82);  // FIX: same as bull side
       if(!catDiverseBear) conf2=Math.min(conf2,79);
-      // FIX: same index-specific cap as the bull side — see comment there.
-      if(isIndex && bearLayers>=4) conf2=Math.min(conf2,85);
+      // FIX: same fix as the bull side — see comment there. Was 85, sat
+      // below the 88 HIGH threshold for indices, making it structurally
+      // impossible to ever qualify. Raised to 88.
+      if(isIndex && bearLayers>=4) conf2=Math.min(conf2,88);
       // Morning session: tiered confidence requirements (same as bull)
       if(morningSession && conf2<minConfThreshold){return;}
       var urg2=(conf2>=(isIndex?88:82)&&bearLayers>=2)?"HIGH":
