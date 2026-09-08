@@ -3393,12 +3393,25 @@ function refreshLivePremium(sym, strike, optType){
   if(!sym || !strike || !optType || !SERVER_URL) return;
   var key = sym+"|"+strike+"|"+optType;
   if(_livePremiumCache[key] && _livePremiumCache[key]._fetching) return; // already in flight
+  // FIX: confirmed directly from real worker logs — the same instrument's
+  // premium fetch retrying dozens of times within under a second, all
+  // failing identically ("not connected"). The _fetching flag above only
+  // ever blocked a second call while the FIRST was still in flight — the
+  // instant that first call failed, it set _fetching back to false and
+  // triggered a re-render, and since the premium was still null, every
+  // render call site that needs it (signal cards, journal rows, SL/T1/T2
+  // checks — 4 separate places) immediately re-triggered another attempt.
+  // No backoff existed between a failure and the next retry at all.
+  var lastFail = _livePremiumCache[key] && _livePremiumCache[key]._failedAt;
+  if(lastFail && (Date.now()-lastFail) < 10000) return; // 10s cooldown after a failure
   _livePremiumCache[key] = _livePremiumCache[key] || {};
   _livePremiumCache[key]._fetching = true;
   fetchRealPremium(sym, strike, optType, function(prem){
+    var ok = prem && prem.premium;
     _livePremiumCache[key] = {
-      premium: prem && prem.premium ? prem.premium : null,
-      ts: Date.now(), _fetching: false
+      premium: ok ? prem.premium : null,
+      ts: Date.now(), _fetching: false,
+      _failedAt: ok ? null : Date.now()
     };
     try{renderJ();}catch(e){}      // refresh the journal view once it lands
     try{renderFeed();}catch(e){}   // and any live card showing this trade
