@@ -3519,6 +3519,11 @@ function processScan(sigs){
             else if(_jr && _jr.reason && _jr.reason.indexOf("Already open")>=0){ _journalDiag.dedupBlocked++; }
             else { _journalDiag.otherFailed++; console.warn("[Journal ❌] "+sigRef.sym+": "+(_jr&&_jr.reason||"unknown")); }
           }catch(e){ _journalDiag.otherFailed++; }
+          // FIX: this now fires HERE, alongside the journal write, using
+          // the same sigRef that just got its real-premium-corrected
+          // entry/sl/target1/target2/rr — not before it. See the full
+          // explanation at _sendIngestSignal's definition below.
+          _sendIngestSignal(sigRef);
           try{renderFeed();}catch(e){} // reflect the real premium on the card too
         });
       })(sig);
@@ -3551,34 +3556,46 @@ function processScan(sigs){
     // outright as a second, independent layer on top of fixing those
     // fields at the source — even if a future bug reintroduces a bad
     // value in a no-trade card, it can't reach Supabase if it's never sent.
-    if(SERVER_URL && !sig._noTrade){
-      try{
-        var _ingestPayload = {
-          sym:sig.sym, bias:sig.bias, confidence:sig.confidence, urgency:sig.urgency,
-          bullScore:sig._bull, bearScore:sig._bear, neutralScore:sig._neutral,
-          layers:sig.layers, hasOI:sig.hasOI, setupKey:sig.setupKey, regime:sig.regime,
-          entry:sig.entry, sl:sig.sl, target1:sig.target1, target2:sig.target2,
-          rr:sig.rr, why:sig.why, vix:(typeof VIX!=="undefined"?VIX:0),
-          trade:sig.trade, strategy:sig.strategy,
-          _source: window.IS_WORKER ? "worker" : "client"
-        };
-        // FIX: found via direct evidence in a real access log — /snapshot
-        // fired constantly, /option_premium fired successfully for a real
-        // signal, but /ingest_signal never appeared even once in the same
-        // window, despite it running BEFORE the premium fetch in this same
-        // code path for that same signal. Something here was failing
-        // silently — both the outer try/catch and the fetch's own .catch
-        // swallowed everything with no trace. Now logs explicitly on
-        // either kind of failure, so the next signal gives a definitive
-        // answer instead of another round of static code reading.
-        fetch(SERVER_URL+"/ingest_signal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(_ingestPayload)})
-          .then(function(r){
-            if(!r.ok) console.warn("[Ingest ❌] "+sig.sym+" — server returned HTTP "+r.status);
-          })
-          .catch(function(e){ console.warn("[Ingest ❌] "+sig.sym+" — network/fetch failure: "+(e&&e.message||e)); });
-      }catch(e){
-        console.warn("[Ingest ❌] "+sig.sym+" — synchronous error building/sending payload: "+(e&&e.message||e));
+    //
+    // FIX: extracted into its own function and moved to fire from INSIDE
+    // the premium-correction callback above for signals that qualify for
+    // it, instead of always firing immediately, synchronously, right here.
+    // Two real bugs shared this one root cause: (1) the user-reported
+    // symptom -- push notifications arriving instantly while the matching
+    // journal row lagged behind, sometimes by several seconds -- because
+    // this write never waited for the same real-premium fetch the journal
+    // correctly waits for. (2) A second, more serious bug found while
+    // tracing the first: since this always fired BEFORE that fetch
+    // resolved, it was reading sig.entry/sl/target1/target2 at their
+    // ORIGINAL, underlying-price-based values -- the exact wrong-number bug
+    // the premium rewrite exists to prevent for the journal, just never
+    // applied to this second destination. Non-qualifying signals (not
+    // HIGH, or missing strike/optType) never go through premium correction
+    // at all, so this still fires immediately for those, exactly as before.
+    function _sendIngestSignal(sig){
+      if(SERVER_URL && !sig._noTrade){
+        try{
+          var _ingestPayload = {
+            sym:sig.sym, bias:sig.bias, confidence:sig.confidence, urgency:sig.urgency,
+            bullScore:sig._bull, bearScore:sig._bear, neutralScore:sig._neutral,
+            layers:sig.layers, hasOI:sig.hasOI, setupKey:sig.setupKey, regime:sig.regime,
+            entry:sig.entry, sl:sig.sl, target1:sig.target1, target2:sig.target2,
+            rr:sig.rr, why:sig.why, vix:(typeof VIX!=="undefined"?VIX:0),
+            trade:sig.trade, strategy:sig.strategy,
+            _source: window.IS_WORKER ? "worker" : "client"
+          };
+          fetch(SERVER_URL+"/ingest_signal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(_ingestPayload)})
+            .then(function(r){
+              if(!r.ok) console.warn("[Ingest FAIL] "+sig.sym+" - server returned HTTP "+r.status);
+            })
+            .catch(function(e){ console.warn("[Ingest FAIL] "+sig.sym+" - network/fetch failure: "+(e&&e.message||e)); });
+        }catch(e){
+          console.warn("[Ingest FAIL] "+sig.sym+" - synchronous error building/sending payload: "+(e&&e.message||e));
+        }
       }
+    }
+    if(!(sig.urgency==="HIGH" && sig.confidence>=82 && sig.strike && sig.optType)){
+      _sendIngestSignal(sig);
     }
   });
   // Remove signals not seen in last 30 min from the LIVE feed list — but do NOT
