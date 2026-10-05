@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.1·1005b</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1006b</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -1024,6 +1024,88 @@ function _tradeEntryMs(e){var t=e&&e.ts?Date.parse(e.ts):NaN;return isNaN(t)?nul
 var FINAL_TRADE_STATUSES = {SL_HIT:1,T2_HIT:1,TIME_EXIT:1,MANUAL:1,CLOSED:1};
 function _isClosedTrade(x){return !!FINAL_TRADE_STATUSES[x.status];}
 function _isLiveTrade(x){return x.status==="OPEN"||x.status==="T1_HIT";}
+// ── SHARED JOURNAL SYNC (audit) ─────────────────────────────────────────────
+// Supabase is the one journal. Before this, each device only ever showed the
+// trades IT had logged — the phone couldn't see anything the always-on worker
+// found, and on opening it re-logged active signals at the current (late)
+// premium. Both phone and worker now pull the shared journal on start and
+// every 3 minutes, and merge it into their local copy.
+var _journalSyncedOnce=false, _journalSyncInFlight=false, _lastJournalSync=0, _appStartTs=Date.now();
+var JOURNAL_SYNC_DAYS=14, JOURNAL_LOCAL_MAX=300;
+// VOID ranks below real exits: if one device voided a trade (it missed the
+// cutoff) but another closed it properly, the real exit must win either way.
+var _STATUS_RANK={OPEN:1,T1_HIT:2,VOID:2.5,SL_HIT:3,T2_HIT:3,TIME_EXIT:3,MANUAL:3,CLOSED:3};
+var _syncPushedIds={};   // local-only entries already pushed up this session
+function _parseStrikeOpt(trade){var m=/(\d+(?:\.\d+)?)\s*(CE|PE)\b/i.exec(trade||"");return m?{strike:+m[1],optType:m[2].toUpperCase()}:{strike:0,optType:""};}
+function _istFmt(iso){var ms=Date.parse(iso);if(isNaN(ms))return null;var d=new Date(ms+330*60000);
+  var h=d.getUTCHours(),m=d.getUTCMinutes(),mo=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return d.getUTCDate()+" "+mo[d.getUTCMonth()]+" "+(h%12||12)+":"+(m<10?"0":"")+m+" "+(h>=12?"PM":"AM");}
+function _numOrNull(v){if(v===null||v===undefined||v==="")return null;var n=+v;return isFinite(n)?n:null;}
+function _rowToEntry(r){
+  var so=_parseStrikeOpt(r.trade);
+  return {id:r.id,sym:r.sym,bias:r.bias,trade:r.trade,strategy:r.strategy,setupKey:r.setup_key,timeBucket:r.time_bucket,
+    regime:r.regime,layers:_numOrNull(r.layers)||0,hasOI:!!r.has_oi,confidence:_numOrNull(r.confidence),urgency:r.urgency,
+    entry_px:_numOrNull(r.entry_px),sl_px:_numOrNull(r.sl_px),t1_px:_numOrNull(r.t1_px),t2_px:_numOrNull(r.t2_px),
+    rr:r.rr,why:r.why,vix:_numOrNull(r.vix),timeframe:r.timeframe||"",status:r.status,
+    exit_px:_numOrNull(r.exit_px),pnl:_numOrNull(r.pnl),outcome:r.outcome,exitTime:_istFmt(r.exit_time),notes:r.notes||"",
+    source:r.source,ts:r.created_at,date:_istFmt(r.created_at),firstSeen:_istFmt(r.created_at),
+    strike:so.strike,optType:so.optType,lot_size:LOT_SIZES[r.sym]||LOT_SIZES.DEFAULT||50,
+    _t1Hit:(r.status==="T1_HIT"||r.outcome==="BREAKEVEN"),shadow:r.shadow||null,_fromServer:true};
+}
+function _mergeServerJournal(rows){
+  var byId={},res={added:0,updated:0,healed:0,dropped:0},srvById={},srvBySymBias={};
+  SIGNAL_LOG.forEach(function(e){byId[e.id]=e;});
+  rows.forEach(function(r){
+    if(!r||!r.id||!r.sym)return;
+    var srv=_rowToEntry(r); srvById[r.id]=srv;
+    var k=srv.sym+"|"+srv.bias; (srvBySymBias[k]=srvBySymBias[k]||[]).push(srv);
+    var loc=byId[r.id];
+    if(!loc){SIGNAL_LOG.push(srv);byId[r.id]=srv;res.added++;return;}
+    var rs=_STATUS_RANK[srv.status]||0, rl=_STATUS_RANK[loc.status]||0;
+    if(rs>rl){["status","exit_px","pnl","outcome","exitTime","notes","sl_px","_t1Hit"].forEach(function(f){loc[f]=srv[f];});res.updated++;}
+    else if(rl>rs){try{ingestJournalEntry(loc);}catch(_){}res.healed++;}   // server is behind — push our newer state
+    if(srv.shadow){loc.shadow=loc.shadow||{};Object.keys(srv.shadow).forEach(function(x){if(!loc.shadow[x])loc.shadow[x]=srv.shadow[x];});}
+  });
+  // A local-only entry that duplicates a server trade (same symbol+bias, the
+  // server one still live or logged within 90 min) is the phone's late copy
+  // of a signal the worker already logged — the server rejected it. Drop it.
+  // Any other local-only entry is pushed up instead.
+  SIGNAL_LOG=SIGNAL_LOG.filter(function(e){
+    if(srvById[e.id]||e.timeframe==="Manual")return true;
+    var em=_tradeEntryMs(e); if(em===null)return true;
+    var dup=(srvBySymBias[e.sym+"|"+e.bias]||[]).some(function(x){var xm=Date.parse(x.ts);
+      return _istDateKey(xm)===_istDateKey(em) && (_isLiveTrade(x)||Math.abs(xm-em)<=90*60000);});
+    if(dup){res.dropped++;return false;}
+    // Push up only entries inside the sync window, and only once per session.
+    // Before: every local entry the server didn't return (incl. anything older
+    // than the window) was re-sent every 3 minutes, forever — up to 300 POSTs
+    // per device per cycle — and entries the server legitimately refuses
+    // (rejected duplicates) would be retried indefinitely.
+    if(em>=Date.now()-JOURNAL_SYNC_DAYS*86400000 && !_syncPushedIds[e.id]){
+      _syncPushedIds[e.id]=1; try{ingestJournalEntry(e);}catch(_){} res.pushed=(res.pushed||0)+1;
+    }
+    return true;
+  });
+  SIGNAL_LOG.sort(function(a,b){return (Date.parse(b.ts)||0)-(Date.parse(a.ts)||0);});
+  if(SIGNAL_LOG.length>JOURNAL_LOCAL_MAX)SIGNAL_LOG=SIGNAL_LOG.slice(0,JOURNAL_LOCAL_MAX);
+  return res;
+}
+function syncJournalFromServer(){
+  if(typeof SERVER_URL==="undefined"||!SERVER_URL||_journalSyncInFlight)return;
+  _journalSyncInFlight=true;
+  var opt={headers:ptHeaders()}; try{if(AbortSignal.timeout)opt.signal=AbortSignal.timeout(20000);}catch(_){}
+  fetch(SERVER_URL+"/journal?days="+JOURNAL_SYNC_DAYS,opt)
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.ok||!Array.isArray(d.rows))throw new Error((d&&d.error)||"bad response");
+      var res=_mergeServerJournal(d.rows);
+      _journalSyncedOnce=true;_lastJournalSync=Date.now();
+      saveSignalLog();try{renderJ();renderPerformance();}catch(_){}
+      console.log("[JournalSync] "+d.rows.length+" server rows → +"+res.added+" new, "+res.updated+" updated, "+res.healed+" pushed up, "+res.dropped+" duplicates removed");
+    })
+    .catch(function(e){console.warn("[JournalSync] failed: "+(e&&e.message||e));})
+    .then(function(){_journalSyncInFlight=false;});
+}
 function _voidTrade(e, why){
   e.status="VOID"; e.outcome="VOID"; e.pnl=null; e.exit_px=null; e.exitTime=istDateTime();
   e.notes=(e.notes||"")+" | "+why;
@@ -1565,7 +1647,7 @@ function nav(el,id){
   // it's not wastefully polling in the background for a view nobody's
   // looking at.
   stopJournalAutoRefresh();
-  if(id==="jour"){renderJ();renderPerformance();startJournalAutoRefresh();}
+  if(id==="jour"){renderJ();renderPerformance();startJournalAutoRefresh();if(Date.now()-_lastJournalSync>30000)syncJournalFromServer();}
   if(id==="jour")renderJ();
   if(id==="auto")updAT();
 }
@@ -4608,6 +4690,13 @@ function autoLogSignal(sig){
   // a deliberate tap should be allowed to log a MEDIUM signal — but still
   // goes through the shared dedup/flip/schema guards in _writeJournal.
   if(!sig||sig.urgency!=="HIGH"||sig.confidence<82) return {ok:false, reason:"Below auto-log threshold"};
+  // Audit: on the phone, wait for the shared journal before logging, so a
+  // signal the worker already logged isn't re-logged at today's late price.
+  // Capped at 30s so a server outage can't stop journaling entirely.
+  // Gate applies to the worker too: it restarts every 90 min with empty storage,
+  // so before its first sync it can't know which trades are already open and
+  // would re-log them at a later price. (30s fallback if the server is down.)
+  if(!_journalSyncedOnce && (Date.now()-_appStartTs)<30000) return {ok:false, reason:"Waiting for journal sync"};
   // FIX: this used to call _writeJournal without ever using its return
   // value — the caller had no way to know whether it actually succeeded
   // or silently hit a guard (invalid price, missing SL, dedup block).
@@ -4867,6 +4956,18 @@ function checkSignalLevels(){
     var optPx = getLivePremiumCached(e.sym, e.strike, e.optType);
     if(optPx===null){ refreshLivePremium(e.sym, e.strike, e.optType); return; }
     px = optPx; // every check below now compares against the real premium
+
+    // ── LAYER-EXIT SHADOW TEST (audit) — records, never acts. The first time
+    // 3, 4 and 5 layers turn against the trade, store the option premium at
+    // that moment. Calibration then compares "would have exited here" with
+    // what actually happened. Decide on a real exit rule only from that data.
+    try{
+      var _ls=_layerLiveStatus(s, e.bias), _dis=_ls.filter(function(l){return !l.agree && !l.neutral;}).length, _shNew=false;
+      [3,4,5].forEach(function(k){
+        if(_dis>=k){ e.shadow=e.shadow||{}; if(!e.shadow["L"+k]){ e.shadow["L"+k]={prem:px, at:new Date().toISOString(), of:_ls.length}; _shNew=true; } }
+      });
+      if(_shNew){ changed=true; ingestJournalEntry(e); }
+    }catch(_){}
 
     // ── SL / BREAKEVEN-STOP CHECK — runs for OPEN and T1_HIT alike ─────────
     // BUG FIX: this used to be nested inside `if(e.status==="OPEN")`, so once
@@ -5406,6 +5507,22 @@ function renderPerformance(){
   html+=_calib("🧱 BY LAYERS AGREEING",function(e){var l=+e.layers;if(!isFinite(l)||!l)return null;
     return l>=4?"4+ layers":l+" layer"+(l>1?"s":"");},["1 layer","2 layers","3 layers","4+ layers"]);
   html+=_calib("📊 OI CONFIRMED?",function(e){return e.hasOI?"With fresh OI":"Without OI";},["With fresh OI","Without OI"]);
+  // Layer-exit shadow test: actual P&L vs "exit the moment N layers turned against".
+  (function(){
+    var rowsH="";
+    [3,4,5].forEach(function(k){
+      var n=0,act=0,shd=0;
+      closed.forEach(function(e){var x=e.shadow&&e.shadow["L"+k];if(!x||e.pnl==null||!(e.entry_px>0))return;
+        var lot=e.lot_size||LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;n++;act+=e.pnl;shd+=Math.round((x.prem-e.entry_px)*lot);});
+      if(!n)return;var diff=shd-act;
+      rowsH+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 10px'>"+
+        "<div style='font-size:.55rem;color:var(--m)'>Exit at "+k+" layers against · "+n+"t"+(n<10?" · small sample":"")+"</div>"+
+        "<div style='font-size:.7rem;font-weight:700;color:"+(diff>0?"var(--g)":"var(--r)")+"'>"+(diff>0?"+":"")+"₹"+diff+
+        " <span style='font-size:.5rem;color:var(--m)'>vs actual (₹"+act+" → ₹"+shd+")</span></div></div>";
+    });
+    if(rowsH) html+="<div style='font-size:.6rem;font-weight:700;letter-spacing:1px;color:var(--m);margin-bottom:6px'>🧪 LAYER-EXIT SHADOW TEST</div>"+
+      "<div style='display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px'>"+rowsH+"</div>";
+  })();
   html+=_calib("⏰ EXIT TYPE",function(e){return {SL_HIT:"Stop hit",T2_HIT:"Target 2 hit",TIME_EXIT:"End-of-day exit",MANUAL:"Manual",CLOSED:"Closed"}[e.status]||null;},
     ["Target 2 hit","End-of-day exit","Stop hit","Manual","Closed"]);
 
@@ -5878,8 +5995,13 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1005b"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1006b"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
+  try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
+  // Also sync the moment the app comes back to the foreground — the moment you
+  // actually look at it. Mobile browsers pause timers while backgrounded.
+  try{document.addEventListener("visibilitychange",function(){
+    if(!document.hidden && Date.now()-_lastJournalSync>30000) syncJournalFromServer();});}catch(e){}
   try{startTimer();}catch(e){}
   // Now fetch data - SERVER_URL is already set from loadSaved
   if(SERVER_URL){
