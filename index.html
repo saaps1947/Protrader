@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1006b</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1006c</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -536,7 +536,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   </div>
   <div class="sf" id="sf"></div>
   <div class="spin-wrap" id="spinWrap"><div class="spin"></div><div style="font-size:.76rem;color:var(--m)">AI scanning markets...</div></div>
-  <div id="sigFeed"></div>
+  <div id="bgSigs"></div><div id="sigFeed"></div>
 </div>
 
 
@@ -3950,7 +3950,55 @@ function _renderLastSessionView(){
   return header+"<div style='padding:0 2px'>"+rows+"</div>";
 }
 
+
+// ── FROM BACKGROUND (audit) ─────────────────────────────────────────────────
+// Push notifications come from the always-on worker, but the Signals tab is
+// the phone's OWN fresh scan — so a setup the worker saw minutes ago can be
+// missing when you open the app. This lists the worker's HIGH signals from the
+// last hour, and says plainly whether your current scan still confirms each.
+var _bgSigs=[], _bgSigsInFlight=false, _bgSigsLast=0;
+function _escH(t){return String(t==null?"":t).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+function fetchBackgroundSignals(){
+  if(window.IS_WORKER||typeof SERVER_URL==="undefined"||!SERVER_URL||_bgSigsInFlight)return;
+  _bgSigsInFlight=true;
+  var opt={headers:ptHeaders()}; try{if(AbortSignal.timeout)opt.signal=AbortSignal.timeout(15000);}catch(_){}
+  fetch(SERVER_URL+"/signals_recent?minutes=60",opt)
+    .then(function(r){return r.json();})
+    .then(function(d){ if(d&&d.ok&&Array.isArray(d.signals)){_bgSigs=d.signals;_bgSigsLast=Date.now();renderBackgroundSignals();} })
+    .catch(function(e){console.warn("[BgSignals] "+(e&&e.message||e));})
+    .then(function(){_bgSigsInFlight=false;});
+}
+function renderBackgroundSignals(){
+  var box=document.getElementById("bgSigs"); if(!box)return;
+  var list=(_bgSigs||[]).filter(function(x){return typeof sfFilt==="undefined"||sfFilt==="ALL"||x.sym===sfFilt;});
+  if(window.IS_WORKER||!list.length){box.innerHTML="";return;}
+  var now=Date.now();
+  var h="<div style='margin:6px 0 10px;padding:10px;border:1px dashed var(--border);border-radius:10px;background:var(--bg2)'>"+
+        "<div style='font-size:.6rem;font-weight:700;letter-spacing:1px;color:var(--m);margin-bottom:6px'>📡 FROM BACKGROUND · LAST 60 MIN</div>";
+  list.forEach(function(x){
+    var cur=(typeof allSigs!=="undefined"?allSigs:[]).filter(function(a){return a.sym===x.sym&&a.bias===x.bias;})[0];
+    var state= cur&&cur.urgency==="HIGH" ? ["✅ Still HIGH in your current scan","var(--g)"]
+             : cur ? ["⚠ Weakened — now "+_escH(cur.urgency),"var(--y)"]
+             : ["⏳ No longer active in your current scan","var(--m)"];
+    var fs=Date.parse(x.first_seen), ls=Date.parse(x.last_seen);
+    var j=(typeof SIGNAL_LOG!=="undefined"?SIGNAL_LOG:[]).filter(function(e){var t=Date.parse(e.ts);
+      return e.sym===x.sym&&e.bias===x.bias&&isFinite(t)&&Math.abs(t-fs)<=90*60000;})[0];
+    var col=x.bias==="BULLISH"?"var(--g)":"var(--r)";
+    var lv=function(l,v,c){return v==null?"":"<span style='margin-right:10px'><span style='color:var(--m)'>"+l+"</span> <b style='color:"+c+"'>₹"+_escH(v)+"</b></span>";};
+    h+="<div style='padding:7px 0;border-top:1px solid var(--border)'>"+
+       "<div style='display:flex;justify-content:space-between;font-size:.72rem'><b style='color:"+col+"'>"+_escH(x.sym)+" "+(x.bias==="BULLISH"?"▲":"▼")+
+       " "+_escH(j?j.trade:x.bias)+"</b><span style='color:var(--m);font-size:.6rem'>found "+_escH(_istFmt(x.first_seen)||"")+
+       (isFinite(ls)?" · last "+Math.max(0,Math.round((now-ls)/60000))+"m ago":"")+"</span></div>"+
+       "<div style='font-size:.62rem;margin:3px 0'>"+lv("Entry",x.entry_px,"var(--b)")+lv("SL",x.sl_px,"var(--r)")+lv("T1",x.t1_px,"var(--g)")+lv("T2",x.t2_px,"var(--g)")+
+       "<span style='color:var(--m)'>"+_escH(Math.round(x.confidence||0))+"</span></div>"+
+       "<div style='font-size:.6rem;color:"+state[1]+"'>"+state[0]+(j?" · Journal: "+_escH(j.status):"")+"</div>"+
+       (x.why?"<div style='font-size:.58rem;color:var(--m);margin-top:2px'>"+_escH(String(x.why).split(" | ")[0])+"</div>":"")+
+       "</div>";
+  });
+  box.innerHTML=h+"</div>";
+}
 function renderFeed(){
+  try{renderBackgroundSignals();}catch(_){}  // keep "still active?" status in step with each scan
   var feed=document.getElementById("sigFeed");if(!feed)return;
   var f=allSigs.concat(_activeTradeSigs());
   if(sfFilt!=="ALL")f=f.filter(function(s){return s.sym===sfFilt;});
@@ -5995,13 +6043,16 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1006b"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1006c"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
   // actually look at it. Mobile browsers pause timers while backgrounded.
   try{document.addEventListener("visibilitychange",function(){
     if(!document.hidden && Date.now()-_lastJournalSync>30000) syncJournalFromServer();});}catch(e){}
+  try{setTimeout(fetchBackgroundSignals,3000);setInterval(fetchBackgroundSignals,120000);
+      document.addEventListener("visibilitychange",function(){
+        if(!document.hidden && Date.now()-_bgSigsLast>30000) fetchBackgroundSignals();});}catch(e){}
   try{startTimer();}catch(e){}
   // Now fetch data - SERVER_URL is already set from loadSaved
   if(SERVER_URL){
