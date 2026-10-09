@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1006c</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1008a</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -1288,6 +1288,8 @@ function _doFetchFromServer(){
         // own, and the scoring loop needs to know which one it's looking at.
         sc.oiServerAgeKnown = (sd.oi.cache_age_min !== undefined && sd.oi.cache_age_min !== null);
         sc.oiFetchedAt = Date.now();
+        // 15-min-refresh stocks can't stay under a 10-min limit; allow 20.
+        sc.oiMaxAgeMin = (sd.oi.refresh==="15min") ? 20 : 10;
         sc.cC15 = sd.oi.ce_chg_15m||0; sc.pC15 = sd.oi.pe_chg_15m||0;
         sc.oi15Avail = sd.oi.oi_15m_available||false;
       }
@@ -2250,9 +2252,12 @@ function localSigs(){
     // prefers the server's real age whenever it's genuinely known (see
     // oiServerAgeKnown above), falling back to client-side fetch timing
     // only when the server sent no age info at all.
-    var _oiAgeMinChk = s.oiServerAgeKnown ? s.oiServerAgeMin
-                      : (s.oiFetchedAt ? Math.round((Date.now()-s.oiFetchedAt)/60000) : null);
-    var oiIsStaleForScoring = s.oiServerStale || _oiAgeMinChk===null || _oiAgeMinChk>10;
+    // Age = the server's age when received + time elapsed since (the old
+    // version froze the age at receipt). Limit is per refresh tier.
+    var _sinceFetch = s.oiFetchedAt ? (Date.now()-s.oiFetchedAt)/60000 : null;
+    var _oiAgeMinChk = (s.oiServerAgeKnown && _sinceFetch!==null) ? (s.oiServerAgeMin||0)+_sinceFetch
+                      : (_sinceFetch!==null ? _sinceFetch : null);
+    var oiIsStaleForScoring = s.oiServerStale || _oiAgeMinChk===null || _oiAgeMinChk>(s.oiMaxAgeMin||10);
     if(isMCX){ if(!isMCXOpen()) return; } else { if(!isOpen()) return; }
 
     var px=s.px, atm=s.atm||Math.round(px/(s.step||100))*(s.step||100);
@@ -6043,7 +6048,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1006c"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1008a"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
@@ -6344,8 +6349,17 @@ function applyOIData(sym,o){
   // Server-side authoritative staleness (set when Zerodha calls fail — most
   // often a daily Kite token expiry — and the server falls back to its own
   // cache). This is more reliable than client-side timing alone.
-  s.oiServerStale = o.stale || o.cached || false;
-  s.oiServerAgeMin = o.cache_age_min || 0;
+  // FIX (Oct 8): index OI never recorded a fetch time or an age, so the
+  // scoring gate saw "age unknown" and treated NIFTY/BANKNIFTY/SENSEX/FINNIFTY
+  // OI as stale on EVERY scan — the indices could never count OI (has_oi was
+  // false on 100% of signals). Also "cached" was treated as "stale": a copy
+  // served from the server's cache 30 seconds ago is fresh. Mirrors the
+  // stock path: only an explicit stale flag or a real age decides.
+  s.oiServerStale = !!o.stale;
+  s.oiServerAgeMin = o.cached ? (o.cache_age_min||0) : 0;
+  s.oiServerAgeKnown = true;
+  s.oiFetchedAt = Date.now();
+  s.oiMaxAgeMin = 10;
   console.log("[OI "+(s.oiServerStale?"⚠ STALE":"✅")+"] "+sym+" PCR:"+o.pcr+" MP:"+o.max_pain+" src:"+(o.source||"")+(s.oiServerStale?(" AGE:"+s.oiServerAgeMin+"min"):"")+" @ "+istTime());
   // Track when OI was last successfully refreshed (for display in strip).
   // BUG FIX: previously only the display STRING was tracked, and the render
