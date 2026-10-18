@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1008a</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1018a</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -1516,7 +1516,11 @@ function showTech(s){
     var cprCol=s.cpr.type==="NARROW"?"var(--g)":"var(--y)";
     var cprLabel=s.cpr.type==="NARROW"?"📐 Narrow CPR — Trending Day":"📐 Wide CPR — Choppy Day";
     pills.push('<span class="tech-pill" style="background:'+cprBg+';color:'+cprCol+';border:1px solid '+cprCol+'25">'+cprLabel+'</span>');
-    if(s.cpr.pivot) pills.push('<span class="tech-pill" style="background:rgba(255,255,255,.04);color:var(--m)">P: <b style="color:var(--t)">'+s.cpr.pivot+'</b> TC: <b style="color:var(--g)">'+s.cpr.tc+'</b> BC: <b style="color:var(--r)">'+s.cpr.bc+'</b></span>');
+    if(s.cpr.pivot) pills.push('<span class="tech-pill" style="background:rgba(255,255,255,.04);color:var(--m)">P: <b style="color:var(--t)">'+s.cpr.pivot+'</b> TC: <b style="color:var(--g)">'+Math.max(s.cpr.tc,s.cpr.bc)+'</b> BC: <b style="color:var(--r)">'+Math.min(s.cpr.tc,s.cpr.bc)+'</b></span>');
+    if(s.cpr.cam_in_cpr&&s.cpr.cam_in_cpr.length&&s.cpr.cam){
+      var _cl=s.cpr.cam_in_cpr[0], _isS=_cl==="S3";
+      pills.push('<span class="tech-pill" style="background:rgba(168,85,247,.12);color:#c084fc;border:1px solid rgba(168,85,247,.3)">🎯 '+_cl+' ₹'+s.cpr.cam[_cl.toLowerCase()]+' inside CPR — '+(_isS?'support':'resistance')+' reversal zone</span>');
+    }
     if(s.cpr.bias&&s.cpr.bias!=="NEUTRAL"){
       var bCol=s.cpr.bias==="BULLISH"?"var(--g)":"var(--r)";
       pills.push('<span class="tech-pill" style="background:rgba(255,255,255,.04);color:'+bCol+'">CPR Bias: '+s.cpr.bias+'</span>');
@@ -1832,9 +1836,9 @@ function captureSnapshot(s){
     // PDH/PDL
     pdh:s.pdh||0, pdl:s.pdl||0,
     // CPR — now from market response for all symbols
-    cpr_type:s.cpr?s.cpr.type:"", cpr_tc:s.cpr?s.cpr.tc:0, cpr_bc:s.cpr?s.cpr.bc:0,
+    cpr_type:s.cpr?s.cpr.type:"", cpr_tc:s.cpr?Math.max(s.cpr.tc,s.cpr.bc):0, cpr_bc:s.cpr?Math.min(s.cpr.tc,s.cpr.bc):0,
     cpr_pivot:s.cpr?s.cpr.pivot:0, cpr_width_pct:s.cpr?s.cpr.width_pct:0,
-    cpr_position:s.cpr?(s.px>s.cpr.tc?"above_tc":s.px<s.cpr.bc?"below_bc":"inside"):"",
+    cpr_position:s.cpr?(s.px>Math.max(s.cpr.tc,s.cpr.bc)?"above_tc":s.px<Math.min(s.cpr.tc,s.cpr.bc)?"below_bc":"inside"):"",
     cpr_bias:s.cpr?s.cpr.bias:"",
     // VWAP — approximate session VWAP from market response
     vwap_approx:s.vwap||0, above_vwap_approx:s.above_vwap?1:0,
@@ -2324,12 +2328,34 @@ function localSigs(){
     var breakdown=s.breakdown||false;
 
     // ── LAYER 4: CPR ──
-    var cpr=s.cpr||null;
-    var cprNarrow=cpr&&cpr.type==="NARROW";
-    var cprBullBias=cpr&&cpr.bias==="BULLISH";
-    var cprBearBias=cpr&&cpr.bias==="BEARISH";
-    var aboveTC=cpr&&px>cpr.tc;
-    var belowBC=cpr&&px<cpr.bc;
+    // FIX (1018a): older server builds swapped TC/BC whenever the previous
+    // day closed in the upper half of its range, so "above TC" could fire
+    // while price was still inside the CPR. Normalise top/bottom here too,
+    // and judge bias from the LIVE price vs pivot, not yesterday's close.
+    var cpr=null;
+    if(s.cpr&&s.cpr.pivot&&s.cpr.tc&&s.cpr.bc){
+      cpr={};for(var _ck in s.cpr)cpr[_ck]=s.cpr[_ck];
+      cpr.tc=Math.max(s.cpr.tc,s.cpr.bc); cpr.bc=Math.min(s.cpr.tc,s.cpr.bc);
+      if(px>0) cpr.bias=px>cpr.pivot?"BULLISH":"BEARISH";
+    }
+    var cprNarrow=!!(cpr&&cpr.type==="NARROW");
+    var cprBullBias=!!(cpr&&cpr.bias==="BULLISH");
+    var cprBearBias=!!(cpr&&cpr.bias==="BEARISH");
+    var aboveTC=!!(cpr&&px>cpr.tc);
+    var belowBC=!!(cpr&&px<cpr.bc);
+    // Camarilla-in-CPR reversal zone (1018a). Server flags S3 or R3 sitting
+    // inside today's CPR band. Note only, no score change yet: the note goes
+    // into "why", so it can be measured from the signals table later.
+    var camZone=null;
+    if(cpr&&cpr.cam_in_cpr&&cpr.cam_in_cpr.length&&cpr.cam&&px>0){
+      var _cz=cpr.cam_in_cpr[0], _czPx=cpr.cam[_cz.toLowerCase()];
+      var _near=0.004; // within 0.4% of the band counts as "at the zone"
+      camZone={lvl:_cz, px:_czPx, lo:cpr.bc, hi:cpr.tc, kind:_cz==="S3"?"SUPPORT":"RESISTANCE",
+        inside:px>=cpr.bc&&px<=cpr.tc,
+        justAbove:px>cpr.tc&&(px-cpr.tc)/px<=_near,
+        justBelow:px<cpr.bc&&(cpr.bc-px)/px<=_near};
+    }
+    var _czTag=camZone?(camZone.lvl+" ₹"+camZone.px+" inside CPR ₹"+camZone.lo+"–"+camZone.hi):"";
 
     // ── LAYER 5: SMC ──
     var smc=s.smc||null;
@@ -3180,7 +3206,7 @@ function localSigs(){
           return o.type==="BULLISH"&&!o.mitigated&&o.low<entry;
         }).map(function(o){return o.low;}).sort(function(a,b){return b-a;})[0]||0) : 0;
         var pdl = s.pdl||0;  // previous day low — key intraday support level
-        var cprBc = (s.cpr && s.cpr.bc && s.cpr.bc<entry) ? s.cpr.bc : 0;  // CPR bottom central — backtested to improve stop placement
+        var _cprLo = (s.cpr && s.cpr.bc && s.cpr.tc) ? Math.min(s.cpr.tc,s.cpr.bc) : 0; var cprBc = (_cprLo && _cprLo<entry) ? _cprLo : 0;  // CPR bottom central — backtested to improve stop placement
         var structSL=[
           bullObLow>0&&bullObLow<entry?bullObLow*0.999:0,   // just below OB low
           strongLow>0&&strongLow<entry?strongLow*0.999:0,   // just below strong low (if SMC loaded)
@@ -3244,7 +3270,7 @@ function localSigs(){
           return o.type==="BEARISH"&&!o.mitigated&&o.high>entry;
         }).map(function(o){return o.high;}).sort(function(a,b){return a-b;})[0]||0) : 0;
         var pdh = s.pdh||0;  // previous day high — key intraday resistance
-        var cprTc = (s.cpr && s.cpr.tc && s.cpr.tc>entry) ? s.cpr.tc : 0;  // CPR top central
+        var _cprHi = (s.cpr && s.cpr.bc && s.cpr.tc) ? Math.max(s.cpr.tc,s.cpr.bc) : 0; var cprTc = (_cprHi && _cprHi>entry) ? _cprHi : 0;  // CPR top central
         var structSL2=[
           bearObHigh>entry?bearObHigh*1.001:0,
           strongHigh>entry?strongHigh*1.001:0,
@@ -3367,6 +3393,10 @@ function localSigs(){
         ? false  // MCX trades till 11:30 PM — no BTST concept during live MCX session
         : nseClosingWindow && bullScore>=4;  // NSE: only in closing 30 min
       var whyText=bullReasons.slice(0,3).join(" | ");
+      if(camZone){
+        if(camZone.kind==="RESISTANCE"&&(camZone.inside||camZone.justBelow)) whyText+=" | ⚠ Reversal zone: "+_czTag+" — buying into resistance confluence";
+        else if(camZone.kind==="SUPPORT"&&(camZone.inside||camZone.justAbove)) whyText+=" | 🎯 S3+CPR support: "+_czTag+" — bounce from confluence";
+      }
       if(rr.entryNote) whyText += " | Entry: "+rr.entryNote;
       // Time bucket for performance tracking
       var timeBucket=minsNow<600?"morning":minsNow<780?"midday":minsNow<900?"afternoon":"closing";
@@ -3432,6 +3462,10 @@ function localSigs(){
                  pcrExtremeBull?"PCR Extreme Reversal (Calls overloaded)":
                  callWriting?"CE Writing — Resistance Building":"Multi-factor Bearish";                 regimeCode==="TRENDING_DOWN"?"Trend Continuation":"Multi-factor Bearish";
       var whyBear=bearReasons.slice(0,3).join(" | ");
+      if(camZone){
+        if(camZone.kind==="SUPPORT"&&(camZone.inside||camZone.justAbove)) whyBear+=" | ⚠ Reversal zone: "+_czTag+" — shorting into support confluence";
+        else if(camZone.kind==="RESISTANCE"&&(camZone.inside||camZone.justBelow)) whyBear+=" | 🎯 R3+CPR resistance: "+_czTag+" — rejection from confluence";
+      }
       if(rr2.entryNote) whyBear += " | Entry: "+rr2.entryNote;
       var timeBucket2=minsNow<600?"morning":minsNow<780?"midday":minsNow<900?"afternoon":"closing";
       if(isMCX && !isOpen() && isMCXOpen()) timeBucket2="mcx_evening";
@@ -6048,7 +6082,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1008a"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1018a"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
