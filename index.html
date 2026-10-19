@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1018a</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1019a</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -1218,6 +1218,19 @@ function _doFetchFromServer(){
       setTimeout(function(){try{runScan(false);}catch(e){}},1000);
     }
     console.log('[Server] Data refreshed at',new Date().toLocaleTimeString('en-IN'));
+    // DIAG (1019a): one line every 5 min saying what this /market reply
+    // carried, so the worker and phone can be compared from logs alone.
+    try{
+      if(!window._mktDiagAt||Date.now()-window._mktDiagAt>300000){
+        window._mktDiagAt=Date.now();
+        var _ks=Object.keys(d.data||{}), _withOI=0, _ages=[];
+        _ks.forEach(function(k){var o=d.data[k]&&d.data[k].oi;if(o){_withOI++;if(typeof o.cache_age_min==="number")_ages.push(o.cache_age_min);}});
+        _ages.sort(function(a,b){return a-b;});
+        console.log("[MKT-DIAG] "+(window.IS_WORKER?"worker":"phone")+" source="+d.source+" stale="+(!!d.stale)+
+          " symbols="+_ks.length+" withOI="+_withOI+" oiAgeMin(min/med/max)="+
+          (_ages.length?_ages[0]+"/"+_ages[Math.floor(_ages.length/2)]+"/"+_ages[_ages.length-1]:"none"));
+      }
+    }catch(e){}
     // Update each instrument
     Object.keys(d.data).forEach(function(sym){
       var sd=d.data[sym];
@@ -2262,6 +2275,21 @@ function localSigs(){
     var _oiAgeMinChk = (s.oiServerAgeKnown && _sinceFetch!==null) ? (s.oiServerAgeMin||0)+_sinceFetch
                       : (_sinceFetch!==null ? _sinceFetch : null);
     var oiIsStaleForScoring = s.oiServerStale || _oiAgeMinChk===null || _oiAgeMinChk>(s.oiMaxAgeMin||10);
+    // DIAG (1019a): when a stock's OI is judged stale, say why (max once per
+    // symbol per 15 min). Visible in the worker's Render log.
+    try{
+      if(oiIsStaleForScoring && !isMCX && ["NIFTY","BANKNIFTY","FINNIFTY","SENSEX","MIDCPNIFTY"].indexOf(s.sym)<0){
+        window._oiStaleLog=window._oiStaleLog||{};
+        if(!window._oiStaleLog[s.sym]||Date.now()-window._oiStaleLog[s.sym]>900000){
+          window._oiStaleLog[s.sym]=Date.now();
+          console.log("[OI-STALE] "+(window.IS_WORKER?"worker":"phone")+" "+s.sym+
+            " srvStale="+!!s.oiServerStale+" srvAge="+s.oiServerAgeMin+" ageKnown="+!!s.oiServerAgeKnown+
+            " sinceFetchMin="+(_sinceFetch===null?"never":_sinceFetch.toFixed(1))+
+            " total="+(_oiAgeMinChk===null?"null":_oiAgeMinChk.toFixed(1))+" limit="+(s.oiMaxAgeMin||10)+
+            " pcr="+(s.pcr||0));
+        }
+      }
+    }catch(e){}
     if(isMCX){ if(!isMCXOpen()) return; } else { if(!isOpen()) return; }
 
     var px=s.px, atm=s.atm||Math.round(px/(s.step||100))*(s.step||100);
@@ -6082,7 +6110,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1018a"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1019a"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
