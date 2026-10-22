@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1019a</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1022a</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -1174,7 +1174,7 @@ function _doFetchFromServer(){
       }
     }).catch(function(){});
   }
-  return fetch(mktUrl,{headers:kiteHeaders(),signal:AbortSignal.timeout(20000)})
+  return fetch(mktUrl,{headers:kiteHeaders(),signal:AbortSignal.timeout(60000)})  // 1022a: was 20s; /market takes longer than that in market hours, so most worker polls were aborted
   .then(function(r){
     if(!r.ok)throw new Error("HTTP "+r.status);
     return r.json();
@@ -1302,7 +1302,10 @@ function _doFetchFromServer(){
         sc.oiServerAgeKnown = (sd.oi.cache_age_min !== undefined && sd.oi.cache_age_min !== null);
         sc.oiFetchedAt = Date.now();
         // 15-min-refresh stocks can't stay under a 10-min limit; allow 20.
-        sc.oiMaxAgeMin = (sd.oi.refresh==="15min") ? 20 : 10;
+        // 1022a: limits raised to match the server's REAL refresh cadence
+        // (worker logs Oct 22: median stock OI age 10-14 min in market
+        // hours), so normal refresh lag no longer marks OI as stale.
+        sc.oiMaxAgeMin = (sd.oi.refresh==="15min") ? 30 : 15;
         sc.cC15 = sd.oi.ce_chg_15m||0; sc.pC15 = sd.oi.pe_chg_15m||0;
         sc.oi15Avail = sd.oi.oi_15m_available||false;
       }
@@ -2278,7 +2281,7 @@ function localSigs(){
     // DIAG (1019a): when a stock's OI is judged stale, say why (max once per
     // symbol per 15 min). Visible in the worker's Render log.
     try{
-      if(oiIsStaleForScoring && !isMCX && ["NIFTY","BANKNIFTY","FINNIFTY","SENSEX","MIDCPNIFTY"].indexOf(s.sym)<0){
+      if(oiIsStaleForScoring && !isMCX && isOpen() && ["NIFTY","BANKNIFTY","FINNIFTY","SENSEX","MIDCPNIFTY"].indexOf(s.sym)<0){
         window._oiStaleLog=window._oiStaleLog||{};
         if(!window._oiStaleLog[s.sym]||Date.now()-window._oiStaleLog[s.sym]>900000){
           window._oiStaleLog[s.sym]=Date.now();
@@ -6110,7 +6113,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1019a"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1022a"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
