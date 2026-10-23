@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1023c</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1023d</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -3717,8 +3717,8 @@ var _premQ=[], _premInFlight=0;
 function _premNext(){
   while(_premInFlight<2 && _premQ.length){
     var job=_premQ.shift(); _premInFlight++;
-    _fetchRealPremiumNow(job[0],job[1],job[2],(function(cb){return function(d){
-      _premInFlight--; try{cb(d);}catch(e){} _premNext();
+    _fetchRealPremiumNow(job[0],job[1],job[2],(function(cb){return function(d, why){
+      _premInFlight--; try{cb(d, why);}catch(e){} _premNext();
     };})(job[3]));
   }
 }
@@ -3766,12 +3766,12 @@ function _fetchRealPremiumNow(sym, strike, optType, cb){
         cb(d);
       } else {
         console.warn("[Premium ❌] "+sym+" "+strike+optType+" failed: "+(d&&d.error||"unknown — bad response shape"));
-        cb(null);
+        cb(null, "server: "+String(d&&d.error||"bad response").slice(0,60));
       }
     })
     .catch(function(e){
       console.warn("[Premium ❌] "+sym+" "+strike+optType+" network/timeout: "+(e&&e.message||e));
-      cb(null);
+      cb(null, "network: "+String(e&&e.message||e).slice(0,60));
     });
 }
 
@@ -3823,7 +3823,7 @@ function processScan(sigs){
     if(sig.urgency==="HIGH" && sig.confidence>=82 && sig.strike && sig.optType){
       _journalDiag.attempted++;
       (function(sigRef){
-        fetchRealPremium(sigRef.sym, sigRef.strike, sigRef.optType, function(prem){
+        fetchRealPremium(sigRef.sym, sigRef.strike, sigRef.optType, function(prem, _premWhy){
           if(!prem || !prem.premium){
             _journalDiag.premiumFailed++;
             // 1023a: still record + push the HIGH signal (no journal entry,
@@ -3835,7 +3835,7 @@ function processScan(sigs){
             if(!window._noPremAt[_npKey]||Date.now()-window._noPremAt[_npKey]>900000){  // once per 15 min per sym+bias
               window._noPremAt[_npKey]=Date.now();
               var _np={}; for(var _k in sigRef) _np[_k]=sigRef[_k];
-              _np.why=(_np.why||"")+" | premium unavailable — levels are underlying-based";
+              _np.why=(_np.why||"")+" | premium unavailable ("+(_premWhy||"?")+") — levels are underlying-based";
               _sendIngestSignal(_np);
             }
             return;
@@ -6176,7 +6176,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1023c"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1023d"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
