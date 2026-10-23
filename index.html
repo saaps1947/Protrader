@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1023b</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1023c</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -2141,7 +2141,7 @@ function runScan(manual){
       // Silent timeout → afterPrimarySync fires without orb data → snapshot
       // captures s.orb=null → ORB always 0% despite server computing correctly.
       // 12s is still well inside the 50s snapshot window.
-      fetch(SERVER_URL+"/smc/"+sym+_smcCreds(),{headers:kiteHeaders(),signal:AbortSignal.timeout(12000)})
+      _smcFetch(SERVER_URL+"/smc/"+sym+_smcCreds(), true)
       .then(function(r){return r.json();})
       .then(function(d){applySmcData(sym,d);afterPrimarySync();})
       .catch(function(){afterPrimarySync();});
@@ -2156,7 +2156,7 @@ function runScan(manual){
     // was missed the first time.
     smcLiquid.forEach(function(sym,i){
       safeTimeout(function(){
-        fetch(SERVER_URL+"/smc/"+sym+_smcCreds(),{headers:kiteHeaders(),signal:AbortSignal.timeout(12000)})
+        _smcFetch(SERVER_URL+"/smc/"+sym+_smcCreds())
         .then(function(r){return r.json();})
         .then(function(d){applySmcData(sym,d);})
         .catch(function(){});
@@ -2171,7 +2171,7 @@ function runScan(manual){
     remaining.forEach(function(s,i){
       safeTimeout(function(){
         // Same fix as Batch 2 above — matches Batch 1's already-proven 12s.
-        fetch(SERVER_URL+"/smc/"+s.sym+_smcCreds(),{headers:kiteHeaders(),signal:AbortSignal.timeout(12000)})
+        _smcFetch(SERVER_URL+"/smc/"+s.sym+_smcCreds())
         .then(function(r){return r.json();})
         .then(function(d){applySmcData(s.sym,d);})
         .catch(function(){});
@@ -3722,6 +3722,28 @@ function _premNext(){
     };})(job[3]));
   }
 }
+// 1023c: SMC requests go through a queue, at most 2 in flight. Each scan
+// used to fire ~60 at once; the browser held everything else (premium,
+// /market, even /ping) behind them until those requests timed out, which
+// is why every worker HIGH signal said "premium unavailable".
+var _smcQ=[], _smcIn=0, _smcQueued={};
+function _smcFetch(url, front){
+  return new Promise(function(resolve, reject){
+    if(_smcQueued[url]){ reject(new Error("smc already queued")); return; }
+    _smcQueued[url]=true;
+    var job={url:url, resolve:resolve, reject:reject};
+    if(front) _smcQ.unshift(job); else _smcQ.push(job);
+    _smcPump();
+  });
+}
+function _smcRun(job){
+  _smcIn++;
+  fetch(job.url,{headers:kiteHeaders(),signal:AbortSignal.timeout(12000)})
+    .then(function(r){ _smcIn--; delete _smcQueued[job.url]; _smcPump(); job.resolve(r); },
+          function(e){ _smcIn--; delete _smcQueued[job.url]; _smcPump(); job.reject(e); });
+}
+function _smcPump(){ while(_smcIn<2 && _smcQ.length){ _smcRun(_smcQ.shift()); } }
+
 function fetchRealPremium(sym, strike, optType, cb){
   if(!sym || !strike || !optType || !SERVER_URL){ cb(null); return; }
   _premQ.push([sym,strike,optType,cb]); _premNext();
@@ -6154,7 +6176,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1023b"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1023c"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
