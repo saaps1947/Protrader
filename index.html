@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1022a</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1023a</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -3699,8 +3699,23 @@ function refreshLivePremium(sym, strike, optType){
   });
 }
 
+// 1023a: at most 2 premium requests in flight. The worker used to fire ~10
+// at once, filling all of the server's request threads so even /ping timed
+// out (worker log, Oct 23).
+var _premQ=[], _premInFlight=0;
+function _premNext(){
+  while(_premInFlight<2 && _premQ.length){
+    var job=_premQ.shift(); _premInFlight++;
+    _fetchRealPremiumNow(job[0],job[1],job[2],(function(cb){return function(d){
+      _premInFlight--; try{cb(d);}catch(e){} _premNext();
+    };})(job[3]));
+  }
+}
 function fetchRealPremium(sym, strike, optType, cb){
   if(!sym || !strike || !optType || !SERVER_URL){ cb(null); return; }
+  _premQ.push([sym,strike,optType,cb]); _premNext();
+}
+function _fetchRealPremiumNow(sym, strike, optType, cb){
   fetch(SERVER_URL+"/option_premium?sym="+encodeURIComponent(sym)+
         "&strike="+encodeURIComponent(strike)+"&type="+encodeURIComponent(optType),
         {headers:kiteHeaders(),signal:AbortSignal.timeout(15000)})
@@ -3776,7 +3791,22 @@ function processScan(sigs){
       _journalDiag.attempted++;
       (function(sigRef){
         fetchRealPremium(sigRef.sym, sigRef.strike, sigRef.optType, function(prem){
-          if(!prem || !prem.premium){ _journalDiag.premiumFailed++; return; } // fetch failed — skip, don't journal a guess
+          if(!prem || !prem.premium){
+            _journalDiag.premiumFailed++;
+            // 1023a: still record + push the HIGH signal (no journal entry,
+            // since the journal needs the real premium). Before this, every
+            // failed premium fetch silently dropped the worker's HIGH
+            // signals, so nothing was pushed while the app was closed.
+            window._noPremAt=window._noPremAt||{};
+            var _npKey=sigRef.sym+"_"+sigRef.bias;
+            if(!window._noPremAt[_npKey]||Date.now()-window._noPremAt[_npKey]>900000){  // once per 15 min per sym+bias
+              window._noPremAt[_npKey]=Date.now();
+              var _np={}; for(var _k in sigRef) _np[_k]=sigRef[_k];
+              _np.why=(_np.why||"")+" | premium unavailable — levels are underlying-based";
+              _sendIngestSignal(_np);
+            }
+            return;
+          } // fetch failed — don't journal a guess
           var p = prem.premium;
           // Audit #6: derive premium levels from the structural underlying
           // levels (read BEFORE they're overwritten below). Falls back to the
@@ -6113,7 +6143,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1022a"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1023a"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
