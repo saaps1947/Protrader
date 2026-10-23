@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1023e</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1024a</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -2306,7 +2306,7 @@ function localSigs(){
     }catch(e){}
     if(isMCX){ if(!isMCXOpen()) return; } else { if(!isOpen()) return; }
 
-    var px=s.px, atm=s.atm||Math.round(px/(s.step||100))*(s.step||100);
+    var px=s.px||s._lastPx||0, atm=s.atm||Math.round(px/(s.step||100))*(s.step||100);  // audit: keep the last-known-price fallback
     var step=s.step||(px>10000?100:px>1000?50:px>100?10:5);
 
     // ── LAYER 1: OI Data ──
@@ -6203,7 +6203,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1023e"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1024a"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
