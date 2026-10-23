@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1023a</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1023b</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -1900,12 +1900,23 @@ function captureSnapshot(s){
   // beyond this device/browser instead of only living in local IndexedDB.
   // Fire-and-forget — this runs inside a ~55-symbol loop every scan, so it
   // must never await or let a network hiccup slow down or break capture.
+  // 1023b: rows are collected and sent as ONE request a moment after the
+  // capture loop ends (was one request per symbol, ~60 at once, which
+  // flooded the server every 5 min).
   if(SERVER_URL){
-    try{
-      fetch(SERVER_URL+"/snapshot",{method:"POST",headers:ptHeaders(),body:JSON.stringify(snap)})
-        .catch(function(){}); // silent — local save already succeeded, this is a bonus sync
-    }catch(e){}
+    _snapBuf.push(snap);
+    if(!_snapFlushT) _snapFlushT=setTimeout(_flushSnapBuf,1500);
   }
+}
+var _snapBuf=[], _snapFlushT=null;
+function _flushSnapBuf(){
+  _snapFlushT=null;
+  if(!_snapBuf.length||!SERVER_URL) return;
+  var rows=_snapBuf; _snapBuf=[];
+  try{
+    fetch(SERVER_URL+"/snapshot",{method:"POST",headers:ptHeaders(),body:JSON.stringify({rows:rows})})
+      .catch(function(){}); // silent — local save already succeeded, this is a bonus sync
+  }catch(e){}
 }
 
 var _lastSnapTs=0;
@@ -6143,7 +6154,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1023a"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1023b"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
