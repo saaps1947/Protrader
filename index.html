@@ -468,7 +468,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1023d</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1023e</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -3722,6 +3722,27 @@ function _premNext(){
     };})(job[3]));
   }
 }
+// 1023e: signal uploads go through a queue too (max 2 in flight, HIGH first).
+// Each scan used to post 30-60 signals at once, and premium requests sat
+// behind them in the browser until they timed out (worker HIGH signals all
+// reported "premium unavailable (network: signal timed out)").
+var _ingQ=[], _ingIn=0;
+function _ingestPost(payload, high){
+  return new Promise(function(resolve, reject){
+    var job={payload:payload, resolve:resolve, reject:reject};
+    if(high) _ingQ.unshift(job); else _ingQ.push(job);
+    if(_ingQ.length>150) _ingQ.splice(150);   // never let a backlog grow without bound
+    _ingPump();
+  });
+}
+function _ingRun(job){
+  _ingIn++;
+  fetch(SERVER_URL+"/ingest_signal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(job.payload),signal:AbortSignal.timeout(30000)})
+    .then(function(r){ _ingIn--; _ingPump(); job.resolve(r); },
+          function(e){ _ingIn--; _ingPump(); job.reject(e); });
+}
+function _ingPump(){ while(_ingIn<2 && _ingQ.length){ _ingRun(_ingQ.shift()); } }
+
 // 1023c: SMC requests go through a queue, at most 2 in flight. Each scan
 // used to fire ~60 at once; the browser held everything else (premium,
 // /market, even /ping) behind them until those requests timed out, which
@@ -3751,7 +3772,7 @@ function fetchRealPremium(sym, strike, optType, cb){
 function _fetchRealPremiumNow(sym, strike, optType, cb){
   fetch(SERVER_URL+"/option_premium?sym="+encodeURIComponent(sym)+
         "&strike="+encodeURIComponent(strike)+"&type="+encodeURIComponent(optType),
-        {headers:kiteHeaders(),signal:AbortSignal.timeout(15000)})
+        {headers:kiteHeaders(),signal:AbortSignal.timeout(45000)})  // 1023e: was 15s
     .then(function(r){return r.json();})
     .then(function(d){
       // FIX: this used to fail completely silently — success, a
@@ -3823,9 +3844,15 @@ function processScan(sigs){
     if(sig.urgency==="HIGH" && sig.confidence>=82 && sig.strike && sig.optType){
       _journalDiag.attempted++;
       (function(sigRef){
-        fetchRealPremium(sigRef.sym, sigRef.strike, sigRef.optType, function(prem, _premWhy){
+        fetchRealPremium(sigRef.sym, sigRef.strike, sigRef.optType, function _onPrem(prem, _premWhy){
           if(!prem || !prem.premium){
             _journalDiag.premiumFailed++;
+            // 1023e: one retry 45s later so the trade can still reach the
+            // journal with its real premium (the push below goes out now).
+            if(!sigRef._premRetry){
+              sigRef._premRetry=1;
+              setTimeout(function(){ fetchRealPremium(sigRef.sym, sigRef.strike, sigRef.optType, _onPrem); }, 45000);
+            }
             // 1023a: still record + push the HIGH signal (no journal entry,
             // since the journal needs the real premium). Before this, every
             // failed premium fetch silently dropped the worker's HIGH
@@ -3938,7 +3965,7 @@ function processScan(sigs){
             trade:sig.trade, strategy:sig.strategy,
             _source: window.IS_WORKER ? "worker" : "client"
           };
-          fetch(SERVER_URL+"/ingest_signal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(_ingestPayload)})
+          _ingestPost(_ingestPayload, sig.urgency==="HIGH")
             .then(function(r){
               if(!r.ok) console.warn("[Ingest FAIL] "+sig.sym+" - server returned HTTP "+r.status);
             })
@@ -6176,7 +6203,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1023d"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1023e"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
   // Also sync the moment the app comes back to the foreground — the moment you
