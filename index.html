@@ -464,11 +464,12 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   </div>
 </div>
 
+<div id="riskBanner" style="display:none;margin:6px 8px;padding:7px 10px;border-radius:8px;font-size:.65rem;text-align:center"></div>
 <div class="srv-banner" id="srvBanner">📡 Server URL not set — tap ⚙ Settings → paste your Render.com URL for live data</div>
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1024a</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1029a</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -964,6 +965,14 @@ var ENGINE_FAMILY_CAPS = true;
 var NO_OI_STOCK_CAP    = 79;   // max confidence for NSE stocks without fresh OI (82 = old behavior)
 var FAMILY_CAPS = {trend:4, price:4, mom:2, oi:5};   // points per side, per family
 var RS_GATE_ON  = true;
+// 3-year backtest (Oct 2023-Oct 2026, 4 indices, costs included): order-block, FVG,
+// CHoCH, sweep and premium/discount entries lost money even BEFORE costs.
+// true = SMC can add at most 2 points, no longer counts as its own confirming
+// layer, and OB/FVG/sweep/zone no longer count toward the price-action layer
+// or the "triple alignment" bonus. OB/FVG are still used to place SL/targets.
+// Indices and stocks only; MCX keeps the old weighting (not backtested, and
+// SMC is MCX's main driver because MCX has no OI). false = old behavior.
+var SMC_DOWNWEIGHT = true;
 var RS_MIN_EDGE = 0.30;   // % a stock must beat (or trail) NIFTY by for a HIGH
 // Volatility-aware option levels (audit #6). false = old fixed 30/50/100%.
 var VOL_TARGETS_ON = true;
@@ -2532,8 +2541,10 @@ function localSigs(){
     }
 
     // Apply SMC cap — log which reasons made it through
-    var smcBullCapped = Math.min(smcBullRaw, 5);
-    var smcBearCapped = Math.min(smcBearRaw, 5);
+    // MCX has no OI, so SMC is its main driver and MCX was not in the backtest -> unchanged for MCX.
+    var _smcDW = SMC_DOWNWEIGHT && !isMCX;
+    var smcBullCapped = Math.min(smcBullRaw, _smcDW?2:5);
+    var smcBearCapped = Math.min(smcBearRaw, _smcDW?2:5);
     // Trader-facing label instead of internal cap mechanics — same meaning,
     // describes WHAT confluence exists rather than HOW the score was computed.
     //
@@ -2934,8 +2945,8 @@ function localSigs(){
     var oiBear=(pcrBear||pcrExtremeBull||callWriting||trappedPE);
     var vwapBull=aboveVwap||vwapReclaim;
     var vwapBear=belowVwap||vwapReject;
-    var structBull=bullStructure||bullOB||bullSweep;
-    var structBear=bearStructure||bearOB||bearSweep;
+    var structBull=_smcDW?bullStructure:(bullStructure||bullOB||bullSweep);
+    var structBear=_smcDW?bearStructure:(bearStructure||bearOB||bearSweep);
 
     // Triple alignment = institutional confidence
     if(oiBull&&vwapBull&&structBull){
@@ -3152,12 +3163,13 @@ function localSigs(){
                     (aboveMp?1:0)+(callWriting?1:0)+(trappedPE?1:0)+(peUnwinding?1:0);
 
     // Price action category: VWAP, ORB, OB, FVG, CPR
+    var _smcPA = _smcDW?0:1;   // OB/FVG/sweep/zone no longer make a price-action layer
     var priceActBull = (aboveVwap?1:0)+(vwapReclaim?1:0)+(orbBreakout?1:0)+
-                       (bullOB?1:0)+(bullFVG?1:0)+(bullSweep?1:0)+(cprNarrow&&aboveTC?1:0)+
-                       (smcZone==="DISCOUNT"?1:0);
+                       _smcPA*((bullOB?1:0)+(bullFVG?1:0)+(bullSweep?1:0)+(smcZone==="DISCOUNT"?1:0))+
+                       (cprNarrow&&aboveTC?1:0);
     var priceActBear = (belowVwap?1:0)+(vwapReject?1:0)+(orbBreakdown?1:0)+
-                       (bearOB?1:0)+(bearFVG?1:0)+(bearSweep?1:0)+(cprNarrow&&belowBC?1:0)+
-                       (smcZone==="PREMIUM"?1:0);
+                       _smcPA*((bearOB?1:0)+(bearFVG?1:0)+(bearSweep?1:0)+(smcZone==="PREMIUM"?1:0))+
+                       (cprNarrow&&belowBC?1:0);
 
     // Momentum category: RSI, SMA crossover, volume, trend
     var momCatBull = (golden?2:0)+(breakout?1:0)+(rsiOS?1:0)+(rsiBull?1:0)+
@@ -3179,13 +3191,13 @@ function localSigs(){
     if(oiCatBull>=1)    bullLayers++;
     if(priceActBull>=1) bullLayers++;
     if(momCatBull>=1)   bullLayers++;
-    if(smcCatBull>=1)   bullLayers++;   // SMC structure = independent layer
+    if(smcCatBull>=1 && !_smcDW) bullLayers++;   // SMC structure = independent layer (off: backtest)
     if(regimeCat>=1&&regimeCode==="TRENDING_UP") bullLayers++;
 
     if(oiCatBear>=1)    bearLayers++;
     if(priceActBear>=1) bearLayers++;
     if(momCatBear>=1)   bearLayers++;
-    if(smcCatBear>=1)   bearLayers++;   // SMC structure = independent layer
+    if(smcCatBear>=1 && !_smcDW) bearLayers++;   // SMC structure = independent layer (off: backtest)
     if(regimeCat>=1&&regimeCode==="TRENDING_DOWN") bearLayers++;
 
     // Setup key for leaderboard
@@ -4892,6 +4904,39 @@ function saveSignalLog(){
   }
 }
 
+// ── RISK GATE (Oct 29) ── the server decides from the shared journal; this copy
+// only lets the app skip auto-logging early and show the banner. Unknown = allow
+// (the server still enforces it on its side).
+var _RG=null, _RGts=0, _rgInFlight=false;
+var RISK_GATE_SYMS={NIFTY:1,BANKNIFTY:1,FINNIFTY:1,SENSEX:1,CRUDEOIL:1,GOLD:1,SILVER:1,NATURALGAS:1,MCX:1,BSE:1};
+function fetchRiskGate(){
+  if(typeof SERVER_URL==="undefined"||!SERVER_URL||_rgInFlight)return;
+  _rgInFlight=true;
+  var opt={headers:ptHeaders()}; try{if(AbortSignal.timeout)opt.signal=AbortSignal.timeout(15000);}catch(_){}
+  fetch(SERVER_URL+"/risk_gate/"+Date.now(),opt).then(function(r){return r.json();}).then(function(d){
+    if(d&&d.ok){_RG=d;_RGts=Date.now();renderRiskBanner();}
+  }).catch(function(e){console.warn("[RiskGate] "+(e&&e.message||e));}).then(function(){_rgInFlight=false;});
+}
+function riskGateFor(sym){
+  var gated=(_RG&&_RG.symbols)?_RG.symbols.indexOf(sym)>=0:!!RISK_GATE_SYMS[sym];   // server's list wins
+  if(!_RG||!_RG.on||!gated||Date.now()-_RGts>5*60*1000)return {allowed:true,reasons:[]};
+  return isSymMCX(sym)?{allowed:_RG.allowed_mcx,reasons:_RG.reasons_mcx||[]}:{allowed:_RG.allowed,reasons:_RG.reasons||[]};
+}
+function renderRiskBanner(){
+  var el=document.getElementById("riskBanner"); if(!el||!_RG)return;
+  if(!_RG.on){el.style.display="none";return;}
+  var L=_RG.limits||{}, cnt=_RG.trades+"/"+L.max_trades+" trades · "+_RG.losses+"/"+L.max_losses+" losses · "+_RG.open+" open";
+  // Outside the entry window is normal most of the day — only shout about real limits.
+  var real=(_RG.reasons||[]).filter(function(r){return r.indexOf("outside entry window")<0;});
+  if(real.length){
+    el.style.cssText="display:block;margin:6px 8px;padding:7px 10px;border-radius:8px;font-size:.65rem;text-align:center;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);color:var(--r)";
+    el.textContent="🛑 Risk gate: no new trades — "+real.join("; ")+" ("+cnt+")";
+  } else {
+    el.style.cssText="display:block;margin:6px 8px;padding:5px 10px;border-radius:8px;font-size:.6rem;text-align:center;background:rgba(34,197,94,.05);border:1px solid rgba(34,197,94,.2);color:var(--m)";
+    el.textContent="🟢 Risk gate: "+cnt+((_RG.reasons||[]).length?" · "+_RG.reasons.join("; "):"");
+  }
+}
+
 function autoLogSignal(sig){
   // Guard 1: only auto-fire the journal for HIGH conviction signals.
   // Manual execute (logSignalEntry, below) intentionally skips this guard —
@@ -4905,6 +4950,9 @@ function autoLogSignal(sig){
   // so before its first sync it can't know which trades are already open and
   // would re-log them at a later price. (30s fallback if the server is down.)
   if(!_journalSyncedOnce && (Date.now()-_appStartTs)<30000) return {ok:false, reason:"Waiting for journal sync"};
+  // Risk gate: daily trade/loss limits, cooldown after SL, entry window (index + MCX).
+  var _rg=riskGateFor(sig.sym);
+  if(!_rg.allowed) return {ok:false, reason:"Risk gate: "+_rg.reasons.join("; ")};
   // FIX: this used to call _writeJournal without ever using its return
   // value — the caller had no way to know whether it actually succeeded
   // or silently hit a guard (invalid price, missing SL, dedup block).
@@ -6203,9 +6251,11 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1024a"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1029a"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
+  try{setTimeout(fetchRiskGate,2500);setInterval(fetchRiskGate,60000);
+      document.addEventListener("visibilitychange",function(){if(!document.hidden&&Date.now()-_RGts>30000)fetchRiskGate();});}catch(e){} // risk gate
   // Also sync the moment the app comes back to the foreground — the moment you
   // actually look at it. Mobile browsers pause timers while backgrounded.
   try{document.addEventListener("visibilitychange",function(){
