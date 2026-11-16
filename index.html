@@ -408,6 +408,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
       <div class="ss-sec-title">📱 App</div>
       <div id="pushStatus" style="font-size:.68rem;color:var(--m);margin-bottom:8px"></div>
       <button class="ss-btn ss-sec2" id="pushBtn" onclick="togglePushNotifications()">🔔 Enable Notifications</button>
+      <button class="ss-btn ss-sec2" onclick="sendTestPush()">🧪 Send a test notification</button>
       <button class="ss-btn ss-sec2" onclick="exportJ()">📤 Export Journal</button>
       <button class="ss-btn ss-sec2" onclick="clearAll()">🗑 Clear All Data</button>
     </div>
@@ -464,12 +465,12 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
   </div>
 </div>
 
-<div id="riskBanner" style="display:none;margin:6px 8px;padding:7px 10px;border-radius:8px;font-size:.65rem;text-align:center"></div>
+<div id="sysStatus" onclick="toggleSysStatus()" style="display:none;margin:6px 8px;padding:6px 10px;border-radius:8px;font-size:.62rem;cursor:pointer"></div>
 <div class="srv-banner" id="srvBanner">📡 Server URL not set — tap ⚙ Settings → paste your Render.com URL for live data</div>
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1029a</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1116a</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -578,6 +579,12 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
         </div>
         <div class="at-f"><label>Capital (₹)</label><input type="number" id="at_cap" value="50000" step="5000" oninput="updAT()"></div>
         <div class="at-f"><label>Max Trades/Day</label><input type="number" id="at_max" value="3" min="1" max="10" oninput="updAT()"></div>
+        <div class="at-f at-full" style="display:flex;align-items:center;justify-content:space-between"><label style="margin:0">🛡 Daily risk limits</label>
+          <label class="tog"><input type="checkbox" id="at_rg" checked onchange="saveRiskCfg()"><div class="tog-tr"></div><div class="tog-th"></div></label></div>
+        <div class="at-f"><label>Pause after N losing signals</label><input type="number" id="at_rl" value="2" min="0" max="10" onchange="saveRiskCfg()"></div>
+        <div class="at-f"><label>Cooldown after SL (min)</label><input type="number" id="at_rc" value="30" min="0" max="180" step="5" onchange="saveRiskCfg()"></div>
+        <div class="at-f at-full"><label>Last new entry (NSE/BSE)</label><input type="time" id="at_re" value="15:00" onchange="saveRiskCfg()"></div>
+        <div class="at-f at-full" id="atRisk" style="font-size:.62rem;line-height:1.4;color:var(--m)">Daily limits apply to auto-trading only — signals, alerts and the journal are never limited.</div>
         <div class="at-f at-full"><label>Direction</label><select id="at_dir"><option value="both">Both</option><option value="long">Long Only</option><option value="short">Short Only</option></select></div>
         <div class="at-f at-full"><label>Min Conviction Score: <span id="at_cl" style="color:var(--g)">82</span></label>
           <div class="sld-wrap"><input type="range" class="sld" id="at_sld" min="70" max="95" value="82" style="--p:80%" oninput="updConf(this.value)"><span class="sld-v" id="at_sv">82</span></div>
@@ -970,7 +977,7 @@ var RS_GATE_ON  = true;
 // true = SMC can add at most 2 points, no longer counts as its own confirming
 // layer, and OB/FVG/sweep/zone no longer count toward the price-action layer
 // or the "triple alignment" bonus. OB/FVG are still used to place SL/targets.
-// Indices and stocks only; MCX keeps the old weighting (not backtested, and
+// Stocks only (journal: index trades with SMC did well); MCX keeps the old weighting (not backtested, and
 // SMC is MCX's main driver because MCX has no OI). false = old behavior.
 var SMC_DOWNWEIGHT = true;
 var RS_MIN_EDGE = 0.30;   // % a stock must beat (or trail) NIFTY by for a HIGH
@@ -1680,7 +1687,7 @@ function nav(el,id){
   stopJournalAutoRefresh();
   if(id==="jour"){renderJ();renderPerformance();startJournalAutoRefresh();if(Date.now()-_lastJournalSync>30000)syncJournalFromServer();}
   if(id==="jour")renderJ();
-  if(id==="auto")updAT();
+  if(id==="auto"){updAT();initRiskPanel();if(Date.now()-_RGts>30000)fetchRiskGate();}
 }
 var _journalRefreshTimer = null;
 function startJournalAutoRefresh(){
@@ -2542,7 +2549,9 @@ function localSigs(){
 
     // Apply SMC cap — log which reasons made it through
     // MCX has no OI, so SMC is its main driver and MCX was not in the backtest -> unchanged for MCX.
-    var _smcDW = SMC_DOWNWEIGHT && !isMCX;
+    // Indices also excluded: all 13 closed index trades in the live journal (Sep-Oct 2026) had SMC
+    // counted and averaged +0.6R, so there is no evidence to change index scoring yet.
+    var _smcDW = SMC_DOWNWEIGHT && !isMCX && ["NIFTY","BANKNIFTY","FINNIFTY","SENSEX","MIDCPNIFTY"].indexOf(s.sym)<0;
     var smcBullCapped = Math.min(smcBullRaw, _smcDW?2:5);
     var smcBearCapped = Math.min(smcBearRaw, _smcDW?2:5);
     // Trader-facing label instead of internal cap mechanics — same meaning,
@@ -3880,6 +3889,15 @@ function processScan(sigs){
             return;
           } // fetch failed — don't journal a guess
           var p = prem.premium;
+          // Dual track (Oct 29): keep the UNDERLYING entry/SL/targets too, read before
+          // they're overwritten with premium levels below, so the server can measure
+          // the same trade on spot/futures (no option decay) — EOD vs holding overnight.
+          try{
+            var _sp=allS().filter(function(x){return x.sym===sigRef.sym;})[0];
+            var _spot=_sp?(_sp.px||_sp._lastPx||0):0, _sd=sigRef.bias==="BULLISH"?1:-1;
+            var _usl=parseFloat(sigRef.sl)||0, _ut1=parseFloat(sigRef.target1)||0, _ut2=parseFloat(sigRef.target2||sigRef.target1)||0;
+            if(_spot>0&&_usl>0&&(_spot-_usl)*_sd>0) sigRef._und={entry:_spot,sl:_usl,t1:_ut1,t2:_ut2};
+          }catch(_){}
           // Audit #6: derive premium levels from the structural underlying
           // levels (read BEFORE they're overwritten below). Falls back to the
           // fixed scheme — now honoring the user's own SL % setting instead
@@ -4709,7 +4727,7 @@ function updAT(){AT.capital=parseInt(document.getElementById("at_cap").value,10)
 function togAT(on){if(on)startAT();else stopAT();}
 function clickAT(){if(AT.active)stopAT();else{document.getElementById("atTog").checked=true;startAT();}}
 function startAT(){
-  updAT();AT.active=true;AT.trades=0;
+  updAT();AT.active=true;AT.trades=0;fetchRiskGate();
   document.getElementById("atCard").classList.add("live");
   document.getElementById("at_ico").textContent="🟢";
   document.getElementById("at_title").textContent="Auto-Trade LIVE";
@@ -4773,6 +4791,11 @@ function atCycle(){
 
   // Take highest conviction qualifying signal
   var sig=candidates.sort(function(a,b){return (b.confidence||0)-(a.confidence||0);})[0];
+  var _gate=riskGateFor((AT.inst && AT.inst!=="AUTO") ? AT.inst : sig.sym);
+  if(!_gate.allowed){
+    addLog({ac:"SKIP",inst:sig.sym+" — "+sig.trade,conf:sig.confidence,src:"Daily limit: "+_gate.reasons.join("; "),st:"skip"});
+    return;
+  }
   // Determine actual trading instrument: fixed AT.inst or signal's own symbol
   var tradeSym = (AT.inst && AT.inst!=="AUTO") ? AT.inst : sig.sym;
   var tradeS   = allS().filter(function(x){return x.sym===tradeSym;})[0];
@@ -4803,6 +4826,9 @@ function atCycle(){
 function qAT(sig){
   if(!AT.active)return;
   if((sig.confidence||0)<AT.conf)return;
+  if(AT.trades>=AT.maxTrades)return;
+  var _g=riskGateFor(sig.sym||CS.sym);
+  if(!_g.allowed){addLog({ac:"SKIP",inst:(sig.sym||CS.sym)+" — "+(sig.trade||""),conf:sig.confidence,src:"Daily limit: "+_g.reasons.join("; "),st:"skip"});return;}
   pendingTrade={action:"BUY",bias:sig.bias||"BULLISH",optType:(sig.optType||(sig.bias==="BEARISH"?"PE":"CE")),sym:sig.sym||CS.sym,instrument:sig.instrument||sig.trade||CS.sym,confidence:sig.confidence,entry:sig.entry,sl:sig.sl||sig.stopLoss,target:sig.target||sig.target1,why:sig.why||sig.reasoning||"",source:"Signal"};
   showOrd();
 }
@@ -4904,37 +4930,52 @@ function saveSignalLog(){
   }
 }
 
-// ── RISK GATE (Oct 29) ── the server decides from the shared journal; this copy
-// only lets the app skip auto-logging early and show the banner. Unknown = allow
-// (the server still enforces it on its side).
+// ── DAILY RISK LIMITS for AUTO-TRADING (Oct 29) ──────────────────────────
+// Only the Auto tab uses this. Signals, push notifications and the journal are
+// never limited, so every HIGH signal is still shown and recorded for analysis.
+// The server counts today's signal results from the shared journal; the limits
+// themselves are set here in the Auto tab and saved on this device.
+var RISK_CFG={on:true,maxLosses:2,cooldown:30,lastEntry:"15:00"};
+try{var _rc=JSON.parse(localStorage.getItem("pt_riskcfg")||"null");if(_rc)for(var _k in _rc)RISK_CFG[_k]=_rc[_k];}catch(_){}
 var _RG=null, _RGts=0, _rgInFlight=false;
-var RISK_GATE_SYMS={NIFTY:1,BANKNIFTY:1,FINNIFTY:1,SENSEX:1,CRUDEOIL:1,GOLD:1,SILVER:1,NATURALGAS:1,MCX:1,BSE:1};
+function saveRiskCfg(){
+  var g=function(id){return document.getElementById(id);};
+  if(g("at_rg"))RISK_CFG.on=!!g("at_rg").checked;
+  if(g("at_rl"))RISK_CFG.maxLosses=Math.max(0,parseInt(g("at_rl").value,10)||0);
+  if(g("at_rc"))RISK_CFG.cooldown=Math.max(0,parseInt(g("at_rc").value,10)||0);
+  if(g("at_re")&&/^\d{1,2}:\d{2}$/.test(g("at_re").value))RISK_CFG.lastEntry=g("at_re").value;
+  try{localStorage.setItem("pt_riskcfg",JSON.stringify(RISK_CFG));}catch(_){}
+  _RGts=0;fetchRiskGate();renderRiskPanel();
+}
+function initRiskPanel(){
+  var g=function(id){return document.getElementById(id);};
+  if(g("at_rg"))g("at_rg").checked=!!RISK_CFG.on;
+  if(g("at_rl"))g("at_rl").value=RISK_CFG.maxLosses;
+  if(g("at_rc"))g("at_rc").value=RISK_CFG.cooldown;
+  if(g("at_re"))g("at_re").value=RISK_CFG.lastEntry;
+  renderRiskPanel();
+}
 function fetchRiskGate(){
   if(typeof SERVER_URL==="undefined"||!SERVER_URL||_rgInFlight)return;
   _rgInFlight=true;
+  var q="?max_losses="+RISK_CFG.maxLosses+"&cooldown="+RISK_CFG.cooldown+"&window="+encodeURIComponent("09:30-"+RISK_CFG.lastEntry);
   var opt={headers:ptHeaders()}; try{if(AbortSignal.timeout)opt.signal=AbortSignal.timeout(15000);}catch(_){}
-  fetch(SERVER_URL+"/risk_gate/"+Date.now(),opt).then(function(r){return r.json();}).then(function(d){
-    if(d&&d.ok){_RG=d;_RGts=Date.now();renderRiskBanner();}
+  fetch(SERVER_URL+"/risk_gate/"+Date.now()+q,opt).then(function(r){return r.json();}).then(function(d){
+    if(d&&d.ok){_RG=d;_RGts=Date.now();renderRiskPanel();}
   }).catch(function(e){console.warn("[RiskGate] "+(e&&e.message||e));}).then(function(){_rgInFlight=false;});
 }
+// Unknown or stale status = allow (never block auto-trading on a network hiccup).
 function riskGateFor(sym){
-  var gated=(_RG&&_RG.symbols)?_RG.symbols.indexOf(sym)>=0:!!RISK_GATE_SYMS[sym];   // server's list wins
-  if(!_RG||!_RG.on||!gated||Date.now()-_RGts>5*60*1000)return {allowed:true,reasons:[]};
+  if(!RISK_CFG.on||!_RG||!_RG.on||Date.now()-_RGts>5*60*1000)return {allowed:true,reasons:[]};
   return isSymMCX(sym)?{allowed:_RG.allowed_mcx,reasons:_RG.reasons_mcx||[]}:{allowed:_RG.allowed,reasons:_RG.reasons||[]};
 }
-function renderRiskBanner(){
-  var el=document.getElementById("riskBanner"); if(!el||!_RG)return;
-  if(!_RG.on){el.style.display="none";return;}
-  var L=_RG.limits||{}, cnt=_RG.trades+"/"+L.max_trades+" trades · "+_RG.losses+"/"+L.max_losses+" losses · "+_RG.open+" open";
-  // Outside the entry window is normal most of the day — only shout about real limits.
-  var real=(_RG.reasons||[]).filter(function(r){return r.indexOf("outside entry window")<0;});
-  if(real.length){
-    el.style.cssText="display:block;margin:6px 8px;padding:7px 10px;border-radius:8px;font-size:.65rem;text-align:center;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);color:var(--r)";
-    el.textContent="🛑 Risk gate: no new trades — "+real.join("; ")+" ("+cnt+")";
-  } else {
-    el.style.cssText="display:block;margin:6px 8px;padding:5px 10px;border-radius:8px;font-size:.6rem;text-align:center;background:rgba(34,197,94,.05);border:1px solid rgba(34,197,94,.2);color:var(--m)";
-    el.textContent="🟢 Risk gate: "+cnt+((_RG.reasons||[]).length?" · "+_RG.reasons.join("; "):"");
-  }
+function renderRiskPanel(){
+  var el=document.getElementById("atRisk"); if(!el)return;
+  if(!RISK_CFG.on){el.style.color="var(--m)";el.textContent="Daily limits off — auto-trading only stops at Max Trades/Day.";return;}
+  if(!_RG){el.style.color="var(--m)";el.textContent="Checking today's signal results…";return;}
+  var cnt="Today's signals: "+_RG.trades+" taken · "+_RG.losses+" lost · "+_RG.open+" open · auto orders placed: "+AT.trades;
+  if(!_RG.allowed){el.style.color="var(--r)";el.textContent="🛑 Auto paused — "+_RG.reasons.join("; ")+". "+cnt;}
+  else {el.style.color="var(--g)";el.textContent="🟢 Auto allowed. "+cnt;}
 }
 
 function autoLogSignal(sig){
@@ -4950,9 +4991,6 @@ function autoLogSignal(sig){
   // so before its first sync it can't know which trades are already open and
   // would re-log them at a later price. (30s fallback if the server is down.)
   if(!_journalSyncedOnce && (Date.now()-_appStartTs)<30000) return {ok:false, reason:"Waiting for journal sync"};
-  // Risk gate: daily trade/loss limits, cooldown after SL, entry window (index + MCX).
-  var _rg=riskGateFor(sig.sym);
-  if(!_rg.allowed) return {ok:false, reason:"Risk gate: "+_rg.reasons.join("; ")};
   // FIX: this used to call _writeJournal without ever using its return
   // value — the caller had no way to know whether it actually succeeded
   // or silently hit a guard (invalid price, missing SL, dedup block).
@@ -5097,6 +5135,7 @@ function _writeJournal(sig, source){
     status: "OPEN",
     exit_px: null, pnl: null, outcome: null, exitTime: null, notes: ""
   };
+  if(sig._und) entry.shadow={und:{entry:sig._und.entry,sl:sig._und.sl,t1:sig._und.t1,t2:sig._und.t2,at:entry.ts}};
   SIGNAL_LOG.unshift(entry);
   saveSignalLog();
   ingestJournalEntry(entry);
@@ -6008,10 +6047,103 @@ function showUnprotectedPositionBanner(tradingsymbol, reason){
   }catch(ignored){}
 }
 
+// ── SYSTEM STATUS STRIP (Nov 16) ── shows, from the server's own checks, whether the
+// background scanner is running, Zerodha is logged in today, data is being saved and
+// this phone is registered for notifications. Tap it for details.
+var _SYS=null, _sysOpen=false, _sysInFlight=false;
+function fetchSysStatus(){
+  if(typeof SERVER_URL==="undefined"||!SERVER_URL||_sysInFlight)return;
+  _sysInFlight=true;
+  var opt={headers:ptHeaders()}; try{if(AbortSignal.timeout)opt.signal=AbortSignal.timeout(20000);}catch(_){}
+  fetch(SERVER_URL+"/status/"+Date.now(),opt).then(function(r){return r.json();}).then(function(d){
+    if(d&&d.ok){_SYS=d;renderSysStatus();}
+  }).catch(function(e){_SYS={ok:false,unreachable:true};renderSysStatus();})
+    .then(function(){_sysInFlight=false;});
+}
+function toggleSysStatus(){_sysOpen=!_sysOpen;renderSysStatus();}
+function renderSysStatus(){
+  var el=document.getElementById("sysStatus"); if(!el||!_SYS)return;
+  var bad="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);color:var(--r)";
+  var good="background:rgba(34,197,94,.05);border:1px solid rgba(34,197,94,.2);color:var(--m)";
+  var base="display:block;margin:6px 8px;padding:6px 10px;border-radius:8px;font-size:.62rem;cursor:pointer;";
+  if(_SYS.unreachable){el.style.cssText=base+bad;el.innerHTML="🔴 Can't reach the PRO Trader server — check Render (service suspended or restarting?)";return;}
+  var s=_SYS.state||{}, p=_SYS.problems||[];
+  var w=s.worker_last_seen_min, wtxt=(w===null||w===undefined)?"not seen":(w<1?"just now":Math.round(w)+" min ago");
+  var line="Scanner: "+wtxt+" · Zerodha: "+(s.zerodha_logged_in_today?"✓ today":"✗ not today")+
+           " · Data today: "+(s.snapshots_today!=null?s.snapshots_today:"?")+" rows · HIGH today: "+(s.high_today!=null?s.high_today:"?")+
+           " · Alerts sent: "+(s.pushes_sent_today||0)+" · Devices: "+(s.devices_registered!=null?s.devices_registered:"?");
+  el.style.cssText=base+(p.length?bad:good);
+  var head=p.length?("🔴 "+p.length+" problem"+(p.length>1?"s":"")+": "+p[0]):"🟢 All systems running";
+  var more="";
+  if(_sysOpen){
+    more="<div style='margin-top:6px;line-height:1.5'>"+(p.length?p.map(function(x){return "• "+x;}).join("<br>")+"<br>":"")+line+
+         (s.last_push_ok?"<br>Last notification delivered: "+s.last_push_ok:"")+
+         (s.last_push_error?"<br>Last notification problem: "+s.last_push_error:"")+
+         "<br>Checked "+(_SYS.checked_sec_ago||0)+"s ago at server · build "+(s.server_build||"?")+"</div>";
+  } else { more=" <span style='opacity:.7'>(tap for details)</span>"; }
+  el.innerHTML=head+more;
+}
+function sendTestPush(){
+  if(!SERVER_URL){toast("Server not set","Settings → server URL","ty");return;}
+  fetch(SERVER_URL+"/push_test",{headers:ptHeaders()}).then(function(r){return r.json();}).then(function(d){
+    var r=d&&d.result||{};
+    if(d&&d.ok) toast("🧪 Test sent","Delivered to "+r.sent+" device(s) — it should appear in a few seconds","tg");
+    else toast("⚠️ Test not delivered",(d&&(d.error||d.last_error))||"unknown — see status strip","tr");
+    fetchSysStatus();
+  }).catch(function(e){toast("⚠️ Test failed","Server unreachable: "+(e&&e.message||e),"tr");});
+}
+
+// ── PUSH SELF-HEAL (Nov 16) ── on every app open: re-confirm this phone's subscription
+// with the server (re-activates it if the server had switched it off), replace it if it
+// was made with an old server key, and recreate it if iOS dropped it.
+var _pushResyncAt=0;
+function pushResync(force){
+  try{
+    if(!("serviceWorker" in navigator)||!("PushManager" in window)||!isStandalone())return;
+    if(Notification.permission!=="granted")return;
+    if(!force&&Date.now()-_pushResyncAt<20*60*1000)return;
+    if(typeof SERVER_URL==="undefined"||!SERVER_URL)return;
+    _pushResyncAt=Date.now();
+    navigator.serviceWorker.ready.then(function(reg){
+      return fetch(SERVER_URL+"/push_vapid_public_key",{headers:ptHeaders()}).then(function(r){return r.json();}).then(function(d){
+        if(!d||!d.ok||!d.key)throw new Error("no server key");
+        var want=urlBase64ToUint8Array(d.key);
+        return reg.pushManager.getSubscription().then(function(sub){
+          var same=false;
+          try{
+            if(sub&&sub.options&&sub.options.applicationServerKey){
+              var have=new Uint8Array(sub.options.applicationServerKey);
+              same=have.length===want.length&&have.every(function(v,i){return v===want[i];});
+            } else if(sub) same=true;   // browser doesn't expose the key: assume same
+          }catch(_){same=!!sub;}
+          if(sub&&same)return sub;
+          var chain=sub?sub.unsubscribe().catch(function(){}):Promise.resolve();
+          return chain.then(function(){
+            console.log("[Push] "+(sub?"subscription made with an old server key — replacing":"no subscription on this phone — recreating"));
+            return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:want});
+          });
+        });
+      });
+    }).then(function(sub){
+      if(!sub)return;
+      var j=sub.toJSON(); j._resync=true;
+      return fetch(SERVER_URL+"/push_subscribe",{method:"POST",headers:Object.assign({"Content-Type":"application/json"},ptHeaders()),body:JSON.stringify(j)})
+        .then(function(r){return r.json();}).then(function(d){
+          console.log("[Push] re-sync with server: "+(d&&d.ok?"active":"FAILED "+(d&&d.error)));
+          try{updatePushUI();}catch(_){}
+        });
+    }).catch(function(e){
+      console.warn("[Push] re-sync failed: "+(e&&e.message||e));
+      var st=document.getElementById("pushStatus");
+      if(st)st.innerHTML="⚠️ Notifications need re-enabling on this phone: tap <b>Disable</b> then <b>Enable Notifications</b>.";
+    });
+  }catch(e){console.warn("[Push] re-sync error",e);}
+}
+
 function registerServiceWorker(){
   if(!("serviceWorker" in navigator)) return;
   navigator.serviceWorker.register("sw.js")
-    .then(function(){ updatePushUI(); })
+    .then(function(){ updatePushUI(); setTimeout(function(){pushResync(true);},3000); })
     .catch(function(e){ console.warn("[Push] service worker registration failed:", e); });
 }
 
@@ -6251,11 +6383,12 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1029a"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1116a"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
+  try{setTimeout(fetchSysStatus,2000);setInterval(function(){if(!document.hidden)fetchSysStatus();},120000);
+      document.addEventListener("visibilitychange",function(){if(!document.hidden){fetchSysStatus();pushResync(false);}});}catch(e){} // status strip + push self-heal
   try{setTimeout(syncJournalFromServer,1500);setInterval(syncJournalFromServer,180000);}catch(e){} // shared journal (audit)
-  try{setTimeout(fetchRiskGate,2500);setInterval(fetchRiskGate,60000);
-      document.addEventListener("visibilitychange",function(){if(!document.hidden&&Date.now()-_RGts>30000)fetchRiskGate();});}catch(e){} // risk gate
+  try{setTimeout(initRiskPanel,500);setInterval(function(){if(AT.active)fetchRiskGate();},60000);}catch(e){} // Auto-tab daily limits
   // Also sync the moment the app comes back to the foreground — the moment you
   // actually look at it. Mobile browsers pause timers while backgrounded.
   try{document.addEventListener("visibilitychange",function(){
