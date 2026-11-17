@@ -470,7 +470,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1117a</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1117b</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -849,6 +849,8 @@ try{var _sp=parseInt(localStorage.getItem("pt_slpct"),10);if(!isNaN(_sp)&&_sp>=5
 // Kite credentials as HEADERS instead of query-string params, so access tokens
 // stop appearing in server request logs, proxy logs and browser history.
 // The server accepts either form, so this is backward compatible.
+// 1117b: no request may hold one of the browser's ~6 connections to the server forever.
+function _tmo(ms){ try{ return AbortSignal.timeout(ms); }catch(_){ return undefined; } }
 function kiteHeaders(extra){
   var h=extra||{};
   if(KITE&&KITE.apiKey)      h["X-Kite-Key"]=KITE.apiKey;
@@ -913,7 +915,7 @@ function startCandleBackfill(){
 }
 
 function _pollBackfillStatus(jobId, btn, statusEl){
-  fetch(SERVER_URL+"/backfill_status/"+jobId,{headers:ptHeaders()})
+  fetch(SERVER_URL+"/backfill_status/"+jobId,{headers:ptHeaders(),signal:_tmo(20000)})
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d.ok){ if(statusEl)statusEl.textContent="Lost track of job"; if(btn)btn.disabled=false; return; }
@@ -1425,7 +1427,7 @@ function _doFetchFromServer(){
     serverOk=false;
     _serverRetryCount++;
     var msg=e&&e.message||"";
-    var isSleep=msg.includes("timeout")||msg.includes("abort")||msg.includes("Failed to fetch")||msg.includes("NetworkError")||msg.includes("network");
+    var isSleep=msg.includes("timeout")||msg.includes("timed out")||msg.includes("abort")||msg.includes("Failed to fetch")||msg.includes("NetworkError")||msg.includes("network");
     if(isSleep||_serverRetryCount<=3){
       var waitSec=_serverRetryCount<=1?15:_serverRetryCount<=2?30:45;
       setStatus("fetching","⏳ Fetching data… retry "+_serverRetryCount);
@@ -1930,7 +1932,7 @@ function _flushSnapBuf(){
   if(!_snapBuf.length||!SERVER_URL) return;
   var rows=_snapBuf; _snapBuf=[];
   try{
-    fetch(SERVER_URL+"/snapshot",{method:"POST",headers:ptHeaders(),body:JSON.stringify({rows:rows})})
+    fetch(SERVER_URL+"/snapshot",{method:"POST",headers:ptHeaders(),body:JSON.stringify({rows:rows}),signal:_tmo(20000)})
       .catch(function(){}); // silent — local save already succeeded, this is a bonus sync
   }catch(e){}
 }
@@ -5050,7 +5052,7 @@ function ingestJournalEntry(e){
   // anywhere. If this fails the same way, the Supabase journal table
   // could be silently missing real trade history with zero trace.
   try{
-    fetch(SERVER_URL+"/ingest_journal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(e)})
+    fetch(SERVER_URL+"/ingest_journal",{method:"POST",headers:ptHeaders(),body:JSON.stringify(e),signal:_tmo(20000)})
       .then(function(r){
         if(!r.ok) console.warn("[IngestJournal ❌] "+(e.sym||"?")+" — server returned HTTP "+r.status);
       })
@@ -6103,7 +6105,7 @@ function renderSysStatus(){
 }
 function sendTestPush(){
   if(!SERVER_URL){toast("Server not set","Settings → server URL","ty");return;}
-  fetch(SERVER_URL+"/push_test",{headers:ptHeaders()}).then(function(r){return r.json();}).then(function(d){
+  fetch(SERVER_URL+"/push_test",{headers:ptHeaders(),signal:_tmo(30000)}).then(function(r){return r.json();}).then(function(d){
     var r=d&&d.result||{};
     if(d&&d.ok) toast("🧪 Test sent","Delivered to "+r.sent+" device(s) — it should appear in a few seconds","tg");
     else toast("⚠️ Test not delivered",(d&&(d.error||d.last_error))||"unknown — see status strip","tr");
@@ -6401,7 +6403,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1117a"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1117b"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(fetchSysStatus,2000);setInterval(function(){if(!document.hidden)fetchSysStatus();},120000);
       document.addEventListener("visibilitychange",function(){if(!document.hidden){fetchSysStatus();pushResync(false);}});}catch(e){} // status strip + push self-heal
