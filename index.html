@@ -470,7 +470,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1117c</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1117d</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -856,7 +856,7 @@ function _tmo(ms){ try{ return AbortSignal.timeout(ms); }catch(_){ return undefi
 // apart (HCLTECH 1350 PE, TECHM 1750 PE…): no premium, wrong journal strike, failed orders.
 function _applyStrikeSteps(steps){
   if(!steps) return 0; var n=0;
-  (SD.stk||[]).forEach(function(s){
+  (SD.stk||[]).concat(SD.com||[]).forEach(function(s){
     var st=+steps[s.sym]; if(!(st>0)) return;
     s.step=st; n++;
     var px=s.px||s._lastPx||0; if(px>0) s.atm=Math.round(px/st)*st;
@@ -877,7 +877,7 @@ function loadStrikeSteps(){
     .catch(function(e){ console.log("[StrikeSteps] not loaded yet: "+(e&&e.message||e)); _strikeStepsRetry(); });
 }
 var _ssRetryT=null;
-function _strikeStepsRetry(){ if(_ssRetryT) return; _ssRetryT=setTimeout(function(){ _ssRetryT=null; loadStrikeSteps(); },120000); }
+function _strikeStepsRetry(){ if(_ssRetryT) return; _ssRetryT=setTimeout(function(){ _ssRetryT=null; loadStrikeSteps(); },30000); }
 function kiteHeaders(extra){
   var h=extra||{};
   if(KITE&&KITE.apiKey)      h["X-Kite-Key"]=KITE.apiKey;
@@ -2403,12 +2403,16 @@ function localSigs(){
     var sma20=s.sma20||0, sma50=s.sma50||0, rsi=s.rsi||50;
     var aboveSma20=sma20>0&&px>sma20;
     var aboveSma50=sma50>0&&px>sma50;
+    // 1117d (audit): a MISSING SMA (0 — technicals not loaded yet, e.g. the first scan after a
+    // restart) used to count as "price below SMA" → free bearish points and junk PE signals.
+    var belowSma20=sma20>0&&px<sma20;
+    var belowSma50=sma50>0&&px<sma50;
     var golden=s.crossover==="GOLDEN_CROSS";
     var death=s.crossover==="DEATH_CROSS";
     var trendBull=s.trend==="BULLISH";  // SMA20>SMA50
     var trendBear=s.trend==="BEARISH";  // SMA20<SMA50
     var rsiBull=rsi>0&&rsi>=35&&rsi<=55&&aboveSma20; // RSI in bullish zone
-    var rsiBear=rsi>0&&rsi>=45&&rsi<=65&&!aboveSma20; // RSI in bearish zone
+    var rsiBear=rsi>0&&rsi>=45&&rsi<=65&&belowSma20; // RSI in bearish zone
     var rsiOS=rsi>0&&rsi<32;  // oversold
     var rsiOB=rsi>0&&rsi>68;  // overbought
     var breakout=s.breakout||false;
@@ -2626,7 +2630,7 @@ function localSigs(){
 
     // ── LAYER 6: VWAP — only valid during market hours ──
     var vwap=s.vwap||0;
-    var vwapValid=isOpen(); // VWAP resets at 9:15 AM — meaningless after close
+    var vwapValid=isSymMCX(s.sym)?isMCXOpen():isOpen(); // VWAP meaningless after the symbol's own session (1117d: MCX evening counts)
     var aboveVwap=vwapValid&&vwap>0&&px>vwap;
     var belowVwap=vwapValid&&vwap>0&&px<vwap;
     var atVwap=vwapValid&&vwap>0&&Math.abs(px-vwap)/vwap<0.001;
@@ -2738,7 +2742,7 @@ function localSigs(){
     // FIX: CE writing alone is NOT enough for bearish signal
     // Institutions write covered calls as income — not necessarily bearish
     // Requires BOTH price confirmation: below VWAP + below SMA20
-    if(callWriting&&belowVwap&&!aboveSma20){
+    if(callWriting&&belowVwap&&belowSma20){
       bearScore+=_fadd("oi","s",2);bearReasons.push("Call writing ↑ ("+((ceChg/1e6).toFixed(1))+"M new calls) + below VWAP + below SMA20 — confirmed bearish");
     } else if(callWriting){
       // CE writing without price confirmation = just note it, don't score
@@ -2764,7 +2768,7 @@ function localSigs(){
         bullReasons.push("PCR "+pcr+" strong — heavy institutional put writing, no bearish contradiction");
       }
     }
-    if(pcrBear&&belowVwap&&!aboveSma20){
+    if(pcrBear&&belowVwap&&belowSma20){
       bearScore+=_fadd("oi","s",1);bearReasons.push("PCR "+pcr+" bearish — call writing dominant + below VWAP + below SMA20 — confirmed");
     } else if(pcrBear){
       bearReasons.push("⚠ PCR "+pcr+" bearish noted but price not confirming — not scored");
@@ -2784,21 +2788,21 @@ function localSigs(){
     if(golden){bullScore+=_fadd("trend","b",2);bullReasons.push("🔥 Golden Cross (SMA20 crossed above SMA50) — trend confirmed");}
     if(death){bearScore+=_fadd("trend","s",2);bearReasons.push("🔥 Death Cross (SMA20 crossed below SMA50) — trend confirmed");}
     if(breakout&&aboveSma20){bullScore+=_fadd("price","b",3);bullReasons.push("Day high breakout + above SMA20");}
-    if(breakdown&&!aboveSma20){bearScore+=_fadd("price","s",3);bearReasons.push("Day low breakdown + below SMA20");}
+    if(breakdown&&belowSma20){bearScore+=_fadd("price","s",3);bearReasons.push("Day low breakdown + below SMA20");}
     if(trendBull&&aboveSma50){bullScore+=_fadd("trend","b",1);bullReasons.push("SMA trend bullish, price above SMA50 "+sma50);}
-    if(trendBear&&!aboveSma50){bearScore+=_fadd("trend","s",1);bearReasons.push("SMA trend bearish, price below SMA50 "+sma50);}
+    if(trendBear&&belowSma50){bearScore+=_fadd("trend","s",1);bearReasons.push("SMA trend bearish, price below SMA50 "+sma50);}
     if(rsiOS&&aboveSma20){bullScore+=_fadd("mom","b",2);bullReasons.push("RSI "+rsi+" oversold + holding above SMA20");} // oversold takes priority - no bullish zone double count
     else if(rsiBull){bullScore+=_fadd("mom","b",1);bullReasons.push("RSI "+rsi+" in bullish momentum zone");}  // only if NOT already oversold
-    if(rsiOB&&!aboveSma20){bearScore+=_fadd("mom","s",2);bearReasons.push("RSI "+rsi+" overbought + below SMA20");} // overbought takes priority
+    if(rsiOB&&belowSma20){bearScore+=_fadd("mom","s",2);bearReasons.push("RSI "+rsi+" overbought + below SMA20");} // overbought takes priority
     else if(rsiBear){bearScore+=_fadd("mom","s",1);bearReasons.push("RSI "+rsi+" in bearish momentum zone");}  // only if NOT already overbought
     if(aboveSma20&&aboveSma50){bullScore+=_fadd("trend","b",1);bullReasons.push("Price above both SMA20("+sma20+") & SMA50("+sma50+")");}
-    if(!aboveSma20&&!aboveSma50){bearScore+=_fadd("trend","s",1);bearReasons.push("Price below both SMA20("+sma20+") & SMA50("+sma50+")");}
+    if(belowSma20&&belowSma50){bearScore+=_fadd("trend","s",1);bearReasons.push("Price below both SMA20("+sma20+") & SMA50("+sma50+")");}
 
     // CPR confirmations
     if(cprNarrow&&aboveTC){bullScore+=_fadd("trend","b",2);bullReasons.push("Narrow CPR + price above TC ₹"+(cpr.tc)+" = trending up");}
     if(cprNarrow&&belowBC){bearScore+=_fadd("trend","s",2);bearReasons.push("Narrow CPR + price below BC ₹"+(cpr.bc)+" = trending down");}
     if(cprBullBias&&aboveSma20){bullScore+=_fadd("trend","b",1);bullReasons.push("CPR bullish bias + above SMA20");}
-    if(cprBearBias&&!aboveSma20){bearScore+=_fadd("trend","s",1);bearReasons.push("CPR bearish bias + below SMA20");}
+    if(cprBearBias&&belowSma20){bearScore+=_fadd("trend","s",1);bearReasons.push("CPR bearish bias + below SMA20");}
 
     // NOTE: OB/FVG/Sweep already scored once in the SMC section above
     // (nearStrongBullOB/bullOB tiered scoring, bullFVG, bullSweep) —
@@ -2842,7 +2846,7 @@ function localSigs(){
 
     // Volume confirmations
     if(volExpanding&&aboveSma20){bullScore+=_fadd("mom","b",1);bullReasons.push("Volume expanding ("+volRatio+"x avg) — move has conviction");}
-    if(volExpanding&&!aboveSma20){bearScore+=_fadd("mom","s",1);bearReasons.push("Volume expanding ("+volRatio+"x avg) on downside");}
+    if(volExpanding&&belowSma20){bearScore+=_fadd("mom","s",1);bearReasons.push("Volume expanding ("+volRatio+"x avg) on downside");}
     if(volClimax){neutralScore+=2;neutReasons.push("Volume climax ("+volRatio+"x avg) — possible reversal");}
     if(volDrying){bullScore=Math.max(0,bullScore-1);bearScore=Math.max(0,bearScore-1);} // penalty for no volume
 
@@ -2850,9 +2854,9 @@ function localSigs(){
     if(trappedCE){bullScore+=_fadd("oi","b",3);bullReasons.push("CE writers trapped above price — forced covering = bull squeeze");}
     if(trappedPE){bearScore+=_fadd("oi","s",3);bearReasons.push("PE writers trapped below price — forced covering = bear squeeze");}
     if(ceUnwinding&&aboveSma20){bullScore+=_fadd("oi","b",2);bullReasons.push("CE writers exiting — short covering adding fuel");}
-    if(peUnwinding&&!aboveSma20){bearScore+=_fadd("oi","s",2);bearReasons.push("PE writers exiting — long unwinding adding pressure");}
+    if(peUnwinding&&belowSma20){bearScore+=_fadd("oi","s",2);bearReasons.push("PE writers exiting — long unwinding adding pressure");}
     if(peWriting&&aboveSma20){bullScore+=_fadd("oi","b",1);bullReasons.push("Fresh PE writing at ₹"+peWall+" = institutional support");}
-    if(ceWriting&&!aboveSma20){bearScore+=_fadd("oi","s",1);bearReasons.push("Fresh CE writing at ₹"+ceWall+" = institutional resistance");}
+    if(ceWriting&&belowSma20){bearScore+=_fadd("oi","s",1);bearReasons.push("Fresh CE writing at ₹"+ceWall+" = institutional resistance");}
     if(pinned){neutralScore+=2;neutReasons.push("Price pinned near Max Pain ₹"+mp+" — expiry gravity");}
 
     // Regime boost
@@ -3213,7 +3217,7 @@ function localSigs(){
     var momCatBull = (golden?2:0)+(breakout?1:0)+(rsiOS?1:0)+(rsiBull?1:0)+
                      (aboveSma20&&aboveSma50?1:0)+(trendBull?1:0)+(volExpanding&&aboveSma20?1:0);
     var momCatBear = (death?2:0)+(breakdown?1:0)+(rsiOB?1:0)+(rsiBear?1:0)+
-                     (!aboveSma20&&!aboveSma50?1:0)+(trendBear?1:0)+(volExpanding&&!aboveSma20?1:0);
+                     (belowSma20&&belowSma50?1:0)+(trendBear?1:0)+(volExpanding&&belowSma20?1:0);
 
     // SMC Structure category: CHoCH/BOS/EQH/EQL/Strong levels (5th independent layer)
     var smcCatBull = (bullCHoCH?3:0)+(bullBOS?1:0)+(dualBull?1:0)+
@@ -4825,12 +4829,17 @@ function atCycle(){
 
   if(!candidates.length){
     // No qualifying signal right now
-    var best=allSigs.filter(function(s){return s.sym===sym||AT.inst==="AUTO";})[0];
+    // 1117d (audit): in AUTO mode this picked the first signal of ANY symbol, so the log said e.g.
+    // "below threshold (97%<82%)". Only the symbol actually being traded counts.
+    var best=allSigs.filter(function(s){return s.sym===sym;})[0];
     addLog({
       ac:"SKIP",
       inst:sym,
       conf:best?best.confidence:0,
-      src:"Local — below threshold ("+(best?""+best.confidence+"%<"+AT.conf+"%":"no signal")+")",
+      src:!best?"Local — no signal for "+sym
+          :best._noTrade?"Local — "+sym+": No Trade right now"
+          :(best.confidence||0)<AT.conf?"Local — below threshold ("+best.confidence+"%<"+AT.conf+"%)"
+          :"Local — "+(best._noTrade?"No Trade":best.bias)+" doesn't match your settings",
       st:"skip"
     });
     return;
@@ -4860,9 +4869,13 @@ function atCycle(){
     sym:     tradeSym,                              // always AT.inst when fixed
     bias:    sig.bias,
     confidence: sig.confidence,
-    entry:   sig.entry,
-    sl:      sig.sl,
-    target:  sig.target1,
+    // 1117d (audit): when the signal comes from ANOTHER symbol (fixed instrument mode), its
+    // premium levels belong to that other option (a TATASTEEL ₹1.35 entry was shown on a HAL 4750 CE).
+    // Show "at market" instead; the broker stop then uses the Settings stop-loss %.
+    entry:   tradeSym===sig.sym ? sig.entry   : "At market",
+    sl:      tradeSym===sig.sym ? sig.sl      : SL_PREMIUM_PCT+"% below fill (SL-M)",
+    target:  tradeSym===sig.sym ? sig.target1 : "–",
+    _premiumLevels: tradeSym===sig.sym && !!sig.premiumTradingsymbol,
     why:     "["+sig.sym+" signal → "+tradeSym+"] "+sig.why,  // shows source signal
     source:  "Auto ("+sig.setupKey+")"
   };
@@ -5450,7 +5463,7 @@ function renderJ(){
     }
   });
   if(jStats) jStats.innerHTML=
-    "<div class='j-s'><div class='j-sl'>Win Rate</div><div class='j-sv' style='color:"+(wr>=60?"var(--g)":wr>=40?"var(--y)":"var(--r)")+"'>"+wr+"%</div></div>"+
+    "<div class='j-s'><div class='j-sl'>Win Rate</div><div class='j-sv' style='color:"+(!closed.length?"var(--m)":wr>=60?"var(--g)":wr>=40?"var(--y)":"var(--r)")+"'>"+(closed.length?wr+"%":"–")+"</div></div>"+
     "<div class='j-s'><div class='j-sl'>Signals</div><div class='j-sv'>"+SIGNAL_LOG.length+"</div></div>"+
     "<div class='j-s'><div class='j-sl'>Open</div><div class='j-sv' style='color:var(--b)'>"+open.length+"</div></div>"+
     "<div class='j-s'><div class='j-sl'>Closed</div><div class='j-sv'>"+closed.length+"</div></div>"+
@@ -5777,7 +5790,7 @@ function renderPerformance(){
 
   // Overall stats
   html+="<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px'>";
-  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>WIN RATE</div><div style='font-size:1.1rem;font-weight:800;color:"+(wr>=60?"var(--g)":wr>=40?"var(--y)":"var(--r)")+"'>"+wr+"%</div></div>";
+  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>WIN RATE</div><div style='font-size:1.1rem;font-weight:800;color:"+(!closed.length?"var(--m)":wr>=60?"var(--g)":wr>=40?"var(--y)":"var(--r)")+"'>"+(closed.length?wr+"%":"–")+"</div></div>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>SIGNALS</div><div style='font-size:1.1rem;font-weight:800;color:var(--t1)'>"+SIGNAL_LOG.length+"</div></div>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>TOTAL P&L</div><div style='font-size:.85rem;font-weight:800;color:"+(totPnl>=0?"var(--g)":"var(--r)")+"'>"+(totPnl>=0?"+":"")+"₹"+Math.abs(totPnl).toLocaleString("en-IN")+"</div></div>";
   html+="</div>";
@@ -6430,7 +6443,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1117c"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1117d"+" (no Backtest tab in this build)");}catch(e){}
   try{setTimeout(loadStrikeSteps,800);setInterval(loadStrikeSteps,30*60000);}catch(e){} // 1117c: real stock strike gaps
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(fetchSysStatus,2000);setInterval(function(){if(!document.hidden)fetchSysStatus();},120000);
