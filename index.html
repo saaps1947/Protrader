@@ -470,7 +470,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1116a</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1117a</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -3791,6 +3791,7 @@ function fetchRealPremium(sym, strike, optType, cb){
   _premQ.push([sym,strike,optType,cb]); _premNext();
 }
 function _fetchRealPremiumNow(sym, strike, optType, cb){
+  var _pt0=Date.now();
   fetch(SERVER_URL+"/option_premium?sym="+encodeURIComponent(sym)+
         "&strike="+encodeURIComponent(strike)+"&type="+encodeURIComponent(optType),
         {headers:kiteHeaders(),signal:AbortSignal.timeout(45000)})  // 1023e: was 15s
@@ -3812,7 +3813,7 @@ function _fetchRealPremiumNow(sym, strike, optType, cb){
       }
     })
     .catch(function(e){
-      console.warn("[Premium ❌] "+sym+" "+strike+optType+" network/timeout: "+(e&&e.message||e));
+      console.warn("[Premium ❌] "+sym+" "+strike+optType+" network/timeout after "+Math.round((Date.now()-_pt0)/1000)+"s: "+(e&&e.message||e));
       cb(null, "network: "+String(e&&e.message||e).slice(0,60));
     });
 }
@@ -3880,14 +3881,29 @@ function processScan(sigs){
             // signals, so nothing was pushed while the app was closed.
             window._noPremAt=window._noPremAt||{};
             var _npKey=sigRef.sym+"_"+sigRef.bias;
-            if(!window._noPremAt[_npKey]||Date.now()-window._noPremAt[_npKey]>900000){  // once per 15 min per sym+bias
+            // 1117a: the always-on worker's own premium requests time out, while its signal
+            // uploads get through. So the upload now asks the SERVER to look the premium up
+            // (want_premium) and hands it back; the trade then journals normally below.
+            var _askServer=!sigRef._premViaIngest;
+            if(_askServer||!window._noPremAt[_npKey]||Date.now()-window._noPremAt[_npKey]>900000){  // once per 15 min per sym+bias
               window._noPremAt[_npKey]=Date.now();
               var _np={}; for(var _k in sigRef) _np[_k]=sigRef[_k];
               _np.why=(_np.why||"")+" | premium unavailable ("+(_premWhy||"?")+") — levels are underlying-based";
-              _sendIngestSignal(_np);
+              _sendIngestSignal(_np, _askServer, function(p){
+                if(p&&p.ok&&p.premium&&!sigRef._premViaIngest){
+                  sigRef._premViaIngest=1;
+                  console.log("[Premium ✅ via server] "+sigRef.sym+" "+sigRef.strike+sigRef.optType+" = ₹"+p.premium);
+                  _onPrem(p);
+                } else if(_askServer){
+                  sigRef._premViaIngest=1;
+                  console.warn("[Premium ❌ via server] "+sigRef.sym+": "+(p&&p.error||"no premium returned"));
+                }
+              });
             }
             return;
           } // fetch failed — don't journal a guess
+          if(sigRef._premDone) return;   // 1117a: premium already applied (server path or retry) — never apply twice
+          sigRef._premDone=1;
           var p = prem.premium;
           // Dual track (Oct 29): keep the UNDERLYING entry/SL/targets too, read before
           // they're overwritten with premium levels below, so the server can measure
@@ -3983,7 +3999,7 @@ function processScan(sigs){
     // applied to this second destination. Non-qualifying signals (not
     // HIGH, or missing strike/optType) never go through premium correction
     // at all, so this still fires immediately for those, exactly as before.
-    function _sendIngestSignal(sig){
+    function _sendIngestSignal(sig, wantPremium, onPremium){
       if(SERVER_URL && !sig._noTrade){
         try{
           var _ingestPayload = {
@@ -3993,11 +4009,13 @@ function processScan(sigs){
             entry:sig.entry, sl:sig.sl, target1:sig.target1, target2:sig.target2,
             rr:sig.rr, why:sig.why, vix:(typeof VIX!=="undefined"?VIX:0),
             trade:sig.trade, strategy:sig.strategy,
+            strike:sig.strike, optType:sig.optType, want_premium:!!wantPremium,
             _source: window.IS_WORKER ? "worker" : "client"
           };
           _ingestPost(_ingestPayload, sig.urgency==="HIGH")
             .then(function(r){
               if(!r.ok) console.warn("[Ingest FAIL] "+sig.sym+" - server returned HTTP "+r.status);
+              if(wantPremium&&onPremium) return r.json().then(function(d){ onPremium(d&&d.premium); }, function(){ onPremium(null); });
             })
             .catch(function(e){ console.warn("[Ingest FAIL] "+sig.sym+" - network/fetch failure: "+(e&&e.message||e)); });
         }catch(e){
@@ -6383,7 +6401,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1116a"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1117a"+" (no Backtest tab in this build)");}catch(e){}
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(fetchSysStatus,2000);setInterval(function(){if(!document.hidden)fetchSysStatus();},120000);
       document.addEventListener("visibilitychange",function(){if(!document.hidden){fetchSysStatus();pushResync(false);}});}catch(e){} // status strip + push self-heal
