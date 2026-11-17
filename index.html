@@ -470,7 +470,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1117b</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1117c</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -851,6 +851,33 @@ try{var _sp=parseInt(localStorage.getItem("pt_slpct"),10);if(!isNaN(_sp)&&_sp>=5
 // The server accepts either form, so this is backward compatible.
 // 1117b: no request may hold one of the browser's ~6 connections to the server forever.
 function _tmo(ms){ try{ return AbortSignal.timeout(ms); }catch(_){ return undefined; } }
+// 1117c: REAL strike gaps per stock from the exchange contract list (server /strike_steps).
+// The old guess (₹1000-10000 → 50) produced strikes that don't exist for stocks listed 10/20
+// apart (HCLTECH 1350 PE, TECHM 1750 PE…): no premium, wrong journal strike, failed orders.
+function _applyStrikeSteps(steps){
+  if(!steps) return 0; var n=0;
+  (SD.stk||[]).forEach(function(s){
+    var st=+steps[s.sym]; if(!(st>0)) return;
+    s.step=st; n++;
+    var px=s.px||s._lastPx||0; if(px>0) s.atm=Math.round(px/st)*st;
+  });
+  return n;
+}
+function loadStrikeSteps(){
+  try{ var c=JSON.parse(localStorage.getItem("pt_strike_steps")||"null"); if(c&&c.steps) _applyStrikeSteps(c.steps); }catch(_){}
+  if(!SERVER_URL) return;
+  fetch(SERVER_URL+"/strike_steps",{headers:kiteHeaders(),signal:_tmo(40000)})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!d.ok||!d.steps){ _strikeStepsRetry(); return; }   // e.g. Zerodha not logged in yet this morning
+      var n=_applyStrikeSteps(d.steps);
+      try{ localStorage.setItem("pt_strike_steps",JSON.stringify({day:new Date().toDateString(),steps:d.steps})); }catch(_){}
+      console.log("[StrikeSteps] real strike gaps loaded for "+n+" stocks");
+    })
+    .catch(function(e){ console.log("[StrikeSteps] not loaded yet: "+(e&&e.message||e)); _strikeStepsRetry(); });
+}
+var _ssRetryT=null;
+function _strikeStepsRetry(){ if(_ssRetryT) return; _ssRetryT=setTimeout(function(){ _ssRetryT=null; loadStrikeSteps(); },120000); }
 function kiteHeaders(extra){
   var h=extra||{};
   if(KITE&&KITE.apiKey)      h["X-Kite-Key"]=KITE.apiKey;
@@ -6403,7 +6430,8 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1117b"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1117c"+" (no Backtest tab in this build)");}catch(e){}
+  try{setTimeout(loadStrikeSteps,800);setInterval(loadStrikeSteps,30*60000);}catch(e){} // 1117c: real stock strike gaps
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(fetchSysStatus,2000);setInterval(function(){if(!document.hidden)fetchSysStatus();},120000);
       document.addEventListener("visibilitychange",function(){if(!document.hidden){fetchSysStatus();pushResync(false);}});}catch(e){} // status strip + push self-heal

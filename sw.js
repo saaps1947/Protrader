@@ -47,6 +47,12 @@ self.addEventListener("push", function(event) {
 self.addEventListener("notificationclick", function(event) {
   event.notification.close();
   var targetUrl = (event.notification.data && event.notification.data.url) || "/";
+  // Nov 17: the server sends url "/", which on GitHub Pages is saaps1947.github.io/ — NOT this
+  // app (it lives under /Protrader/). Open the app's own folder instead, so a tap on a
+  // notification never lands on a 404 page.
+  try {
+    if (!targetUrl || targetUrl === "/" || targetUrl.charAt(0) === "/") targetUrl = self.registration.scope;
+  } catch (e) { targetUrl = "./"; }
 
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function(clientList) {
