@@ -378,9 +378,10 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
     <div class="ss-sec">
       <div class="ss-sec-title">🛡 Live Order Safety</div>
       <div class="ss-st" style="line-height:1.6">
-        Orders are placed as <b>MIS</b> (intraday, broker auto-square-off) and are
+        Orders are placed as <b>NRML</b> (held overnight until stop, target or expiry) and are
         always <b>option BUYS</b> — a bearish signal buys a PE, it never sells one.
-        A protective <b>SL-M</b> stop is placed automatically on the fill price.
+        Entries are <b>limit orders</b> at the current offer (cancelled if not filled in 10 s), and a
+        protective <b>GTT stop</b> is placed on the fill price — it stays active across days.
       </div>
       <div class="ss-f"><label>Premium Stop Loss (% of option premium paid)</label><input type="number" id="ss_slpct" value="30" min="5" max="80" step="5" oninput="setSlPct(this.value)"></div>
       <button class="ss-btn ss-sec2" onclick="exitLastOrder()">🔻 Square Off Last Order</button>
@@ -470,7 +471,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1117d</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1119b</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -841,6 +842,9 @@ var allSigs=[],bias="ALL",sfFilt="ALL",scanning=false,pendingTrade=null;
 var SL_PREMIUM_PCT=30;
 // Last live order — retained so it can be squared off from the app.
 var lastLiveOrder=null;
+// 1119b: positions are now held overnight, so remember the last order across app restarts
+try{ lastLiveOrder=JSON.parse(localStorage.getItem("pt_last_order")||"null"); }catch(_){ lastLiveOrder=null; }
+function _saveLastOrder(){ try{ if(lastLiveOrder) localStorage.setItem("pt_last_order",JSON.stringify(lastLiveOrder)); else localStorage.removeItem("pt_last_order"); }catch(_){} }
 // Optional shared secret. Only needed if PROTRADER_API_SECRET is set on the
 // server. Stored locally and sent as a header, never in a URL.
 var PT_SECRET="";
@@ -905,7 +909,7 @@ function setPtSecret(v){
 function exitLastOrder(){
   if(!lastLiveOrder){toast("Nothing to exit","No live order placed from this device","ty");return;}
   if(!SERVER_URL||!KITE.connected){toast("Not connected","Need server + Kite to exit","tr");return;}
-  if(!confirm("Square off "+lastLiveOrder.tradingsymbol+" at market?"))return;
+  if(!confirm("Square off "+lastLiveOrder.tradingsymbol+" now (limit at the best bid)?"))return;
   setStatus("fetching","Exiting…");
   // FIX: flagged in an independent review — key/token were sitting in the
   // JSON request body, which could show up in server-side request logging.
@@ -915,10 +919,11 @@ function exitLastOrder(){
   // in this file already does.
   fetch(SERVER_URL+"/exit_order",{method:"POST",headers:kiteHeaders(),body:JSON.stringify({
     sym:lastLiveOrder.sym,strike:lastLiveOrder.strike,option_type:lastLiveOrder.optType,
-    qty:lastLiveOrder.qty,product:"MIS",cancel_order_id:lastLiveOrder.stop_order_id
+    qty:lastLiveOrder.qty,product:lastLiveOrder.product||"MIS",cancel_order_id:lastLiveOrder.stop_order_id,
+    tradingsymbol:lastLiveOrder.tradingsymbol,exchange:lastLiveOrder.exchange||""
   })}).then(function(r){return r.json();}).then(function(d){
     setStatus("live");
-    if(d.ok){toast("✅ Squared Off",d.tradingsymbol+(d.stop_cancelled?" · stop cancelled":""),"tg");lastLiveOrder=null;}
+    if(d.ok){toast("✅ Squared Off",d.tradingsymbol+(d.stop_cancelled?" · stop cancelled":""),"tg");lastLiveOrder=null;_saveLastOrder();}
     else toast("❌ Exit Failed",d.error||"Check Kite","tr");
   }).catch(function(e){setStatus("live");toast("❌ Exit error",e.message,"tr");});
 }
@@ -1044,6 +1049,24 @@ function _premiumLevelsFromUnderlying(sig,p,expiryStr){
   if(r1>r2) r1=r2;
   return {sl:p-risk,t1:p+r1,t2:p+r2,delta:dl,iv:iv,days:days};
 }
+// 1119a (Mahesh): trades are HELD OVERNIGHT — no end-of-day square-off. A trade now closes only
+// at its stop, its target, or the option's expiry day (15:20 NSE / 23:20 MCX). Set false to go
+// back to closing every trade at the end of the day.
+var HOLD_OVERNIGHT = true;
+function _tExp(e){return (e&&(e.expiry||(e.shadow&&e.shadow.opt_expiry)))||"";}
+function _expiryDeadlineMs(e){
+  var x=_tExp(e); if(!/^\d{4}-\d{2}-\d{2}$/.test(x)) return null;
+  var p=x.split("-"), cut=isSymMCX(e.sym)?EOD_CUTOFF_MCX:EOD_CUTOFF_NSE;
+  return Date.UTC(+p[0],+p[1]-1,+p[2],0,cut)-330*60000;
+}
+// When must this trade be closed? HOLD_OVERNIGHT: its expiry (unknown expiry → not yet, but an
+// unknown-expiry trade older than 35 days is treated as missed). Otherwise: today's cutoff.
+function _tradeDeadlineMs(e, em){
+  if(!HOLD_OVERNIGHT) return _eodDeadlineMs(em, isSymMCX(e.sym));
+  var d=_expiryDeadlineMs(e);
+  if(d!==null) return d;
+  return em + 35*86400000;
+}
 var EOD_CUTOFF_NSE = 15*60+20;   // 3:20 PM IST, matches typical MIS square-off
 var EOD_CUTOFF_MCX = 23*60+20;   // 11:20 PM IST
 function _istDateKey(ms){var d=new Date(ms+330*60000);return d.getUTCFullYear()+"-"+(d.getUTCMonth()+1)+"-"+d.getUTCDate();}
@@ -1076,7 +1099,19 @@ function _isLiveTrade(x){return x.status==="OPEN"||x.status==="T1_HIT";}
 // premium. Both phone and worker now pull the shared journal on start and
 // every 3 minutes, and merge it into their local copy.
 var _journalSyncedOnce=false, _journalSyncInFlight=false, _lastJournalSync=0, _appStartTs=Date.now();
-var JOURNAL_SYNC_DAYS=14, JOURNAL_LOCAL_MAX=300;
+// 1119a: the journal was capped at 300 trades (≈6 days at today's ~48/day), so the Journal tab
+// showed "300" and the stats ignored everything older. Phone: 30 days / up to 3,000. Worker (which
+// only needs live trades) stays small. Live (OPEN / T1_HIT) trades are never trimmed away.
+function _isWorkerPage(){return !!window.IS_WORKER;}
+var JOURNAL_SYNC_DAYS=_isWorkerPage()?3:30, JOURNAL_LOCAL_MAX=_isWorkerPage()?300:3000;
+function _capLog(list,max){
+  if(list.length<=max) return list;
+  var live=list.filter(function(e){return e.status==="OPEN"||e.status==="T1_HIT";});
+  var rest=list.filter(function(e){return !(e.status==="OPEN"||e.status==="T1_HIT");});
+  var keep=live.concat(rest.slice(0,Math.max(0,max-live.length)));
+  keep.sort(function(a,b){return (Date.parse(b.ts)||0)-(Date.parse(a.ts)||0);});
+  return keep;
+}
 // VOID ranks below real exits: if one device voided a trade (it missed the
 // cutoff) but another closed it properly, the real exit must win either way.
 var _STATUS_RANK={OPEN:1,T1_HIT:2,VOID:2.5,SL_HIT:3,T2_HIT:3,TIME_EXIT:3,MANUAL:3,CLOSED:3};
@@ -1095,7 +1130,7 @@ function _rowToEntry(r){
     exit_px:_numOrNull(r.exit_px),pnl:_numOrNull(r.pnl),outcome:r.outcome,exitTime:_istFmt(r.exit_time),notes:r.notes||"",
     source:r.source,ts:r.created_at,date:_istFmt(r.created_at),firstSeen:_istFmt(r.created_at),
     strike:so.strike,optType:so.optType,lot_size:LOT_SIZES[r.sym]||LOT_SIZES.DEFAULT||50,
-    _t1Hit:(r.status==="T1_HIT"||r.outcome==="BREAKEVEN"),shadow:r.shadow||null,_fromServer:true};
+    _t1Hit:(r.status==="T1_HIT"||r.outcome==="BREAKEVEN"),shadow:r.shadow||null,expiry:(r.shadow&&r.shadow.opt_expiry)||"",_fromServer:true};
 }
 function _mergeServerJournal(rows){
   var byId={},res={added:0,updated:0,healed:0,dropped:0},srvById={},srvBySymBias={};
@@ -1110,6 +1145,7 @@ function _mergeServerJournal(rows){
     if(rs>rl){["status","exit_px","pnl","outcome","exitTime","notes","sl_px","_t1Hit"].forEach(function(f){loc[f]=srv[f];});res.updated++;}
     else if(rl>rs){try{ingestJournalEntry(loc);}catch(_){}res.healed++;}   // server is behind — push our newer state
     if(srv.shadow){loc.shadow=loc.shadow||{};Object.keys(srv.shadow).forEach(function(x){if(!loc.shadow[x])loc.shadow[x]=srv.shadow[x];});}
+    if(!loc.expiry && srv.expiry) loc.expiry=srv.expiry;
   });
   // A local-only entry that duplicates a server trade (same symbol+bias, the
   // server one still live or logged within 90 min) is the phone's late copy
@@ -1132,7 +1168,7 @@ function _mergeServerJournal(rows){
     return true;
   });
   SIGNAL_LOG.sort(function(a,b){return (Date.parse(b.ts)||0)-(Date.parse(a.ts)||0);});
-  if(SIGNAL_LOG.length>JOURNAL_LOCAL_MAX)SIGNAL_LOG=SIGNAL_LOG.slice(0,JOURNAL_LOCAL_MAX);
+  SIGNAL_LOG=_capLog(SIGNAL_LOG,JOURNAL_LOCAL_MAX);
   return res;
 }
 function syncJournalFromServer(){
@@ -3728,16 +3764,16 @@ setInterval(function(){
   }catch(e){}
 }, 5*60*1000); // check every 5 min — cheap, no need to run more often than that
 
-function getLivePremiumCached(sym, strike, optType){
-  var key = sym+"|"+strike+"|"+optType;
+function getLivePremiumCached(sym, strike, optType, exp){
+  var key = sym+"|"+strike+"|"+optType+"|"+(exp||"");
   var c = _livePremiumCache[key];
   if(c && (Date.now()-c.ts) < _LIVE_PREMIUM_TTL_MS) return c.premium;
   return null; // not cached / stale — caller triggers a fetch, doesn't block on it
 }
 
-function refreshLivePremium(sym, strike, optType){
+function refreshLivePremium(sym, strike, optType, exp, entry){
   if(!sym || !strike || !optType || !SERVER_URL) return;
-  var key = sym+"|"+strike+"|"+optType;
+  var key = sym+"|"+strike+"|"+optType+"|"+(exp||"");
   if(_livePremiumCache[key] && _livePremiumCache[key]._fetching) return; // already in flight
   // FIX: confirmed directly from real worker logs — the same instrument's
   // premium fetch retrying dozens of times within under a second, all
@@ -3754,6 +3790,12 @@ function refreshLivePremium(sym, strike, optType){
   _livePremiumCache[key]._fetching = true;
   fetchRealPremium(sym, strike, optType, function(prem){
     var ok = prem && prem.premium;
+    // 1119a: remember which expiry an older trade is in, so it keeps pricing that same contract
+    if(ok && entry && !_tExp(entry) && prem.expiry){
+      entry.expiry=prem.expiry; entry.shadow=entry.shadow||{}; entry.shadow.opt_expiry=prem.expiry;
+      if(prem.tradingsymbol) entry.shadow.opt_ts=prem.tradingsymbol;
+      try{ saveSignalLog(); ingestJournalEntry(entry); }catch(_){}
+    }
     _livePremiumCache[key] = {
       premium: ok ? prem.premium : null,
       ts: Date.now(), _fetching: false,
@@ -3773,7 +3815,7 @@ function _premNext(){
     var job=_premQ.shift(); _premInFlight++;
     _fetchRealPremiumNow(job[0],job[1],job[2],(function(cb){return function(d, why){
       _premInFlight--; try{cb(d, why);}catch(e){} _premNext();
-    };})(job[3]));
+    };})(job[3]), job[4]);
   }
 }
 // 1023e: signal uploads go through a queue too (max 2 in flight, HIGH first).
@@ -3819,14 +3861,14 @@ function _smcRun(job){
 }
 function _smcPump(){ while(_smcIn<2 && _smcQ.length){ _smcRun(_smcQ.shift()); } }
 
-function fetchRealPremium(sym, strike, optType, cb){
+function fetchRealPremium(sym, strike, optType, cb, exp){
   if(!sym || !strike || !optType || !SERVER_URL){ cb(null); return; }
-  _premQ.push([sym,strike,optType,cb]); _premNext();
+  _premQ.push([sym,strike,optType,cb,exp||""]); _premNext();
 }
-function _fetchRealPremiumNow(sym, strike, optType, cb){
+function _fetchRealPremiumNow(sym, strike, optType, cb, exp){
   var _pt0=Date.now();
   fetch(SERVER_URL+"/option_premium?sym="+encodeURIComponent(sym)+
-        "&strike="+encodeURIComponent(strike)+"&type="+encodeURIComponent(optType),
+        "&strike="+encodeURIComponent(strike)+"&type="+encodeURIComponent(optType)+(exp?"&expiry="+encodeURIComponent(exp):""),
         {headers:kiteHeaders(),signal:AbortSignal.timeout(45000)})  // 1023e: was 15s
     .then(function(r){return r.json();})
     .then(function(d){
@@ -4115,7 +4157,7 @@ function _activeTradeSigs(){
     return (e.status==="OPEN"||e.status==="T1_HIT") &&
            !allSigs.some(function(a){return a.sym===e.sym;});
   });
-  candidates.sort(function(a,b){return (b.ts||0)-(a.ts||0);}); // most recent first
+  candidates.sort(function(a,b){return (Date.parse(b.ts)||0)-(Date.parse(a.ts)||0);}); // most recent first
   candidates.forEach(function(e){
     if(seenSym[e.sym]) return;     // already have a card (any direction) for this symbol
     seenSym[e.sym]=true;
@@ -4127,7 +4169,7 @@ function _activeTradeSigs(){
       entry:e.entry_px, sl:e.sl_px, target1:e.t1_px, target2:e.t2_px||e.t1_px,
       rr:e.rr||"1:2", timeframe:e.timeframe||"Intraday",
       setupKey:e.setupKey, layers:e.layers,
-      _firstSeen:e.firstSeen||e.date, _firstSeenTs:e.ts||0,
+      _firstSeen:e.firstSeen||e.date, _firstSeenTs:Date.parse(e.ts)||0,
       _isNew:false, _isActiveTradeCard:true
     });
   });
@@ -4209,8 +4251,30 @@ function fetchBackgroundSignals(){
     .catch(function(e){console.warn("[BgSignals] "+(e&&e.message||e));})
     .then(function(){_bgSigsInFlight=false;});
 }
+// 1119a (Mahesh): signals the background scanner found are part of the main feed now, as normal
+// cards marked "📡 Background scanner", instead of a separate "last 60 min" box. A live scan
+// card always wins for the same stock; a journal trade card wins next.
+function _bgSignalCards(have){
+  if(window.IS_WORKER) return [];
+  var out=[], seen={};
+  (_bgSigs||[]).forEach(function(x){
+    if(!x||!x.sym||have[x.sym]||seen[x.sym]) return;
+    seen[x.sym]=1;
+    var fs=Date.parse(x.first_seen), ls=Date.parse(x.last_seen);
+    var lastAgo=isFinite(ls)?Math.max(0,Math.round((Date.now()-ls)/60000)):null;
+    var j=(SIGNAL_LOG||[]).filter(function(e){var t=Date.parse(e.ts);return e.sym===x.sym&&e.bias===x.bias&&isFinite(t)&&Math.abs(t-fs)<=90*60000;})[0];
+    out.push({sym:x.sym, bias:x.bias, trade:(j&&j.trade)||(x.sym+" "+(x.bias==="BULLISH"?"CE":"PE")),
+      strategy:x.strategy||"", confidence:Math.round(x.confidence||0), urgency:x.urgency||"HIGH",
+      why:"📡 Background scanner"+(lastAgo!==null?" · last confirmed "+lastAgo+" min ago":"")+
+          " · not in your current scan"+(j?" · Journal: "+j.status:"")+(x.why?" | "+x.why:""),
+      entry:x.entry_px, sl:x.sl_px, target1:x.t1_px, target2:x.t2_px||x.t1_px, rr:x.rr||"", timeframe:"Intraday",
+      _firstSeen:_istFmt(x.first_seen)||"", _firstSeenTs:isFinite(fs)?fs:0, _isNew:false, _isBgCard:true});
+  });
+  return out;
+}
 function renderBackgroundSignals(){
   var box=document.getElementById("bgSigs"); if(!box)return;
+  box.innerHTML=""; return;   // 1119a: shown inside the main feed now (see _bgSignalCards)
   var list=(_bgSigs||[]).filter(function(x){return typeof sfFilt==="undefined"||sfFilt==="ALL"||x.sym===sfFilt;});
   if(window.IS_WORKER||!list.length){box.innerHTML="";return;}
   var now=Date.now();
@@ -4241,7 +4305,13 @@ function renderBackgroundSignals(){
 function renderFeed(){
   try{renderBackgroundSignals();}catch(_){}  // keep "still active?" status in step with each scan
   var feed=document.getElementById("sigFeed");if(!feed)return;
-  var f=allSigs.concat(_activeTradeSigs());
+  var _act=_activeTradeSigs(), _have={};
+  allSigs.concat(_act).forEach(function(x){_have[x.sym]=1;});
+  // live-scan cards the background found earlier show the background's first-seen time
+  (_bgSigs||[]).forEach(function(x){allSigs.forEach(function(a){
+    if(a.sym===x.sym&&a.bias===x.bias){var fs=Date.parse(x.first_seen);
+      if(isFinite(fs)&&(!a._firstSeenTs||fs<a._firstSeenTs)){a._bgFirstSeen=_istFmt(x.first_seen);}}});});
+  var f=allSigs.concat(_act).concat(_bgSignalCards(_have));
   if(sfFilt!=="ALL")f=f.filter(function(s){return s.sym===sfFilt;});
   if(bias==="BTST")f=f.filter(function(s){return s.isBTST;});
   else if(bias!=="ALL")f=f.filter(function(s){return (bias==="BULL"&&s.bias==="BULLISH")||(bias==="BEAR"&&s.bias==="BEARISH")||(bias==="NEU"&&s.bias==="NEUTRAL");});
@@ -4292,7 +4362,8 @@ function renderFeed(){
     var _tsValid = typeof sig._firstSeenTs==="number" && isFinite(sig._firstSeenTs) && sig._firstSeenTs>0;
     var age=_tsValid?Math.round((Date.now()-sig._firstSeenTs)/60000):0;
     var ageStr=age<1?"just now":age===1?"1 min":age<60?age+" min":Math.floor(age/60)+"h "+(age%60)+"m";
-    var firstSeenStr=sig._firstSeen||sig._time||"";
+    var firstSeenStr=sig._bgFirstSeen?(sig._bgFirstSeen+" · 📡 background"):(sig._firstSeen||sig._time||"");
+    if(sig._isBgCard) firstSeenStr=(sig._firstSeen||"")+" · 📡 background";
     var timeDisplay=sig._isNew?
       "<span style='color:var(--g);font-weight:700'>🆕 NEW — "+firstSeenStr+"</span>" :
       "<span style='color:var(--m)'>🕐 First: <span style='color:var(--b);font-weight:700'>"+firstSeenStr+"</span> <span style='color:var(--y)'>("+ageStr+" ago)</span></span>";
@@ -4389,10 +4460,10 @@ function renderFeed(){
       // number computed from the underlying would not be.
       var livePremium = null, premiumPending = false;
       if(activeTrade.strike && activeTrade.optType){
-        livePremium = getLivePremiumCached(sig.sym, activeTrade.strike, activeTrade.optType);
+        livePremium = getLivePremiumCached(sig.sym, activeTrade.strike, activeTrade.optType, _tExp(activeTrade));
         if(livePremium===null){
           premiumPending = true;
-          refreshLivePremium(sig.sym, activeTrade.strike, activeTrade.optType);
+          refreshLivePremium(sig.sym, activeTrade.strike, activeTrade.optType, _tExp(activeTrade), activeTrade);
         }
       }
       var curPx = livePremium; // null if pending or if this is a pre-fix entry
@@ -4418,7 +4489,7 @@ function renderFeed(){
       // tracked — no way to know which contract to price, so no number is
       // shown rather than a wrong one).
       var pnlDisplay = livePnl!==null
-        ? "<div style='font-size:.78rem;font-weight:800;color:"+pnlColor+"'>"+(isProfit?"+":"")+"₹"+Math.abs(livePnl).toLocaleString("en-IN")+"</div>"+
+        ? "<div style='font-size:.78rem;font-weight:800;color:"+pnlColor+"'>"+(isProfit?"+":"−")+"₹"+Math.abs(livePnl).toLocaleString("en-IN")+"</div>"+
           "<div style='font-size:.55rem;color:"+pnlColor+"'>"+(isProfit?"+":"")+pnlPct.toFixed(2)+"%</div>"
         : premiumPending
           ? "<div style='font-size:.68rem;color:var(--m)'>⏳ fetching…</div>"
@@ -4523,6 +4594,8 @@ function renderFeed(){
       "</div>"+
       ( activeTrade ?
         "<button class='sc-exec' style='background:rgba(100,116,139,.15);color:var(--m);border:1px solid rgba(100,116,139,.3)' onclick='gotoJournal()'>📖 View in Journal — Trade Active</button>" :
+        sig._isBgCard ?
+        "<button class='sc-exec' style='background:rgba(100,116,139,.12);color:var(--m);border:1px solid rgba(100,116,139,.25)' onclick='runScan(true)'>⟳ Re-check with a fresh scan</button>" :
         "<button class='sc-exec "+(exSty?"":exCls)+"' style='"+exSty+"' onclick='execSig("+gi+")'>"+( AT.active?"⚡ Auto-Execute":"▶ Execute")+" — "+sig.trade+"</button>"
       )+
       "<div class='sc-time'>"+timeDisplay+
@@ -4639,7 +4712,7 @@ function showOrd(){
   document.getElementById("ord_d").innerHTML=
     "<div class='md-row'><span class='md-l'>Trade</span><span class='md-v' style='color:"+bc+"'>"+t.instrument+"</span></div>"+
     "<div class='md-row'><span class='md-l'>Action</span><span class='md-v' style='color:"+bc+";font-size:.88rem;font-weight:800'>BUY "+(t.optType||(isBull?"CE":"PE"))+"</span></div>"+
-    "<div class='md-row'><span class='md-l'>Product</span><span class='md-v'>MIS <span style='font-size:.58rem;color:var(--m)'>(intraday)</span></span></div>"+
+    "<div class='md-row'><span class='md-l'>Product</span><span class='md-v'>NRML <span style='font-size:.58rem;color:var(--m)'>(held overnight · stop as GTT)</span></span></div>"+
     "<div class='md-row'><span class='md-l'>Premium SL</span><span class='md-v' style='color:var(--r)'>-"+SL_PREMIUM_PCT+"% <span style='font-size:.58rem;color:var(--m)'>(SL-M auto-placed)</span></span></div>"+
     "<div class='md-row'><span class='md-l'>Entry</span><span class='md-v' style='color:var(--b)'>"+fpx(t.entry)+"</span></div>"+
     "<div class='md-row'><span class='md-l'>Stop Loss</span><span class='md-v' style='color:var(--r)'>"+fpx(t.sl)+" <span style='font-size:.58rem;color:var(--m)'>(AI)</span></span></div>"+
@@ -4703,7 +4776,7 @@ function doOrd(){
     strike:strike,
     option_type:optType,
     action:"BUY",              // always buying premium — never a naked short
-    product:"MIS",             // intraday: broker auto-squares off, lower margin
+    product:"NRML",            // 1119b: positions are held overnight (MIS would be squared off ~15:20)
     // Audit fix: when the card's levels are real premium levels, the broker's
     // stop uses the SAME % as the journal stop instead of the global setting.
     sl_pct:(function(){var e=parseFloat(t.entry),sl=parseFloat(t.sl);
@@ -4726,9 +4799,10 @@ function doOrd(){
     if(d.ok){
       var st=d.stop||{};
       if(st.placed){
-        toast("✅ Order + Stop Placed",d.tradingsymbol+" · SL-M @ ₹"+st.trigger+" (fill ₹"+st.fill_px+")","tg");
-        lastLiveOrder={sym:sym,strike:strike,optType:optType,qty:payload.qty,
+        toast("✅ Order + Stop Placed",d.tradingsymbol+" · "+(st.kind==="GTT"?"GTT stop":"SL stop")+" @ ₹"+st.trigger+" (fill ₹"+st.fill_px+")","tg");
+        lastLiveOrder={sym:sym,strike:strike,optType:optType,qty:d.qty||payload.qty,product:d.product||payload.product,exchange:d.exchange||"",
                        order_id:d.order_id,stop_order_id:st.order_id||"",tradingsymbol:d.tradingsymbol};
+        _saveLastOrder();
       } else {
         // FIX: the server now attempts to automatically close the position
         // when the stop fails to attach, rather than leaving it open —
@@ -4748,8 +4822,9 @@ function doOrd(){
           // persistent banner is still correct.
           toast("🚨 FILLED — NO STOP — AUTO-CLOSE ALSO FAILED",d.tradingsymbol+" is open with NO protection. "+(sq.error?"Close attempt failed: "+sq.error+". ":"")+"Exit manually in Kite NOW.","tr");
           showUnprotectedPositionBanner(d.tradingsymbol, (st.reason||"")+(sq.error?" — auto-close also failed: "+sq.error:""));
-          lastLiveOrder={sym:sym,strike:strike,optType:optType,qty:payload.qty,
+          lastLiveOrder={sym:sym,strike:strike,optType:optType,qty:d.qty||payload.qty,product:d.product||payload.product,exchange:d.exchange||"",
                          order_id:d.order_id,stop_order_id:st.order_id||"",tradingsymbol:d.tradingsymbol};
+          _saveLastOrder();
         }
       }
       if(AT.active){AT.trades++;addLog({ac:"BUY "+optType,inst:d.tradingsymbol,conf:t.confidence,src:"Kite",st:st.placed?"placed+SL":(d.auto_squareoff&&d.auto_squareoff.ok?"placed then auto-closed (no SL)":"placed NO-SL, unprotected")});}
@@ -4925,9 +5000,9 @@ function loadSignalLog(){
     // close — if it doesn't, an oversized log never gets saved (and
     // therefore never gets capped) at all. Applying the same cap directly
     // here means it takes effect on THIS load, not some future one.
-    var MAX_LOCAL_SIGNALS_ON_LOAD = 300;
+    var MAX_LOCAL_SIGNALS_ON_LOAD = JOURNAL_LOCAL_MAX;
     if(SIGNAL_LOG.length > MAX_LOCAL_SIGNALS_ON_LOAD){
-      SIGNAL_LOG = SIGNAL_LOG.slice(0, MAX_LOCAL_SIGNALS_ON_LOAD);
+      SIGNAL_LOG = _capLog(SIGNAL_LOG, MAX_LOCAL_SIGNALS_ON_LOAD);
       saveSignalLog(); // persist the trim immediately, don't wait for the next natural save
     }
   }catch(e){SIGNAL_LOG=[];}
@@ -4955,9 +5030,10 @@ function loadSignalLog(){
   SIGNAL_LOG.forEach(function(e){
     if(!_isLiveTrade(e) || e.timeframe==="Manual") return;
     var em=_tradeEntryMs(e); if(em===null) return;
-    var dl=_eodDeadlineMs(em, isSymMCX(e.sym));
+    var dl=_tradeDeadlineMs(e, em);
     if(now>=dl && _istDateKey(now)!==_istDateKey(dl)){
-      _voidTrade(e, "Missed end-of-day exit (app wasn't running at the cutoff) — excluded from stats");
+      _voidTrade(e, HOLD_OVERNIGHT ? "Missed expiry-day exit — excluded from stats"
+                                   : "Missed end-of-day exit (app wasn't running at the cutoff) — excluded from stats");
       cleaned = true;
     }
   });
@@ -4976,13 +5052,14 @@ function saveSignalLog(){
   // history: Supabase already has the full, permanent record via
   // ingestJournalEntry — this local copy exists for the app's own recent-
   // activity display, not as the archive. Keeps the most recent 300.
-  var MAX_LOCAL_SIGNALS = 300;
-  if(SIGNAL_LOG.length > MAX_LOCAL_SIGNALS){
-    SIGNAL_LOG = SIGNAL_LOG.slice(0, MAX_LOCAL_SIGNALS);
-  }
+  SIGNAL_LOG = _capLog(SIGNAL_LOG, JOURNAL_LOCAL_MAX);
   try{
     localStorage.setItem("pt_siglog",JSON.stringify(SIGNAL_LOG));
   }catch(e){
+    // storage full: keep shrinking the OLDEST closed trades (the server keeps the full record)
+    for(var _cap=Math.floor(SIGNAL_LOG.length*0.75); _cap>=200; _cap=Math.floor(_cap*0.75)){
+      try{ SIGNAL_LOG=_capLog(SIGNAL_LOG,_cap); localStorage.setItem("pt_siglog",JSON.stringify(SIGNAL_LOG)); return; }catch(_){}
+    }
     if(!window._sigLogQuotaWarned){
       window._sigLogQuotaWarned=true;
       toast("⚠️ Signal Log Storage Full","Your browser's storage limit was reached ("+SIGNAL_LOG.length+" trades). Export your Journal to CSV soon — new trades may not be saved until space is freed.","tr");
@@ -5183,6 +5260,7 @@ function _writeJournal(sig, source){
     // addresses in the first place).
     strike: sig.strike||0,
     optType: sig.optType||"",
+    expiry: sig.premiumExpiry||"",
     rr: sig.rr||"1:2",
     why: sig.why||"",
     vix: (typeof VIX!=="undefined"?VIX:0),
@@ -5196,6 +5274,8 @@ function _writeJournal(sig, source){
     exit_px: null, pnl: null, outcome: null, exitTime: null, notes: ""
   };
   if(sig._und) entry.shadow={und:{entry:sig._und.entry,sl:sig._und.sl,t1:sig._und.t1,t2:sig._und.t2,at:entry.ts}};
+  if(sig.premiumExpiry){ entry.shadow=entry.shadow||{}; entry.shadow.opt_expiry=sig.premiumExpiry;
+    if(sig.premiumTradingsymbol) entry.shadow.opt_ts=sig.premiumTradingsymbol; }
   SIGNAL_LOG.unshift(entry);
   saveSignalLog();
   ingestJournalEntry(entry);
@@ -5272,22 +5352,22 @@ function checkSignalLevels(){
     if(e.timeframe!=="Manual"){
       var _em=_tradeEntryMs(e);
       if(_em!==null){
-        var _dl=_eodDeadlineMs(_em, isSymMCX(e.sym)), _now=Date.now();
+        var _dl=_tradeDeadlineMs(e, _em), _now=Date.now();
         if(_now>=_dl){
           if(_istDateKey(_now)!==_istDateKey(_dl) || !e.strike || !e.optType){
-            _voidTrade(e, "Missed end-of-day exit — excluded from stats");
+            _voidTrade(e, HOLD_OVERNIGHT ? "Missed expiry-day exit — excluded from stats" : "Missed end-of-day exit — excluded from stats");
             allSigs=allSigs.filter(function(a){return !(a.sym===e.sym&&a.bias===e.bias);});
             changed=true; return;
           }
-          var eodPx=getLivePremiumCached(e.sym, e.strike, e.optType);
-          if(eodPx===null){ refreshLivePremium(e.sym, e.strike, e.optType); return; }
+          var eodPx=getLivePremiumCached(e.sym, e.strike, e.optType, _tExp(e));
+          if(eodPx===null){ refreshLivePremium(e.sym, e.strike, e.optType, _tExp(e), e); return; }
           e.status="TIME_EXIT"; e.exit_px=eodPx; e.exitTime=istDateTime();
           e.pnl=Math.round((eodPx-e.entry_px)*lotSize);
           e.outcome = e.pnl>0 ? "WIN" : (e.pnl===0 ? "BREAKEVEN" : "LOSS");
-          e.notes=(e.notes||"")+" | ⏰ End-of-day exit at ₹"+eodPx;
+          e.notes=(e.notes||"")+(HOLD_OVERNIGHT?" | ⏰ Expiry-day exit at ₹":" | ⏰ End-of-day exit at ₹")+eodPx;
           allSigs=allSigs.filter(function(a){return !(a.sym===e.sym&&a.bias===e.bias);});
           delete _sigFirstSeen[e.sym+e.bias]; _saveSigFirstSeen();
-          toast("⏰ EOD Exit — "+e.sym, e.trade+" closed at ₹"+eodPx+" | P&L: ₹"+e.pnl, e.pnl>=0?"tg":"tr");
+          toast((HOLD_OVERNIGHT?"⏰ Expiry Exit — ":"⏰ EOD Exit — ")+e.sym, e.trade+" closed at ₹"+eodPx+" | P&L: ₹"+e.pnl, e.pnl>=0?"tg":"tr");
           ingestJournalEntry(e);
           changed=true; return;
         }
@@ -5308,8 +5388,8 @@ function checkSignalLevels(){
     // and skips the check entirely for this cycle — never falls back to
     // the underlying's price, which is exactly the bug being fixed.
     if(!e.strike || !e.optType) return; // pre-fix entry — no way to know which contract, don't guess
-    var optPx = getLivePremiumCached(e.sym, e.strike, e.optType);
-    if(optPx===null){ refreshLivePremium(e.sym, e.strike, e.optType); return; }
+    var optPx = getLivePremiumCached(e.sym, e.strike, e.optType, _tExp(e));
+    if(optPx===null){ refreshLivePremium(e.sym, e.strike, e.optType, _tExp(e), e); return; }
     px = optPx; // every check below now compares against the real premium
 
     // ── LAYER-EXIT SHADOW TEST (audit) — records, never acts. The first time
@@ -5451,8 +5531,8 @@ function renderJ(){
   var unrealTotal=0;
   open.forEach(function(e){
     if(!e.strike || !e.optType) return;
-    var cachedPrem = getLivePremiumCached(e.sym, e.strike, e.optType);
-    if(cachedPrem===null){ refreshLivePremium(e.sym, e.strike, e.optType); return; }
+    var cachedPrem = getLivePremiumCached(e.sym, e.strike, e.optType, _tExp(e));
+    if(cachedPrem===null){ refreshLivePremium(e.sym, e.strike, e.optType, _tExp(e), e); return; }
     if(cachedPrem && e.entry_px){
       // FIX: found via systematic review — the underlying-vs-premium part
       // of this line was already fixed, but the bull/bear direction bug
@@ -5467,7 +5547,7 @@ function renderJ(){
     "<div class='j-s'><div class='j-sl'>Signals</div><div class='j-sv'>"+SIGNAL_LOG.length+"</div></div>"+
     "<div class='j-s'><div class='j-sl'>Open</div><div class='j-sv' style='color:var(--b)'>"+open.length+"</div></div>"+
     "<div class='j-s'><div class='j-sl'>Closed</div><div class='j-sv'>"+closed.length+"</div></div>"+
-    "<div class='j-s'><div class='j-sl'>Booked P&L</div><div class='j-sv' style='color:"+(totPnl>=0?"var(--g)":"var(--r)")+";font-size:.68rem'>"+(totPnl>=0?"+":"")+"₹"+Math.abs(totPnl).toLocaleString("en-IN")+"</div></div>"+
+    "<div class='j-s'><div class='j-sl'>Booked P&L</div><div class='j-sv' style='color:"+(totPnl>=0?"var(--g)":"var(--r)")+";font-size:.68rem'>"+(totPnl>=0?"+":"−")+"₹"+Math.abs(totPnl).toLocaleString("en-IN")+"</div></div>"+
     (open.length?"<div class='j-s'><div class='j-sl'>Unrealised</div><div class='j-sv' style='color:"+(unrealTotal>=0?"var(--g)":"var(--r)")+";font-size:.68rem'>"+(unrealTotal>=0?"▲ +":"▼ ")+"₹"+Math.abs(unrealTotal).toLocaleString("en-IN")+"</div></div>":"");
 
   // Signal log entries
@@ -5509,7 +5589,7 @@ function renderSignalEntry(e, isOpen){
     "MANUAL":"⚪ MANUAL EXIT"
   }[e.status]||e.status;
   var bColor = e.bias==="BULLISH"?"var(--g)":"var(--r)";
-  var pnlStr = e.pnl!=null ? ((e.pnl>=0?"+":"")+"₹"+Math.abs(e.pnl).toLocaleString("en-IN")) : "–";
+  var pnlStr = e.pnl!=null ? ((e.pnl>=0?"+":"−")+"₹"+Math.abs(e.pnl).toLocaleString("en-IN")) : "–";
 
   // FIX: this whole block used to compare the UNDERLYING's live price
   // (liveS.px) against e.entry_px — but entry_px is now a real option
@@ -5522,8 +5602,8 @@ function renderSignalEntry(e, isOpen){
   // as the equivalent fix on the live feed card.
   var cmp = null, cmpPending = false;
   if(e.strike && e.optType){
-    cmp = getLivePremiumCached(e.sym, e.strike, e.optType);
-    if(cmp===null){ cmpPending = true; refreshLivePremium(e.sym, e.strike, e.optType); }
+    cmp = getLivePremiumCached(e.sym, e.strike, e.optType, _tExp(e));
+    if(cmp===null){ cmpPending = true; refreshLivePremium(e.sym, e.strike, e.optType, _tExp(e), e); }
   }
 
   // ── Unrealised P&L (only for open signals with a real live premium) ──
@@ -5792,7 +5872,7 @@ function renderPerformance(){
   html+="<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px'>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>WIN RATE</div><div style='font-size:1.1rem;font-weight:800;color:"+(!closed.length?"var(--m)":wr>=60?"var(--g)":wr>=40?"var(--y)":"var(--r)")+"'>"+(closed.length?wr+"%":"–")+"</div></div>";
   html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>SIGNALS</div><div style='font-size:1.1rem;font-weight:800;color:var(--t1)'>"+SIGNAL_LOG.length+"</div></div>";
-  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>TOTAL P&L</div><div style='font-size:.85rem;font-weight:800;color:"+(totPnl>=0?"var(--g)":"var(--r)")+"'>"+(totPnl>=0?"+":"")+"₹"+Math.abs(totPnl).toLocaleString("en-IN")+"</div></div>";
+  html+="<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center'><div style='font-size:.55rem;color:var(--m);font-weight:600;letter-spacing:1px'>TOTAL P&L</div><div style='font-size:.85rem;font-weight:800;color:"+(totPnl>=0?"var(--g)":"var(--r)")+"'>"+(totPnl>=0?"+":"−")+"₹"+Math.abs(totPnl).toLocaleString("en-IN")+"</div></div>";
   html+="</div>";
 
   // Setup Leaderboard
@@ -5808,7 +5888,7 @@ function renderPerformance(){
       html+="<div style='font-size:.58rem;font-weight:600;color:var(--t1)'>"+k+"</div>";
       html+="<div style='font-size:.6rem;color:var(--m);text-align:center'>"+st.trades+"</div>";
       html+="<div style='font-size:.65rem;font-weight:700;color:"+(swr>=60?"var(--g)":swr>=40?"var(--y)":"var(--r)")+";text-align:center'>"+swr+"%</div>";
-      html+="<div style='font-size:.6rem;font-weight:600;color:"+(st.pnl>=0?"var(--g)":"var(--r)")+";text-align:right'>"+(st.pnl>=0?"+":"")+"₹"+Math.abs(st.pnl).toLocaleString("en-IN")+"</div></div>";
+      html+="<div style='font-size:.6rem;font-weight:600;color:"+(st.pnl>=0?"var(--g)":"var(--r)")+";text-align:right'>"+(st.pnl>=0?"+":"−")+"₹"+Math.abs(st.pnl).toLocaleString("en-IN")+"</div></div>";
     });
     html+="</div>";
   } else {
@@ -6443,7 +6523,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1117d"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1119b"+" (no Backtest tab in this build)");}catch(e){}
   try{setTimeout(loadStrikeSteps,800);setInterval(loadStrikeSteps,30*60000);}catch(e){} // 1117c: real stock strike gaps
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(fetchSysStatus,2000);setInterval(function(){if(!document.hidden)fetchSysStatus();},120000);
