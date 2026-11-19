@@ -384,6 +384,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
         protective <b>GTT stop</b> is placed on the fill price — it stays active across days.
       </div>
       <div class="ss-f"><label>Premium Stop Loss (% of option premium paid)</label><input type="number" id="ss_slpct" value="30" min="5" max="80" step="5" oninput="setSlPct(this.value)"></div>
+      <div class="ss-f"><label>Max loss per trade (₹) — sets the lot size shown on every signal</label><input type="number" id="ss_maxloss" value="2000" min="100" step="500" oninput="setMaxLoss(this.value)"></div>
       <button class="ss-btn ss-sec2" onclick="exitLastOrder()">🔻 Square Off Last Order</button>
     </div>
     <div class="ss-sec">
@@ -471,7 +472,7 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
 
 <!-- HEADER -->
 <div class="hdr">
-  <div class="logo">PRO Trader <span class="ver">v9.2·1119b</span></div>
+  <div class="logo">PRO Trader <span class="ver">v9.2·1119c</span></div>
   <div class="sym-pick" onclick="openOv('symOv');buildSymList('')"><span id="hdrSym">NIFTY</span><span style="color:var(--m);font-size:.62rem">▾</span></div>
   <button class="auto-pill" id="autoPill" onclick="gotoAT()">● Auto OFF</button>
   <button class="gear" onclick="openSS()">⚙</button>
@@ -563,12 +564,6 @@ body{background:var(--bg);color:var(--t);font-family:-apple-system,sans-serif;mi
     <option value="BANKNIFTY">BANK NIFTY — monthly expiry</option>
     <option value="FINNIFTY">FIN NIFTY — monthly expiry</option>
     <option value="SENSEX">SENSEX — weekly Thu expiry</option>
-  </optgroup>
-  <optgroup label="🏭 NSE Stocks (F&O)">
-    <option value="RELIANCE">RELIANCE</option>
-    <option value="HDFCBANK">HDFC BANK</option>
-    <option value="INDIGO">INDIGO</option>
-    <option value="HAL">HAL Defence</option>
   </optgroup>
   <optgroup label="🛢 MCX Commodities">
     <option value="CRUDEOIL">CRUDE OIL — MCX (₹/barrel)</option>
@@ -1138,7 +1133,7 @@ function _mergeServerJournal(rows){
   rows.forEach(function(r){
     if(!r||!r.id||!r.sym)return;
     var srv=_rowToEntry(r); srvById[r.id]=srv;
-    var k=srv.sym+"|"+srv.bias; (srvBySymBias[k]=srvBySymBias[k]||[]).push(srv);
+    var k=srv.sym+"|"+srv.bias; if(srv.timeframe!=="PaperFut") (srvBySymBias[k]=srvBySymBias[k]||[]).push(srv);
     var loc=byId[r.id];
     if(!loc){SIGNAL_LOG.push(srv);byId[r.id]=srv;res.added++;return;}
     var rs=_STATUS_RANK[srv.status]||0, rl=_STATUS_RANK[loc.status]||0;
@@ -1152,7 +1147,7 @@ function _mergeServerJournal(rows){
   // of a signal the worker already logged — the server rejected it. Drop it.
   // Any other local-only entry is pushed up instead.
   SIGNAL_LOG=SIGNAL_LOG.filter(function(e){
-    if(srvById[e.id]||e.timeframe==="Manual")return true;
+    if(srvById[e.id]||e.timeframe==="Manual"||e.timeframe==="PaperFut")return true;
     var em=_tradeEntryMs(e); if(em===null)return true;
     var dup=(srvBySymBias[e.sym+"|"+e.bias]||[]).some(function(x){var xm=Date.parse(x.ts);
       return _istDateKey(xm)===_istDateKey(em) && (_isLiveTrade(x)||Math.abs(xm-em)<=90*60000);});
@@ -4154,7 +4149,7 @@ function _activeTradeSigs(){
   // still watches it for a real SL/target close. This only stops the feed
   // from showing two cards for one symbol.
   var candidates = SIGNAL_LOG.filter(function(e){
-    return (e.status==="OPEN"||e.status==="T1_HIT") &&
+    return (e.status==="OPEN"||e.status==="T1_HIT") && e.timeframe!=="PaperFut" &&
            !allSigs.some(function(a){return a.sym===e.sym;});
   });
   candidates.sort(function(a,b){return (Date.parse(b.ts)||0)-(Date.parse(a.ts)||0);}); // most recent first
@@ -4593,10 +4588,19 @@ function renderFeed(){
         "<div style='flex:1;text-align:center;background:rgba(255,255,255,.04);border-radius:6px;padding:4px'><div style='font-size:.55rem;color:var(--m)'>VIX</div><div style='font-size:.7rem;font-weight:700;color:var(--m)'>"+VIX+"</div></div>"+
       "</div>"+
       ( activeTrade ?
+        (function(){ var ck=sigCheck(sig);
+          return (_segOf(sig.sym)==="Stock"&&WATCH_ONLY_STOCKS ? "<div style='font-size:.62rem;color:var(--m);padding:0 12px 6px'>👁 Watch only — paper-tracked in the Journal, not traded</div>"
+            : ck.pass ? "<div style='font-size:.62rem;color:var(--g);padding:0 12px 6px'>✅ PASS · size "+ck.lots+" lot"+(ck.lots>1?"s":"")+" · max loss ₹"+ck.maxLoss.toLocaleString("en-IN")+" · R:R 1:"+ck.rr+"</div>" : ""); })()+
         "<button class='sc-exec' style='background:rgba(100,116,139,.15);color:var(--m);border:1px solid rgba(100,116,139,.3)' onclick='gotoJournal()'>📖 View in Journal — Trade Active</button>" :
         sig._isBgCard ?
         "<button class='sc-exec' style='background:rgba(100,116,139,.12);color:var(--m);border:1px solid rgba(100,116,139,.25)' onclick='runScan(true)'>⟳ Re-check with a fresh scan</button>" :
-        "<button class='sc-exec "+(exSty?"":exCls)+"' style='"+exSty+"' onclick='execSig("+gi+")'>"+( AT.active?"⚡ Auto-Execute":"▶ Execute")+" — "+sig.trade+"</button>"
+        (function(){ var ck=sigCheck(sig);
+          var line=ck.pass
+            ? "<div style='font-size:.62rem;color:var(--g);padding:0 12px 6px'>✅ PASS · size "+ck.lots+" lot"+(ck.lots>1?"s":"")+" · max loss ₹"+ck.maxLoss.toLocaleString("en-IN")+" · R:R 1:"+ck.rr+"</div>"
+            : "<div style='font-size:.62rem;color:var(--r);padding:0 12px 6px'>⛔ "+(_segOf(sig.sym)==="Stock"&&WATCH_ONLY_STOCKS?"WATCH ONLY":"BLOCKED")+" · "+ck.reasons.join(" · ")+"</div>";
+          return line+(ck.pass
+            ? "<button class='sc-exec "+(exSty?"":exCls)+"' style='"+exSty+"' onclick='execSig("+gi+")'>"+( AT.active?"⚡ Auto-Execute":"▶ Execute")+" — "+sig.trade+"</button>"
+            : "<button class='sc-exec' style='background:rgba(100,116,139,.08);color:var(--m);border:1px solid rgba(100,116,139,.2);cursor:default' disabled>"+(_segOf(sig.sym)==="Stock"&&WATCH_ONLY_STOCKS?"👁 Watch only — "+sig.trade:"⛔ Not tradeable now")+"</button>"); })()
       )+
       "<div class='sc-time'>"+timeDisplay+
       (sig.setupKey?" · <span style='color:var(--b)'>"+sig.setupKey+"</span>":"")+
@@ -4670,7 +4674,8 @@ function _layerLiveStatus(s, bias){
 }
 
 function fpx(v){if(!v&&v!==0)return "–";var s=""+v;if(isNaN(parseFloat(s)))return s;return "₹"+parseFloat(s).toLocaleString("en-IN");}
-function execSig(idx){var sig=allSigs[idx];if(!sig)return;logSignalEntry(sig);pendingTrade={action:"BUY",bias:sig.bias,optType:sig.bias==="BULLISH"?"CE":"PE",sym:sig.sym,instrument:sig.trade,confidence:sig.confidence,entry:sig.entry,sl:sig.sl,target:sig.target1,why:sig.why,_bt:sig.isBTST||false,_premiumLevels:!!sig.premiumTradingsymbol};if(AT.active)qAT(pendingTrade);else showOrd();}
+function execSig(idx){var sig=allSigs[idx];if(!sig)return;
+  var _ck=sigCheck(sig); if(!_ck.pass){toast("⛔ Blocked — "+sig.sym,_ck.reasons.join(" · "),"tr");return;}logSignalEntry(sig);pendingTrade={action:"BUY",bias:sig.bias,optType:sig.bias==="BULLISH"?"CE":"PE",sym:sig.sym,instrument:sig.trade,confidence:sig.confidence,entry:sig.entry,sl:sig.sl,target:sig.target1,why:sig.why,_bt:sig.isBTST||false,_premiumLevels:!!sig.premiumTradingsymbol};if(AT.active)qAT(pendingTrade);else showOrd();}
 
 // ═══════════════════════════════════════════
 // SCANNER
@@ -4899,6 +4904,7 @@ function atCycle(){
     if(s.bias==="NEUTRAL") return false;
     // If AUTO mode: only consider the currently selected symbol
     if(AT.inst==="AUTO" && s.sym!==CS.sym) return false;
+    if(!sigCheck(s).pass) return false;       // 1119c: only signals that pass the check
     return true;
   });
 
@@ -4958,12 +4964,96 @@ function atCycle(){
   AT.trades++;
   showOrd();
 }
+// ═══════════════════════════════════════════════════════════════════════════
+// 1119c — SIGNAL POLICY (from the 3-year backtests, Nov 2026)
+//  • Stock signals are WATCH-ONLY: shown + journaled for live scoring, never traded
+//    (stock intraday option buying lost ~0.4R/trade after costs over 3 years).
+//  • Every signal gets a deterministic PASS / BLOCK check with the reason, and a size
+//    from "max loss per trade". Execute and Auto only act on PASS.
+//  • Paper trade: index strong-close overnight (the one effect positive in all 3 test
+//    periods) is logged at 15:15 by the background scanner and closed at the next open.
+// ═══════════════════════════════════════════════════════════════════════════
+var WATCH_ONLY_STOCKS = true;
+var MIN_RR = 1.5, SL_PCT_MIN = 8, SL_PCT_MAX = 60;
+var MAX_LOSS_PER_TRADE = 2000;
+try{var _ml=parseInt(localStorage.getItem("pt_maxloss"),10);if(_ml>=100)MAX_LOSS_PER_TRADE=_ml;}catch(_){}
+function setMaxLoss(v){var n=parseInt(v,10);if(n>=100){MAX_LOSS_PER_TRADE=n;try{localStorage.setItem("pt_maxloss",n);}catch(_){}}try{renderFeed();}catch(_){}}
+var _IDX4=["NIFTY","BANKNIFTY","FINNIFTY","SENSEX"];
+function _segOf(sym){return isSymMCX(sym)?"MCX":(_IDX4.indexOf(sym)>=0?"Index":"Stock");}
+function sigCheck(sig){
+  var r=[], out={pass:false,reasons:r,lots:0,maxLoss:0,rr:null,slPct:null};
+  if(!sig) {r.push("No signal"); return out;}
+  if(sig._noTrade||sig.bias==="NEUTRAL"){r.push("No trade"); return out;}
+  if(WATCH_ONLY_STOCKS && _segOf(sig.sym)==="Stock") r.push("Stocks are watch-only (no tested edge)");
+  if(sig.urgency!=="HIGH"){ r.push("Not HIGH conviction"); return out; }
+  var e=parseFloat(sig.entry), sl=parseFloat(sig.sl), t1=parseFloat(sig.target1||sig.target);
+  if(!sig.premiumTradingsymbol) r.push("Waiting for the real option price");
+  else if(!(e>0&&sl>0&&t1>0&&sl<e&&t1>e)) r.push("Levels incomplete");
+  else {
+    out.rr=Math.round((t1-e)/(e-sl)*10)/10; out.slPct=Math.round((e-sl)/e*100);
+    if(out.rr<MIN_RR) r.push("R:R 1:"+out.rr+" (needs ≥ 1:"+MIN_RR+")");
+    if(out.slPct<SL_PCT_MIN||out.slPct>SL_PCT_MAX) r.push("Stop "+out.slPct+"% of premium (allowed "+SL_PCT_MIN+"–"+SL_PCT_MAX+"%)");
+    var lot=LOT_SIZES[sig.sym]||LOT_SIZES.DEFAULT||50, perLot=(e-sl)*lot;
+    out.lots=Math.floor(MAX_LOSS_PER_TRADE/perLot); out.maxLoss=Math.round(Math.max(1,out.lots)*perLot);
+    if(out.lots<1) r.push("1 lot risks ₹"+Math.round(perLot).toLocaleString("en-IN")+" (> max ₹"+MAX_LOSS_PER_TRADE.toLocaleString("en-IN")+")");
+  }
+  var m=istMinsNow();
+  if(isSymMCX(sig.sym)){ if(m<555||m>1350) r.push("Outside MCX entry window (09:15–22:30)"); }
+  else if(m<570||m>870) r.push("Outside entry window (09:30–14:30)");
+  var opp=SIGNAL_LOG.filter(function(x){return (x.status==="OPEN"||x.status==="T1_HIT")&&x.sym===sig.sym&&x.bias!==sig.bias&&x.timeframe!=="PaperFut";})[0];
+  if(opp) r.push("Opposite trade still open on "+sig.sym);
+  var g=riskGateFor(sig.sym); if(!g.allowed) r.push("Daily limit: "+g.reasons.join("; "));
+  out.pass=!r.length; return out;
+}
+// ── Paper trade: index strong-close overnight (worker only, so it's logged once) ──
+var PAPER_SC_THRESHOLD = 0.75;
+function paperStrongCloseTick(){
+  if(!window.IS_WORKER) return;
+  var m=istMinsNow(), day=istDayNow(); if(day===0||day===6) return;
+  var today=_istDateKey(Date.now());
+  // exit: first check after 09:16 on a later trading day, at today's open
+  if(m>=556 && m<=600){
+    SIGNAL_LOG.filter(function(e){return e.timeframe==="PaperFut"&&e.status==="OPEN"&&_istDateKey(Date.parse(e.ts))!==today;}).forEach(function(e){
+      var s=allS().filter(function(x){return x.sym===e.sym;})[0]; if(!s||!s.px) return;
+      var xp=(s.o>0?s.o:s.px), lot=LOT_SIZES[e.sym]||LOT_SIZES.DEFAULT||50;
+      e.status="CLOSED"; e.exit_px=Math.round(xp*100)/100; e.exitTime=istDateTime();
+      e.pnl=Math.round((xp-e.entry_px)*lot); e.outcome=e.pnl>0?"WIN":(e.pnl===0?"BREAKEVEN":"LOSS");
+      e.notes=(e.notes||"")+" | closed at the open: "+(xp-e.entry_px>=0?"+":"")+Math.round(xp-e.entry_px)+" pts";
+      try{ingestJournalEntry(e);}catch(_){}
+    });
+    saveSignalLog();
+  }
+  // entry: 15:15–15:24, once per index per day
+  if(m>=915 && m<925){
+    _IDX4.forEach(function(sym){
+      var s=allS().filter(function(x){return x.sym===sym;})[0]; if(!s||!s.px||!(s.h>s.l)) return;
+      if(SIGNAL_LOG.some(function(e){return e.timeframe==="PaperFut"&&e.sym===sym&&_istDateKey(Date.parse(e.ts))===today;})) return;
+      var pos=(s.px-s.l)/(s.h-s.l); if(pos<PAPER_SC_THRESHOLD) return;
+      var ent={id:Date.now()+"_PSC_"+sym, sym:sym, bias:"BULLISH", trade:"Paper · buy "+sym+" futures at close",
+        strategy:"Strong-close overnight (paper)", setupKey:"PAPER_STRONG_CLOSE", timeBucket:"closing", regime:"",
+        layers:0, hasOI:false, confidence:null, urgency:"PAPER", entry_px:Math.round(s.px*100)/100,
+        sl_px:Math.round(s.px*0.97*100)/100, t1_px:Math.round(s.px*1.03*100)/100, t2_px:Math.round(s.px*1.03*100)/100,
+        strike:0, optType:"", rr:"", why:"Closed in the top "+Math.round((1-pos)*100)+"% of the day's range ("+Math.round(s.l)+"–"+Math.round(s.h)+") — exit at the next open",
+        vix:(typeof VIX!=="undefined"?VIX:0), timeframe:"PaperFut", firstSeen:istDateTime(), ts:new Date().toISOString(),
+        date:istDateTime(), lot_size:LOT_SIZES[sym]||LOT_SIZES.DEFAULT||50, source:"paper", status:"OPEN",
+        exit_px:null, pnl:null, outcome:null, exitTime:null, notes:""};
+      SIGNAL_LOG.unshift(ent); try{ingestJournalEntry(ent);}catch(_){}
+      console.log("[PaperSC] "+sym+" strong close "+Math.round(pos*100)+"% of range — paper long at "+ent.entry_px);
+    });
+    saveSignalLog();
+  }
+}
+try{ setInterval(function(){try{paperStrongCloseTick();}catch(e){console.warn("[PaperSC] "+e.message);}},60000); }catch(_){}
+
 function qAT(sig){
   if(!AT.active)return;
   if((sig.confidence||0)<AT.conf)return;
   if(AT.trades>=AT.maxTrades)return;
   var _g=riskGateFor(sig.sym||CS.sym);
   if(!_g.allowed){addLog({ac:"SKIP",inst:(sig.sym||CS.sym)+" — "+(sig.trade||""),conf:sig.confidence,src:"Daily limit: "+_g.reasons.join("; "),st:"skip"});return;}
+  var _src=allSigs.filter(function(a){return a.sym===(sig.sym||CS.sym)&&a.bias===sig.bias;})[0];
+  var _ck=sigCheck(_src);
+  if(!_ck.pass){addLog({ac:"SKIP",inst:(sig.sym||CS.sym)+" — "+(sig.trade||""),conf:sig.confidence,src:"Blocked: "+_ck.reasons.join("; "),st:"skip"});return;}
   pendingTrade={action:"BUY",bias:sig.bias||"BULLISH",optType:(sig.optType||(sig.bias==="BEARISH"?"PE":"CE")),sym:sig.sym||CS.sym,instrument:sig.instrument||sig.trade||CS.sym,confidence:sig.confidence,entry:sig.entry,sl:sig.sl||sig.stopLoss,target:sig.target||sig.target1,why:sig.why||sig.reasoning||"",source:"Signal"};
   showOrd();
 }
@@ -5028,7 +5118,7 @@ function loadSignalLog(){
   var now = Date.now();
   var cleaned = false;
   SIGNAL_LOG.forEach(function(e){
-    if(!_isLiveTrade(e) || e.timeframe==="Manual") return;
+    if(!_isLiveTrade(e) || e.timeframe==="Manual" || e.timeframe==="PaperFut") return;
     var em=_tradeEntryMs(e); if(em===null) return;
     var dl=_tradeDeadlineMs(e, em);
     if(now>=dl && _istDateKey(now)!==_istDateKey(dl)){
@@ -5206,7 +5296,7 @@ function _writeJournal(sig, source){
   // This is the check that was completely absent from the manual path.
   var todaySig = new Date().toLocaleDateString('en-IN');
   var recentSame = SIGNAL_LOG.filter(function(x){
-    if(x.sym!==sig.sym||x.bias!==sig.bias) return false;
+    if(x.sym!==sig.sym||x.bias!==sig.bias||x.timeframe==="PaperFut") return false;   // paper trades are separate
     if(x.status==="OPEN"||x.status==="T1_HIT") return true; // always block if still active
     var xDate = x.ts ? new Date(x.ts).toLocaleDateString('en-IN') : "";
     return xDate===todaySig && x.status!=="SL_HIT";
@@ -5216,7 +5306,7 @@ function _writeJournal(sig, source){
   // Guard 5: if opposite direction is still ACTIVE for same symbol → auto-close it.
   // T1_HIT counts as active — it's derisked to breakeven, not closed.
   SIGNAL_LOG.forEach(function(x){
-    if(x.sym===sig.sym && x.bias!==sig.bias && (x.status==="OPEN"||x.status==="T1_HIT")){
+    if(x.sym===sig.sym && x.bias!==sig.bias && (x.status==="OPEN"||x.status==="T1_HIT") && x.timeframe!=="PaperFut"){
       var wasStatus = x.status;
       x.status  = "MANUAL";
       x.outcome = "MANUAL";
@@ -5312,7 +5402,7 @@ function checkSignalLevels(){
   if(!SIGNAL_LOG.length) return;
   var changed=false;
   // Watch OPEN signals for all levels, T1_HIT signals for T2 only
-  SIGNAL_LOG.filter(function(x){return x.status==="OPEN"||x.status==="T1_HIT";}).forEach(function(e){
+  SIGNAL_LOG.filter(function(x){return (x.status==="OPEN"||x.status==="T1_HIT")&&x.timeframe!=="PaperFut";}).forEach(function(e){
     var s=allS().filter(function(x){return x.sym===e.sym;})[0];
     if(!s||!s.px||!e.entry_px) return;
     var px=s.px; // underlying's own price — legitimate for the layer-
@@ -5601,7 +5691,8 @@ function renderSignalEntry(e, isOpen){
   // fetching / unavailable for pre-fix entries with no strike recorded)
   // as the equivalent fix on the live feed card.
   var cmp = null, cmpPending = false;
-  if(e.strike && e.optType){
+  if(e.timeframe==="PaperFut"){ var _us=allS().filter(function(x){return x.sym===e.sym;})[0]; cmp=(_us&&_us.px)||null; }
+  else if(e.strike && e.optType){
     cmp = getLivePremiumCached(e.sym, e.strike, e.optType, _tExp(e));
     if(cmp===null){ cmpPending = true; refreshLivePremium(e.sym, e.strike, e.optType, _tExp(e), e); }
   }
@@ -5828,6 +5919,48 @@ function exportJ(){
   toast("📤 Exported","Signal log saved as CSV","tg");
 }
 
+// 1119c — LIVE SCORE BY SIGNAL TYPE: every journaled signal is a paper trade; this is the honest
+// running score (average R after costs) that decides, with data, what may ever be traded for real.
+var LIVE_SCORE_MIN_TRADES = 30, OPT_COST_FRAC = 0.03;   // ~3% of premium round trip (spread + charges)
+function _tradeR(e){
+  var en=+e.entry_px, sl=+e.sl_px, ex=+e.exit_px;
+  if(!(en>0&&sl>0&&ex>0&&en>sl)) return null;
+  return (ex-en)/(en-sl) - OPT_COST_FRAC*en/(en-sl);
+}
+function _liveScoreHtml(){
+  var closed=SIGNAL_LOG.filter(_isClosedTrade), live=SIGNAL_LOG.filter(_isLiveTrade), groups={};
+  function add(k,e,isOpen){ var g=groups[k]=groups[k]||{n:0,wins:0,sumR:0,nR:0,pts:0,pnl:0,open:0,paper:false};
+    if(isOpen){g.open++;return;}
+    g.n++; if((e.pnl||0)>0) g.wins++; g.pnl+=(e.pnl||0);
+    if(e.timeframe==="PaperFut"){ g.paper=true; g.pts+=(+e.exit_px - +e.entry_px)||0; }
+    else { var r=_tradeR(e); if(r!==null){g.sumR+=r;g.nR++;} } }
+  function keysOf(e){ if(e.timeframe==="PaperFut") return ["📝 Index strong-close overnight (paper)"];
+    var seg=_segOf(e.sym)+(_segOf(e.sym)==="Stock"?" (watch-only)":"");
+    return ["All "+seg, seg+" · "+(e.strategy||e.setupKey||"Other")]; }
+  closed.forEach(function(e){keysOf(e).forEach(function(k){add(k,e,false);});});
+  live.forEach(function(e){keysOf(e).forEach(function(k){add(k,e,true);});});
+  var ks=Object.keys(groups); if(!ks.length) return "";
+  ks.sort(function(a,b){var A=a.indexOf("All ")===0||a.indexOf("📝")===0, B=b.indexOf("All ")===0||b.indexOf("📝")===0;
+    if(A!==B) return A?-1:1; return groups[b].n-groups[a].n;});
+  var rows=ks.slice(0,14).map(function(k){
+    var g=groups[k], avg=g.nR?g.sumR/g.nR:null, wr=g.n?Math.round(100*g.wins/g.n):null;
+    var verdict = g.n<LIVE_SCORE_MIN_TRADES ? "<span style='color:var(--m)'>collecting "+g.n+"/"+LIVE_SCORE_MIN_TRADES+"</span>"
+      : g.paper ? (g.pts>0?"<span style='color:var(--g)'>positive</span>":"<span style='color:var(--r)'>negative</span>")
+      : avg===null ? "–" : avg>=0.10 ? "<span style='color:var(--g)'>✅ working</span>" : avg>0 ? "<span style='color:var(--y)'>≈ break-even</span>" : "<span style='color:var(--r)'>❌ losing</span>";
+    var res = g.paper ? (g.n?((g.pts/g.n>=0?"+":"−")+Math.abs(Math.round(g.pts/g.n))+" pts avg"):"–")
+                      : (avg===null?"–":((avg>=0?"+":"−")+Math.abs(avg).toFixed(2)+"R"));
+    var bold=k.indexOf("All ")===0||k.indexOf("📝")===0;
+    return "<div style='display:grid;grid-template-columns:2.4fr .7fr .7fr 1fr 1.1fr;gap:4px;padding:5px 0;border-top:1px solid var(--border);font-size:.6rem;"+(bold?"font-weight:700":"")+"'>"+
+      "<div style='overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>"+_escH(k)+(g.open?" <span style='color:var(--b)'>· "+g.open+" open</span>":"")+"</div>"+
+      "<div style='text-align:right'>"+g.n+"</div><div style='text-align:right'>"+(wr===null?"–":wr+"%")+"</div>"+
+      "<div style='text-align:right;color:"+((g.paper?g.pts:avg)>0?"var(--g)":(g.paper?g.pts:avg)<0?"var(--r)":"var(--m)")+"'>"+res+"</div>"+
+      "<div style='text-align:right'>"+verdict+"</div></div>";
+  }).join("");
+  return "<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px'>"+
+    "<div style='font-size:.55rem;color:var(--m);font-weight:700;letter-spacing:1px;margin-bottom:4px'>LIVE SCORE BY SIGNAL TYPE · avg R after costs (≈3% of premium)</div>"+
+    "<div style='display:grid;grid-template-columns:2.4fr .7fr .7fr 1fr 1.1fr;gap:4px;font-size:.52rem;color:var(--m)'><div>Type</div><div style='text-align:right'>Closed</div><div style='text-align:right'>Win</div><div style='text-align:right'>Avg</div><div style='text-align:right'>Verdict</div></div>"+
+    rows+"<div style='font-size:.52rem;color:var(--m);margin-top:4px'>Only a type with "+LIVE_SCORE_MIN_TRADES+"+ closed trades and ≥ +0.10R average should ever be traded for real.</div></div>";
+}
 function renderPerformance(){
   var perf=document.getElementById("perfSection");
   if(!perf)return;
@@ -5866,7 +5999,7 @@ function renderPerformance(){
     if(e.outcome==="WIN"||e.outcome==="BIG WIN"||(e.pnl!=null&&e.pnl>0))regimeStats[k].wins++;
   });
 
-  var html="<div style='padding:4px 0 12px'>";
+  var html="<div style='padding:4px 0 12px'>"+_liveScoreHtml();
 
   // Overall stats
   html+="<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px'>";
@@ -6105,7 +6238,7 @@ function sha256(msg){return crypto.subtle.digest("SHA-256",new TextEncoder().enc
 // ═══════════════════════════════════════════
 // SETTINGS
 // ═══════════════════════════════════════════
-function openSS(){ssLoad();updatePushUI();document.getElementById("ssScreen").classList.add("open");}
+function openSS(){ssLoad();updatePushUI();try{document.getElementById("ss_maxloss").value=MAX_LOSS_PER_TRADE;}catch(_){}document.getElementById("ssScreen").classList.add("open");}
 function closeSS(){document.getElementById("ssScreen").classList.remove("open");}
 function ssLoad(){
   try{
@@ -6523,7 +6656,7 @@ window.onload=function(){
   // to Render's logs, so searching them for FRONTEND_BUILD shows which index.html
   // the worker is actually running. Added because a stale frontend (old tabs,
   // old bugs) was live with no way to tell from inside the app.
-  try{console.log("[FRONTEND_BUILD] "+"1119b"+" (no Backtest tab in this build)");}catch(e){}
+  try{console.log("[FRONTEND_BUILD] "+"1119c"+" (no Backtest tab in this build)");}catch(e){}
   try{setTimeout(loadStrikeSteps,800);setInterval(loadStrikeSteps,30*60000);}catch(e){} // 1117c: real stock strike gaps
   try{registerServiceWorker();}catch(e){} // sets up push notification capability, if supported
   try{setTimeout(fetchSysStatus,2000);setInterval(function(){if(!document.hidden)fetchSysStatus();},120000);
